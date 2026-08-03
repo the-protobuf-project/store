@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package orm.v1;
+
+option go_package = "github.com/the-protobuf-project/orm/plugin/pb/ormpbv1;ormpbv1";
+option java_multiple_files = true;
+option java_outer_classname = "ConstraintProto";
+option java_package = "com.orm.v1";
+
+// ConstraintOptions carries the validation rules that take an argument, and is
+// the companion to the parameterless (orm.v1.validate) presets. The two are
+// deliberately separate surfaces rather than one: a preset is stackable and
+// reads as a word at the call site, which only works because it has nothing to
+// configure. The moment a rule needs a bound, a pattern, or a value set, it
+// needs a message.
+//
+// Applied via:
+//
+//	int32 pages = 4 [(orm.v1.constraint) = {min: 1, max: 10000}];
+//	string sku = 5 [(orm.v1.constraint) = {pattern: "^[A-Z]{3}-[0-9]{4}$"}];
+//	string tier = 6 [(orm.v1.constraint) = {in: ["free", "pro", "enterprise"]}];
+//
+// Both surfaces project the same three ways — an application check, a DDL CHECK
+// constraint, and a go-playground tag — and a field may carry both:
+//
+//	string handle = 7 [
+//	  (orm.v1.validate) = VALIDATE_SLUG,
+//	  (orm.v1.constraint) = {min: 3, max: 40}
+//	];
+//
+// Bounds are inclusive, and are optional fields so that an unset bound is
+// distinguishable from a zero one — `min: 0` is a real constraint on a signed
+// column. An exclusive lower bound of zero is what VALIDATE_POSITIVE is for.
+message ConstraintOptions {
+  // min is the inclusive lower bound, read according to the column's type:
+  // the value itself for a numeric column, the character count for a string,
+  // the element count for a repeated column. One pair of fields rather than
+  // separate value and length bounds, because a column is only ever one of
+  // those things and the author already knows which.
+  optional double min = 1;
+
+  // max is the inclusive upper bound, read the same way as min.
+  //
+  // For a string this is distinct from ColumnOptions.max_length, which sizes the
+  // column type (VARCHAR(n)) and therefore already bounds it in the database.
+  // Use this when the column is unsized (TEXT) or when the application should
+  // reject an overlong value with a field-shaped error rather than a driver
+  // error. The two must not contradict each other: a max wider than the column's
+  // max_length fails generation.
+  optional double max = 2;
+
+  // pattern is an RE2 regular expression the value must match. It is compiled at
+  // generation time, so an invalid pattern fails the build rather than every
+  // write. Written in the POSIX subset both RE2 and Postgres accept, since the
+  // same pattern becomes a CHECK constraint.
+  string pattern = 3;
+
+  // in is the closed set of accepted values. An enum column expresses this with
+  // its own type instead; this is for a string column whose accepted values are
+  // not worth an enum.
+  repeated string in = 4;
+
+  // not_in is the set of rejected values, applied after every other rule.
+  repeated string not_in = 5;
+}

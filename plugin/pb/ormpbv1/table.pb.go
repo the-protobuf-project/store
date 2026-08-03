@@ -21,128 +21,6 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// IdStrategy selects how the primary-key column is generated for a table.
-// When set (not UNSPECIFIED), an `id` column becomes the PK and any IDENTIFIER
-// field is demoted to UNIQUE NOT NULL.
-type IdStrategy int32
-
-const (
-	// No synthesized key: the IDENTIFIER field stays the primary key.
-	IdStrategy_ID_STRATEGY_UNSPECIFIED IdStrategy = 0
-	// ULID primary key: CHAR(26), Prisma @default(ulid()), app-generated in SQL.
-	IdStrategy_ID_STRATEGY_ULID IdStrategy = 1
-	// UUID primary key: native UUID type, DEFAULT gen_random_uuid() in DDL,
-	// Prisma @default(uuid()).
-	IdStrategy_ID_STRATEGY_UUID IdStrategy = 2
-)
-
-// Enum value maps for IdStrategy.
-var (
-	IdStrategy_name = map[int32]string{
-		0: "ID_STRATEGY_UNSPECIFIED",
-		1: "ID_STRATEGY_ULID",
-		2: "ID_STRATEGY_UUID",
-	}
-	IdStrategy_value = map[string]int32{
-		"ID_STRATEGY_UNSPECIFIED": 0,
-		"ID_STRATEGY_ULID":        1,
-		"ID_STRATEGY_UUID":        2,
-	}
-)
-
-func (x IdStrategy) Enum() *IdStrategy {
-	p := new(IdStrategy)
-	*p = x
-	return p
-}
-
-func (x IdStrategy) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (IdStrategy) Descriptor() protoreflect.EnumDescriptor {
-	return file_orm_v1_table_proto_enumTypes[0].Descriptor()
-}
-
-func (IdStrategy) Type() protoreflect.EnumType {
-	return &file_orm_v1_table_proto_enumTypes[0]
-}
-
-func (x IdStrategy) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use IdStrategy.Descriptor instead.
-func (IdStrategy) EnumDescriptor() ([]byte, []int) {
-	return file_orm_v1_table_proto_rawDescGZIP(), []int{0}
-}
-
-// IndexDef describes one multi-column index on a table.
-// Single-column indexes are expressed more concisely via ColumnOptions.index.
-type IndexDef struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// columns lists field names (proto snake_case) participating in the index.
-	Columns []string `protobuf:"bytes,1,rep,name=columns,proto3" json:"columns,omitempty"`
-	// unique makes this a UNIQUE index.
-	Unique bool `protobuf:"varint,2,opt,name=unique,proto3" json:"unique,omitempty"`
-	// index is an optional explicit index name.
-	// Auto-generated as idx_<table>_<cols> when empty.
-	Index         string `protobuf:"bytes,3,opt,name=index,proto3" json:"index,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *IndexDef) Reset() {
-	*x = IndexDef{}
-	mi := &file_orm_v1_table_proto_msgTypes[0]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *IndexDef) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*IndexDef) ProtoMessage() {}
-
-func (x *IndexDef) ProtoReflect() protoreflect.Message {
-	mi := &file_orm_v1_table_proto_msgTypes[0]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use IndexDef.ProtoReflect.Descriptor instead.
-func (*IndexDef) Descriptor() ([]byte, []int) {
-	return file_orm_v1_table_proto_rawDescGZIP(), []int{0}
-}
-
-func (x *IndexDef) GetColumns() []string {
-	if x != nil {
-		return x.Columns
-	}
-	return nil
-}
-
-func (x *IndexDef) GetUnique() bool {
-	if x != nil {
-		return x.Unique
-	}
-	return false
-}
-
-func (x *IndexDef) GetIndex() string {
-	if x != nil {
-		return x.Index
-	}
-	return ""
-}
-
 // TableOptions overrides table-level generation for a message.
 //
 // Applied via:
@@ -176,7 +54,7 @@ type TableOptions struct {
 
 func (x *TableOptions) Reset() {
 	*x = TableOptions{}
-	mi := &file_orm_v1_table_proto_msgTypes[1]
+	mi := &file_orm_v1_table_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -188,7 +66,7 @@ func (x *TableOptions) String() string {
 func (*TableOptions) ProtoMessage() {}
 
 func (x *TableOptions) ProtoReflect() protoreflect.Message {
-	mi := &file_orm_v1_table_proto_msgTypes[1]
+	mi := &file_orm_v1_table_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -201,7 +79,7 @@ func (x *TableOptions) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TableOptions.ProtoReflect.Descriptor instead.
 func (*TableOptions) Descriptor() ([]byte, []int) {
-	return file_orm_v1_table_proto_rawDescGZIP(), []int{1}
+	return file_orm_v1_table_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *TableOptions) GetTable() string {
@@ -243,11 +121,7 @@ var File_orm_v1_table_proto protoreflect.FileDescriptor
 
 const file_orm_v1_table_proto_rawDesc = "" +
 	"\n" +
-	"\x12orm/v1/table.proto\x12\x06orm.v1\"R\n" +
-	"\bIndexDef\x12\x18\n" +
-	"\acolumns\x18\x01 \x03(\tR\acolumns\x12\x16\n" +
-	"\x06unique\x18\x02 \x01(\bR\x06unique\x12\x14\n" +
-	"\x05index\x18\x03 \x01(\tR\x05index\"\xa8\x01\n" +
+	"\x12orm/v1/table.proto\x12\x06orm.v1\x1a\x0form/v1/id.proto\x1a\x12orm/v1/index.proto\"\xa8\x01\n" +
 	"\fTableOptions\x12\x14\n" +
 	"\x05table\x18\x01 \x01(\tR\x05table\x12\x12\n" +
 	"\x04skip\x18\x02 \x01(\bR\x04skip\x12\"\n" +
@@ -255,12 +129,7 @@ const file_orm_v1_table_proto_rawDesc = "" +
 	"\n" +
 	"timestamps\x18\x04 \x01(\bR\n" +
 	"timestamps\x12*\n" +
-	"\aindexes\x18\x05 \x03(\v2\x10.orm.v1.IndexDefR\aindexes*U\n" +
-	"\n" +
-	"IdStrategy\x12\x1b\n" +
-	"\x17ID_STRATEGY_UNSPECIFIED\x10\x00\x12\x14\n" +
-	"\x10ID_STRATEGY_ULID\x10\x01\x12\x14\n" +
-	"\x10ID_STRATEGY_UUID\x10\x02B\x90\x01\n" +
+	"\aindexes\x18\x05 \x03(\v2\x10.orm.v1.IndexDefR\aindexesB\x90\x01\n" +
 	"\n" +
 	"com.orm.v1B\n" +
 	"TableProtoP\x01Z=github.com/the-protobuf-project/orm/plugin/pb/ormpbv1;ormpbv1\xa2\x02\x03OXX\xaa\x02\x06Orm.V1\xca\x02\x06Orm\\V1\xe2\x02\x12Orm\\V1\\GPBMetadata\xea\x02\aOrm::V1b\x06proto3"
@@ -277,16 +146,15 @@ func file_orm_v1_table_proto_rawDescGZIP() []byte {
 	return file_orm_v1_table_proto_rawDescData
 }
 
-var file_orm_v1_table_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_orm_v1_table_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_orm_v1_table_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
 var file_orm_v1_table_proto_goTypes = []any{
-	(IdStrategy)(0),      // 0: orm.v1.IdStrategy
-	(*IndexDef)(nil),     // 1: orm.v1.IndexDef
-	(*TableOptions)(nil), // 2: orm.v1.TableOptions
+	(*TableOptions)(nil), // 0: orm.v1.TableOptions
+	(IdStrategy)(0),      // 1: orm.v1.IdStrategy
+	(*IndexDef)(nil),     // 2: orm.v1.IndexDef
 }
 var file_orm_v1_table_proto_depIdxs = []int32{
-	0, // 0: orm.v1.TableOptions.id:type_name -> orm.v1.IdStrategy
-	1, // 1: orm.v1.TableOptions.indexes:type_name -> orm.v1.IndexDef
+	1, // 0: orm.v1.TableOptions.id:type_name -> orm.v1.IdStrategy
+	2, // 1: orm.v1.TableOptions.indexes:type_name -> orm.v1.IndexDef
 	2, // [2:2] is the sub-list for method output_type
 	2, // [2:2] is the sub-list for method input_type
 	2, // [2:2] is the sub-list for extension type_name
@@ -299,19 +167,20 @@ func file_orm_v1_table_proto_init() {
 	if File_orm_v1_table_proto != nil {
 		return
 	}
+	file_orm_v1_id_proto_init()
+	file_orm_v1_index_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_orm_v1_table_proto_rawDesc), len(file_orm_v1_table_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   2,
+			NumEnums:      0,
+			NumMessages:   1,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_orm_v1_table_proto_goTypes,
 		DependencyIndexes: file_orm_v1_table_proto_depIdxs,
-		EnumInfos:         file_orm_v1_table_proto_enumTypes,
 		MessageInfos:      file_orm_v1_table_proto_msgTypes,
 	}.Build()
 	File_orm_v1_table_proto = out.File

@@ -34,3 +34,12 @@ func dbTelemetryLogs(db *schema.Database) bool { return db.Opt("telemetry_logs")
 // dbFilters reports whether to emit AIP-160 filter / AIP-132 order_by specs per
 // schema plus the shared filterx engine packages.
 func dbFilters(db *schema.Database) bool { return db.Opt("filters") == "true" }
+
+// dbValidation reports whether to fold orm.v1.validate enforcement into the
+// generated output (the validatex runtime, per-model Validate methods, and the
+// store write-path calls).
+func dbValidation(db *schema.Database) bool { return db.Opt("validation") == "true" }
+
+// dbValidationDB reports whether the DB-expressible presets also become CHECK
+// constraints (only meaningful when dbValidation is true).
+func dbValidationDB(db *schema.Database) bool { return db.Opt("validation_db") == "true" }

@@ -39,6 +39,14 @@ var file_orm_v1_annotations_proto_extTypes = []protoimpl.ExtensionInfo{
 		Filename:      "orm/v1/annotations.proto",
 	},
 	{
+		ExtendedType:  (*descriptorpb.MessageOptions)(nil),
+		ExtensionType: (*CacheOptions)(nil),
+		Field:         50005,
+		Name:          "orm.v1.cache",
+		Tag:           "bytes,50005,opt,name=cache",
+		Filename:      "orm/v1/annotations.proto",
+	},
+	{
 		ExtendedType:  (*descriptorpb.FieldOptions)(nil),
 		ExtensionType: (*ColumnOptions)(nil),
 		Field:         50002,
@@ -52,6 +60,22 @@ var file_orm_v1_annotations_proto_extTypes = []protoimpl.ExtensionInfo{
 		Field:         50003,
 		Name:          "orm.v1.query",
 		Tag:           "bytes,50003,opt,name=query",
+		Filename:      "orm/v1/annotations.proto",
+	},
+	{
+		ExtendedType:  (*descriptorpb.FieldOptions)(nil),
+		ExtensionType: ([]Validate)(nil),
+		Field:         50004,
+		Name:          "orm.v1.validate",
+		Tag:           "varint,50004,rep,packed,name=validate,enum=orm.v1.Validate",
+		Filename:      "orm/v1/annotations.proto",
+	},
+	{
+		ExtendedType:  (*descriptorpb.FieldOptions)(nil),
+		ExtensionType: (*ConstraintOptions)(nil),
+		Field:         50006,
+		Name:          "orm.v1.constraint",
+		Tag:           "bytes,50006,opt,name=constraint",
 		Filename:      "orm/v1/annotations.proto",
 	},
 }
@@ -70,6 +94,11 @@ var (
 	//
 	// optional orm.v1.TableOptions table = 50001;
 	E_Table = &file_orm_v1_annotations_proto_extTypes[1]
+	// cache declares the table's caching policy: which key sets are cached, for
+	// how long, where, and what invalidates them.
+	//
+	// optional orm.v1.CacheOptions cache = 50005;
+	E_Cache = &file_orm_v1_annotations_proto_extTypes[2]
 )
 
 // Extension fields to descriptorpb.FieldOptions.
@@ -77,25 +106,41 @@ var (
 	// column overrides column-level generation: name, type, sizing, FK actions.
 	//
 	// optional orm.v1.ColumnOptions column = 50002;
-	E_Column = &file_orm_v1_annotations_proto_extTypes[2]
+	E_Column = &file_orm_v1_annotations_proto_extTypes[3]
 	// query tunes the field's generated list-query surface: AIP-160 filter,
 	// AIP-132 order_by, and free-text search.
 	//
 	// optional orm.v1.QueryOptions query = 50003;
-	E_Query = &file_orm_v1_annotations_proto_extTypes[3]
+	E_Query = &file_orm_v1_annotations_proto_extTypes[4]
+	// validate applies parameterless validation presets to the field. Repeated
+	// and stacked at the call site, in the style of google.api.field_behavior;
+	// presence and mutability stay with field_behavior itself.
+	//
+	// repeated orm.v1.Validate validate = 50004;
+	E_Validate = &file_orm_v1_annotations_proto_extTypes[5]
+	// constraint carries the validation rules that take an argument — bounds,
+	// lengths, patterns, value sets — which a stackable enum cannot express.
+	//
+	// optional orm.v1.ConstraintOptions constraint = 50006;
+	E_Constraint = &file_orm_v1_annotations_proto_extTypes[6]
 )
 
 var File_orm_v1_annotations_proto protoreflect.FileDescriptor
 
 const file_orm_v1_annotations_proto_rawDesc = "" +
 	"\n" +
-	"\x18orm/v1/annotations.proto\x12\x06orm.v1\x1a google/protobuf/descriptor.proto\x1a\x13orm/v1/column.proto\x1a\x17orm/v1/datasource.proto\x1a\x12orm/v1/query.proto\x1a\x12orm/v1/table.proto:Y\n" +
+	"\x18orm/v1/annotations.proto\x12\x06orm.v1\x1a google/protobuf/descriptor.proto\x1a\x12orm/v1/cache.proto\x1a\x13orm/v1/column.proto\x1a\x17orm/v1/constraint.proto\x1a\x17orm/v1/datasource.proto\x1a\x12orm/v1/query.proto\x1a\x12orm/v1/table.proto\x1a\x15orm/v1/validate.proto:Y\n" +
 	"\n" +
 	"datasource\x12\x1c.google.protobuf.FileOptions\x18І\x03 \x01(\v2\x19.orm.v1.DatasourceOptionsR\n" +
 	"datasource:M\n" +
-	"\x05table\x12\x1f.google.protobuf.MessageOptions\x18ц\x03 \x01(\v2\x14.orm.v1.TableOptionsR\x05table:N\n" +
+	"\x05table\x12\x1f.google.protobuf.MessageOptions\x18ц\x03 \x01(\v2\x14.orm.v1.TableOptionsR\x05table:M\n" +
+	"\x05cache\x12\x1f.google.protobuf.MessageOptions\x18Ն\x03 \x01(\v2\x14.orm.v1.CacheOptionsR\x05cache:N\n" +
 	"\x06column\x12\x1d.google.protobuf.FieldOptions\x18҆\x03 \x01(\v2\x15.orm.v1.ColumnOptionsR\x06column:K\n" +
-	"\x05query\x12\x1d.google.protobuf.FieldOptions\x18ӆ\x03 \x01(\v2\x14.orm.v1.QueryOptionsR\x05queryB\x96\x01\n" +
+	"\x05query\x12\x1d.google.protobuf.FieldOptions\x18ӆ\x03 \x01(\v2\x14.orm.v1.QueryOptionsR\x05query:M\n" +
+	"\bvalidate\x12\x1d.google.protobuf.FieldOptions\x18Ԇ\x03 \x03(\x0e2\x10.orm.v1.ValidateR\bvalidate:Z\n" +
+	"\n" +
+	"constraint\x12\x1d.google.protobuf.FieldOptions\x18ֆ\x03 \x01(\v2\x19.orm.v1.ConstraintOptionsR\n" +
+	"constraintB\x96\x01\n" +
 	"\n" +
 	"com.orm.v1B\x10AnnotationsProtoP\x01Z=github.com/the-protobuf-project/orm/plugin/pb/ormpbv1;ormpbv1\xa2\x02\x03OXX\xaa\x02\x06Orm.V1\xca\x02\x06Orm\\V1\xe2\x02\x12Orm\\V1\\GPBMetadata\xea\x02\aOrm::V1b\x06proto3"
 
@@ -105,23 +150,32 @@ var file_orm_v1_annotations_proto_goTypes = []any{
 	(*descriptorpb.FieldOptions)(nil),   // 2: google.protobuf.FieldOptions
 	(*DatasourceOptions)(nil),           // 3: orm.v1.DatasourceOptions
 	(*TableOptions)(nil),                // 4: orm.v1.TableOptions
-	(*ColumnOptions)(nil),               // 5: orm.v1.ColumnOptions
-	(*QueryOptions)(nil),                // 6: orm.v1.QueryOptions
+	(*CacheOptions)(nil),                // 5: orm.v1.CacheOptions
+	(*ColumnOptions)(nil),               // 6: orm.v1.ColumnOptions
+	(*QueryOptions)(nil),                // 7: orm.v1.QueryOptions
+	(Validate)(0),                       // 8: orm.v1.Validate
+	(*ConstraintOptions)(nil),           // 9: orm.v1.ConstraintOptions
 }
 var file_orm_v1_annotations_proto_depIdxs = []int32{
-	0, // 0: orm.v1.datasource:extendee -> google.protobuf.FileOptions
-	1, // 1: orm.v1.table:extendee -> google.protobuf.MessageOptions
-	2, // 2: orm.v1.column:extendee -> google.protobuf.FieldOptions
-	2, // 3: orm.v1.query:extendee -> google.protobuf.FieldOptions
-	3, // 4: orm.v1.datasource:type_name -> orm.v1.DatasourceOptions
-	4, // 5: orm.v1.table:type_name -> orm.v1.TableOptions
-	5, // 6: orm.v1.column:type_name -> orm.v1.ColumnOptions
-	6, // 7: orm.v1.query:type_name -> orm.v1.QueryOptions
-	8, // [8:8] is the sub-list for method output_type
-	8, // [8:8] is the sub-list for method input_type
-	4, // [4:8] is the sub-list for extension type_name
-	0, // [0:4] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	0,  // 0: orm.v1.datasource:extendee -> google.protobuf.FileOptions
+	1,  // 1: orm.v1.table:extendee -> google.protobuf.MessageOptions
+	1,  // 2: orm.v1.cache:extendee -> google.protobuf.MessageOptions
+	2,  // 3: orm.v1.column:extendee -> google.protobuf.FieldOptions
+	2,  // 4: orm.v1.query:extendee -> google.protobuf.FieldOptions
+	2,  // 5: orm.v1.validate:extendee -> google.protobuf.FieldOptions
+	2,  // 6: orm.v1.constraint:extendee -> google.protobuf.FieldOptions
+	3,  // 7: orm.v1.datasource:type_name -> orm.v1.DatasourceOptions
+	4,  // 8: orm.v1.table:type_name -> orm.v1.TableOptions
+	5,  // 9: orm.v1.cache:type_name -> orm.v1.CacheOptions
+	6,  // 10: orm.v1.column:type_name -> orm.v1.ColumnOptions
+	7,  // 11: orm.v1.query:type_name -> orm.v1.QueryOptions
+	8,  // 12: orm.v1.validate:type_name -> orm.v1.Validate
+	9,  // 13: orm.v1.constraint:type_name -> orm.v1.ConstraintOptions
+	14, // [14:14] is the sub-list for method output_type
+	14, // [14:14] is the sub-list for method input_type
+	7,  // [7:14] is the sub-list for extension type_name
+	0,  // [0:7] is the sub-list for extension extendee
+	0,  // [0:0] is the sub-list for field type_name
 }
 
 func init() { file_orm_v1_annotations_proto_init() }
@@ -129,10 +183,13 @@ func file_orm_v1_annotations_proto_init() {
 	if File_orm_v1_annotations_proto != nil {
 		return
 	}
+	file_orm_v1_cache_proto_init()
 	file_orm_v1_column_proto_init()
+	file_orm_v1_constraint_proto_init()
 	file_orm_v1_datasource_proto_init()
 	file_orm_v1_query_proto_init()
 	file_orm_v1_table_proto_init()
+	file_orm_v1_validate_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
@@ -140,7 +197,7 @@ func file_orm_v1_annotations_proto_init() {
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_orm_v1_annotations_proto_rawDesc), len(file_orm_v1_annotations_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   0,
-			NumExtensions: 4,
+			NumExtensions: 7,
 			NumServices:   0,
 		},
 		GoTypes:           file_orm_v1_annotations_proto_goTypes,

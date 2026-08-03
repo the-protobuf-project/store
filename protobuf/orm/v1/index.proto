@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package orm.v1;
+
+option go_package = "github.com/the-protobuf-project/orm/plugin/pb/ormpbv1;ormpbv1";
+option java_multiple_files = true;
+option java_outer_classname = "IndexProto";
+option java_package = "com.orm.v1";
+
+// IndexDef describes one multi-column index on a table.
+// Single-column indexes are expressed more concisely via ColumnOptions.index.
+message IndexDef {
+  // columns lists field names (proto snake_case) participating in the index.
+  repeated string columns = 1;
+
+  // unique makes this a UNIQUE index.
+  bool unique = 2;
+
+  // index is an optional explicit index name.
+  // Auto-generated as idx_<table>_<cols> when empty.
+  string index = 3;
+}

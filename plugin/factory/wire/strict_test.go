@@ -55,6 +55,73 @@ func TestStrictMode(t *testing.T) {
 	}
 }
 
+// TestMisappliedPresetAlwaysFails covers the one validation problem that is not
+// strict-gated. The recoverable problems above degrade to something sensible — a
+// soft FK, a dropped index — so tolerating them by default is reasonable. A
+// preset that cannot apply to its column has no such fallback: it would simply
+// vanish, leaving the author believing the column is validated. So it fails at
+// the default strict spec, and the message names every offender at once.
+func TestMisappliedPresetAlwaysFails(t *testing.T) {
+	err := generateStrict(t, "testdata/strict/bad_preset", "")
+	if err == nil {
+		t.Fatal("generate succeeded with misapplied presets, want error")
+	}
+	for _, want := range []string{
+		"quantity",              // the numeric column
+		"VALIDATE_EMAIL",        // what was misapplied there
+		"string columns",        // why it cannot apply
+		"labels",                // the repeated column
+		"VALIDATE_LOWERCASE",    // what was misapplied there
+		"not a repeated column", // why it cannot apply
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not mention %q: %v", want, err)
+		}
+	}
+}
+
+// TestIncoherentCachePolicyAlwaysFails is the cache counterpart: a key over a
+// column that does not exist can never be built, and a stream invalidation with
+// no subject can never fire. Both are inert rather than wrong, which is exactly
+// why they have to fail loudly.
+func TestIncoherentCachePolicyAlwaysFails(t *testing.T) {
+	err := generateStrict(t, "testdata/strict/bad_cache", "")
+	if err == nil {
+		t.Fatal("generate succeeded with an incoherent cache policy, want error")
+	}
+	for _, want := range []string{
+		"nonexistent_column",  // the key over a column that is not there
+		"INVALIDATION_STREAM", // the invalidation that cannot fire
+		"no stream subject",   // why it cannot fire
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not mention %q: %v", want, err)
+		}
+	}
+}
+
+// TestIncoherentConstraintAlwaysFails is the parameterized-rule counterpart. The
+// fractional-bound case is the interesting one: it would not vanish, it would
+// emit a Go constant that does not convert, turning a schema mistake into a
+// compile error in the user's generated tree. Catching it here keeps the failure
+// where it can be understood.
+func TestIncoherentConstraintAlwaysFails(t *testing.T) {
+	err := generateStrict(t, "testdata/strict/bad_constraint", "")
+	if err == nil {
+		t.Fatal("generate succeeded with incoherent constraints, want error")
+	}
+	for _, want := range []string{
+		"min 100 is greater than max 10", // unsatisfiable bound
+		"is fractional",                  // 1.5 on an int32
+		"does not compile",               // the broken pattern
+		"in/not_in apply to string",      // a value set on a numeric column
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not mention %q: %v", want, err)
+		}
+	}
+}
+
 // generateStrict compiles the case protos and runs the sql target with the given
 // strict spec, returning the generation error (if any).
 func generateStrict(t *testing.T, dir, strict string) error {

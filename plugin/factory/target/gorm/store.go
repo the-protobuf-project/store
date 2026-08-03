@@ -140,6 +140,9 @@ func storeModelView(db *schema.Database, s *schema.Schema, pkg string, t *schema
 		"Telemetry":     telEnabled,
 		"Metrics":       telEnabled && telMetrics,
 		"SpanPrefix":    spanPrefix,
+		// Validation: the write paths call the model's Validate method, which only
+		// exists when the table has a column carrying a preset.
+		"Validation": dbValidation(db) && len(modelChecks(t)) > 0,
 	}
 }
 

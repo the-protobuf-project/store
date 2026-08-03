@@ -1,0 +1,286 @@
+{{.Header}}
+
+// Package validatex is the shared validation runtime the generated models'
+// Validate methods call. Every predicate corresponds to one orm.v1.validate
+// preset and answers a single question about a single value, so the generated
+// code stays a flat list of calls with no reflection and no tag parsing.
+//
+// It depends on the standard library only. The models also carry
+// `validate:"..."` struct tags for anyone running go-playground/validator, but
+// nothing here reads them — enforcement is the generated call, so adopting this
+// package adds no dependency to your build.
+package {{.Package}}
+
+import (
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
+	"net/netip"
+	"regexp"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+	"unicode/utf8"
+)
+
+// ErrInvalid marks a value that failed validation. Callers translate it to their
+// invalid-argument error (e.g. a gRPC InvalidArgument) with errors.Is, the same
+// way filterx.ErrInvalid works.
+var ErrInvalid = errors.New("validation failed")
+
+// FieldViolation is one failed check, shaped like google.rpc.BadRequest's
+// FieldViolation so it maps straight onto a rich gRPC error detail.
+type FieldViolation struct {
+	// Field is the database column name, matching the DDL and the error a
+	// CHECK constraint would raise for the same value.
+	Field string
+
+	// Description completes the sentence "<field> must ...".
+	Description string
+}
+
+// Violations is the aggregate error a model's Validate returns: every failed
+// check, not just the first, so a caller can report them all at once.
+type Violations []FieldViolation
+
+// Error renders every violation in declaration order.
+func (v Violations) Error() string {
+	if len(v) == 0 {
+		return ErrInvalid.Error()
+	}
+	parts := make([]string, len(v))
+	for i, fv := range v {
+		parts[i] = fmt.Sprintf("%s must %s", fv.Field, fv.Description)
+	}
+	return "validation failed: " + strings.Join(parts, "; ")
+}
+
+// Unwrap makes errors.Is(err, ErrInvalid) report true for any violation set.
+func (v Violations) Unwrap() error { return ErrInvalid }
+
+// Add appends a violation. Generated Validate methods build their result with
+// this so the call sites stay one line per check.
+func (v *Violations) Add(field, description string) {
+	*v = append(*v, FieldViolation{Field: field, Description: description})
+}
+
+// Err returns the violation set as an error, or nil when nothing failed —
+// avoiding the typed-nil trap of returning Violations directly.
+func (v Violations) Err() error {
+	if len(v) == 0 {
+		return nil
+	}
+	return v
+}
+
+// Number is every numeric kind the sign presets accept.
+type Number interface {
+	~int | ~int8 | ~int16 | ~int32 | ~int64 |
+		~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 |
+		~float32 | ~float64
+}
+
+// Float is the numeric subset carrying NaN and infinity.
+type Float interface{ ~float32 | ~float64 }
+
+// Text is every string-like kind the format presets accept.
+type Text interface{ ~string | ~[]byte }
+
+var (
+	reEmail       = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
+	reURL         = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9+.\-]*://[^\s]+$`)
+	reUUID        = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	reULID        = regexp.MustCompile(`^[0-9A-HJKMNP-TV-Z]{26}$`)
+	reHostname    = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$`)
+	reE164        = regexp.MustCompile(`^\+[1-9][0-9]{1,14}$`)
+	reSlug        = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+	reSemver      = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+([-+].*)?$`)
+	reHexColor    = regexp.MustCompile(`^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$`)
+	reAlphanum    = regexp.MustCompile(`^[a-zA-Z0-9]+$`)
+	reCountryCode = regexp.MustCompile(`^[A-Z]{2}$`)
+	reCurrency    = regexp.MustCompile(`^[A-Z]{3}$`)
+	reLanguageTag = regexp.MustCompile(`^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})*$`)
+)
+
+// Email reports whether s is an email address, in the pragmatic single-@ form.
+func Email(s string) bool { return reEmail.MatchString(s) }
+
+// URL reports whether s is an absolute URL with a scheme and host.
+func URL(s string) bool { return reURL.MatchString(s) }
+
+// UUID reports whether s is a canonical hyphenated UUID.
+func UUID(s string) bool { return reUUID.MatchString(s) }
+
+// ULID reports whether s is a Crockford base32 ULID.
+func ULID(s string) bool { return reULID.MatchString(s) }
+
+// Hostname reports whether s is an RFC 1123 hostname.
+func Hostname(s string) bool { return len(s) <= 253 && reHostname.MatchString(s) }
+
+// IP reports whether s is an IPv4 or IPv6 address.
+func IP(s string) bool { _, err := netip.ParseAddr(s); return err == nil }
+
+// IPv4 reports whether s is an IPv4 address.
+func IPv4(s string) bool { a, err := netip.ParseAddr(s); return err == nil && a.Is4() }
+
+// IPv6 reports whether s is an IPv6 address, excluding IPv4-mapped forms.
+func IPv6(s string) bool {
+	a, err := netip.ParseAddr(s)
+	return err == nil && a.Is6() && !a.Is4In6()
+}
+
+// E164 reports whether s is an E.164 phone number.
+func E164(s string) bool { return reE164.MatchString(s) }
+
+// Slug reports whether s is a URL-safe slug.
+func Slug(s string) bool { return reSlug.MatchString(s) }
+
+// Semver reports whether s is a semantic version.
+func Semver(s string) bool { return reSemver.MatchString(s) }
+
+// HexColor reports whether s is a CSS hex color.
+func HexColor(s string) bool { return reHexColor.MatchString(s) }
+
+// Base64 reports whether s decodes as standard base64, padded or not.
+func Base64(s string) bool {
+	if _, err := base64.StdEncoding.DecodeString(s); err == nil {
+		return true
+	}
+	_, err := base64.RawStdEncoding.DecodeString(s)
+	return err == nil
+}
+
+// JSON reports whether v is a well-formed JSON document.
+func JSON[T Text](v T) bool { return json.Valid([]byte(v)) }
+
+// NonEmpty reports whether s holds something other than whitespace. Absence is
+// google.api.field_behavior's concern; this is about blank content.
+func NonEmpty(s string) bool { return strings.TrimSpace(s) != "" }
+
+// Trimmed reports whether s has no leading or trailing whitespace.
+func Trimmed(s string) bool { return s == strings.TrimSpace(s) }
+
+// Lowercase reports whether s equals its own lowercasing.
+func Lowercase(s string) bool { return s == strings.ToLower(s) }
+
+// Uppercase reports whether s equals its own uppercasing.
+func Uppercase(s string) bool { return s == strings.ToUpper(s) }
+
+// ASCII reports whether s is printable ASCII, matching the [[:print:]] class the
+// generated CHECK constraint uses.
+func ASCII(s string) bool {
+	for i := range len(s) {
+		if s[i] < 0x20 || s[i] > 0x7E {
+			return false
+		}
+	}
+	return true
+}
+
+// Alphanumeric reports whether s is letters and digits only.
+func Alphanumeric(s string) bool { return reAlphanum.MatchString(s) }
+
+// CountryCode reports whether s is an ISO 3166-1 alpha-2 code.
+func CountryCode(s string) bool { return reCountryCode.MatchString(s) }
+
+// CurrencyCode reports whether s is an ISO 4217 code.
+func CurrencyCode(s string) bool { return reCurrency.MatchString(s) }
+
+// LanguageTag reports whether s is a BCP 47 language tag.
+func LanguageTag(s string) bool { return reLanguageTag.MatchString(s) }
+
+// Timezone reports whether s names an IANA time zone. Resolution needs the
+// platform zoneinfo database, or the time/tzdata import in your binary.
+func Timezone(s string) bool {
+	if s == "" {
+		return false
+	}
+	_, err := time.LoadLocation(s)
+	return err == nil
+}
+
+// Positive reports whether v is greater than zero.
+func Positive[T Number](v T) bool { return v > 0 }
+
+// NonNegative reports whether v is zero or greater.
+func NonNegative[T Number](v T) bool { return v >= 0 }
+
+// Negative reports whether v is less than zero.
+func Negative[T Number](v T) bool { return v < 0 }
+
+// Finite reports whether v is neither NaN nor infinite.
+func Finite[T Float](v T) bool {
+	f := float64(v)
+	return !math.IsNaN(f) && !math.IsInf(f, 0)
+}
+
+// Past reports whether t is strictly before now.
+func Past(t time.Time) bool { return t.Before(time.Now()) }
+
+// Future reports whether t is strictly after now.
+func Future(t time.Time) bool { return t.After(time.Now()) }
+
+// UniqueItems reports whether s holds no duplicates.
+func UniqueItems[S ~[]E, E comparable](s S) bool {
+	seen := make(map[E]struct{}, len(s))
+	for _, e := range s {
+		if _, dup := seen[e]; dup {
+			return false
+		}
+		seen[e] = struct{}{}
+	}
+	return true
+}
+
+// NonEmptyList reports whether s holds at least one element.
+func NonEmptyList[S ~[]E, E any](s S) bool { return len(s) > 0 }
+
+// The rules below back the parameterized (orm.v1.constraint) options. Each takes
+// its bound as an argument rather than being one predicate per value, so the
+// generated call reads as the annotation does.
+
+// GTE reports whether v is at least the bound.
+func GTE[T Number](v, bound T) bool { return v >= bound }
+
+// LTE reports whether v is at most the bound.
+func LTE[T Number](v, bound T) bool { return v <= bound }
+
+// MinLen reports whether s is at least n characters. Length is counted in runes,
+// not bytes, so a multi-byte character counts once — matching Postgres' length().
+func MinLen(s string, n int) bool { return utf8.RuneCountInString(s) >= n }
+
+// MaxLen reports whether s is at most n characters, counted as in MinLen.
+func MaxLen(s string, n int) bool { return utf8.RuneCountInString(s) <= n }
+
+// MinItems reports whether s holds at least n elements.
+func MinItems[S ~[]E, E any](s S, n int) bool { return len(s) >= n }
+
+// MaxItems reports whether s holds at most n elements.
+func MaxItems[S ~[]E, E any](s S, n int) bool { return len(s) <= n }
+
+// patterns caches the compiled form of each constraint pattern. Every pattern
+// reaching here was compiled at generation time, so a compile failure is not
+// reachable — an invalid pattern fails the build instead of every write.
+var patterns sync.Map // string -> *regexp.Regexp
+
+// Pattern reports whether s matches expr.
+func Pattern(s, expr string) bool {
+	re, ok := patterns.Load(expr)
+	if !ok {
+		compiled, err := regexp.Compile(expr)
+		if err != nil {
+			return false
+		}
+		re, _ = patterns.LoadOrStore(expr, compiled)
+	}
+	return re.(*regexp.Regexp).MatchString(s)
+}
+
+// OneOf reports whether v is one of the accepted values.
+func OneOf[T comparable](v T, accepted ...T) bool { return slices.Contains(accepted, v) }
+
+// NoneOf reports whether v is none of the rejected values.
+func NoneOf[T comparable](v T, rejected ...T) bool { return !slices.Contains(rejected, v) }

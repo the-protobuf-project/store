@@ -1,0 +1,148 @@
+syntax = "proto3";
+
+package profile.v1;
+
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+import "orm/v1/annotations.proto";
+
+option go_package = "example.com/test/gen;profilev1";
+option java_multiple_files = true;
+option java_outer_classname = "ValidationProto";
+option java_package = "com.profile.v1";
+option (orm.v1.datasource) = {
+  database: "profile_db"
+  schema: "profile"
+};
+
+// Account exercises every projection the validation presets have: stacked
+// presets on one field, the nil-guard an optional column needs, numeric and
+// temporal and repeated presets, a preset whose SQL form repeats the column
+// reference, and a preset with no SQL form at all.
+message Account {
+  option (google.api.resource) = {
+    type: "profile.v1/Account"
+    pattern: "accounts/{account}"
+    singular: "account"
+    plural: "accounts"
+  };
+  option (orm.v1.table) = {id: ID_STRATEGY_ULID};
+
+  // A fully-specified cache policy: the declared key sets, a stream-driven
+  // invalidation, and the NATS coordinates carrying the change events. Policy
+  // metadata only — it reaches the generated README, not generated code.
+  option (orm.v1.cache) = {
+    enabled: true
+    ttl: {seconds: 300}
+    store: CACHE_STORE_REDIS
+    keys: [
+      {
+        columns: ["id"]
+      },
+      {
+        columns: ["handle"]
+        key: "cache_accounts_by_handle"
+      }
+    ]
+    strategy: CACHE_STRATEGY_READ_THROUGH
+    invalidation: INVALIDATION_STREAM
+    stream: {
+      subject: "profile.accounts.>"
+      durable: "accounts-cache"
+      queue_group: "accounts"
+    }
+  };
+
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  // Two presets stacked on one required column: both project to an app check
+  // and to a CHECK constraint.
+  string email = 2 [
+    (google.api.field_behavior) = REQUIRED,
+    (orm.v1.validate) = VALIDATE_EMAIL,
+    (orm.v1.validate) = VALIDATE_LOWERCASE
+  ];
+
+  // Optional, so the Go field is a pointer and the generated check must guard
+  // against nil before dereferencing — absence is field_behavior's business.
+  string website = 3 [
+    (google.api.field_behavior) = OPTIONAL,
+    (orm.v1.validate) = VALIDATE_URL
+  ];
+
+  // A preset and a parameterized constraint on one column: the two surfaces
+  // compose into a single Validate method and a single CHECK constraint.
+  int32 credits = 4 [
+    (google.api.field_behavior) = REQUIRED,
+    (orm.v1.validate) = VALIDATE_NON_NEGATIVE,
+    (orm.v1.constraint) = {
+      max: 1000
+    }
+  ];
+
+  // A pattern carrying a backslash, which must survive into the GORM struct tag
+  // escaped — an unescaped one voids the whole tag, taking NOT NULL with it.
+  string sku = 8 [
+    (google.api.field_behavior) = OPTIONAL,
+    (orm.v1.constraint) = {
+      pattern: "^[A-Z]{3}-\\d{4}$"
+    }
+  ];
+
+  // A closed value set, and below it the same min/max fields reading as a
+  // length rather than a value because the column is a string.
+  string tier = 9 [
+    (google.api.field_behavior) = REQUIRED,
+    (orm.v1.constraint) = {
+      in: ["free", "pro", "enterprise"]
+    }
+  ];
+
+  string bio = 10 [
+    (google.api.field_behavior) = OPTIONAL,
+    (orm.v1.constraint) = {
+      min: 10
+      max: 200
+    }
+  ];
+
+  // VALIDATE_TRIMMED's SQL form names the column twice, covering placeholder
+  // substitution; VALIDATE_SLUG covers a preset with no go-playground builtin.
+  string handle = 5 [
+    (google.api.field_behavior) = REQUIRED,
+    (orm.v1.validate) = VALIDATE_SLUG,
+    (orm.v1.validate) = VALIDATE_TRIMMED
+  ];
+
+  // Application-only: a CHECK referencing wall-clock time would not be
+  // immutable, so no constraint is emitted for this column.
+  google.protobuf.Timestamp born_at = 6 [
+    (google.api.field_behavior) = OPTIONAL,
+    (orm.v1.validate) = VALIDATE_PAST
+  ];
+
+  // Repeated presets judge the list itself rather than its elements.
+  repeated string tags = 7 [
+    (google.api.field_behavior) = OPTIONAL,
+    (orm.v1.validate) = VALIDATE_UNIQUE_ITEMS,
+    (orm.v1.validate) = VALIDATE_NON_EMPTY_LIST
+  ];
+}
+
+// Device carries no presets at all, proving a table in a validated tree emits
+// no Validate method and no store write-path call when nothing is annotated.
+message Device {
+  option (google.api.resource) = {
+    type: "profile.v1/Device"
+    pattern: "devices/{device}"
+    singular: "device"
+    plural: "devices"
+  };
+  option (orm.v1.table) = {id: ID_STRATEGY_ULID};
+
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  string label = 2 [(google.api.field_behavior) = OPTIONAL];
+}

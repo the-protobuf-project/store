@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package orm.v1;
+
+option go_package = "github.com/the-protobuf-project/orm/plugin/pb/ormpbv1;ormpbv1";
+option java_multiple_files = true;
+option java_outer_classname = "ReferenceProto";
+option java_package = "com.orm.v1";
+
+// ReferentialAction is the ON DELETE / ON UPDATE behavior of a foreign key
+// inferred from google.api.resource_reference.
+enum ReferentialAction {
+  // Database default behavior (NO ACTION in PostgreSQL).
+  REFERENTIAL_ACTION_UNSPECIFIED = 0;
+
+  // Delete/update child rows when the parent row is deleted/updated.
+  REFERENTIAL_ACTION_CASCADE = 1;
+
+  // Reject the parent delete/update while child rows exist.
+  REFERENTIAL_ACTION_RESTRICT = 2;
+
+  // Null the FK column when the parent row is deleted/updated.
+  REFERENTIAL_ACTION_SET_NULL = 3;
+
+  // Reset the FK column to its default value.
+  REFERENTIAL_ACTION_SET_DEFAULT = 4;
+
+  // Explicit NO ACTION.
+  REFERENTIAL_ACTION_NO_ACTION = 5;
+}

@@ -47,7 +47,9 @@ func ormBackend(dir string) schema.Backend {
 	converters := fileExists(filepath.Join(dir, "converters"))
 	filters := fileExists(filepath.Join(dir, "filters"))
 	telemetry := fileExists(filepath.Join(dir, "telemetry"))
+	validation := fileExists(filepath.Join(dir, "validation"))
 	return backend.New(cfg, "example.com/test/gen", stores, telemetry, converters, filters).
+		WithValidation(validation).
 		WithRepositoryModules(optFile(dir, "gorm_module"), optFile(dir, "graphql_module"))
 }
 

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/the-protobuf-project/orm/plugin/factory/target/validate"
 	"github.com/the-protobuf-project/protokit/header"
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
@@ -17,6 +18,10 @@ type fieldView struct{ Comment, Decl string }
 type modelView struct {
 	Comment, Name, TableName string
 	Fields                   []fieldView
+
+	// Checks are the validation predicates the model's Validate method runs.
+	// Empty unless the validation opt is set and a column declares a preset.
+	Checks []checkView
 }
 
 type enumValueView struct{ Comment, ConstName, TypeName, MapName string }
@@ -44,6 +49,9 @@ func packageView(db *schema.Database, s *schema.Schema, pkg string) map[string]a
 			TableName: s.Name + "." + t.Name,
 		}
 		telEnabled, _, _ := tableTelemetry(db, s, t)
+		if dbValidation(db) {
+			m.Checks = modelChecks(t)
+		}
 		// Association fields come from the shared plan (see assoc.go): same-schema
 		// belongs-to and has-many targets get a direct field; a cross-schema target
 		// would need importing another package, which risks an import cycle, so it
@@ -69,9 +77,17 @@ func packageView(db *schema.Database, s *schema.Schema, pkg string) map[string]a
 					extra = append(extra, chk)
 				}
 			}
+			// Validation CHECK constraints, named identically to the SQL target's
+			// so AutoMigrate and the DDL agree on one constraint per preset. The
+			// GORM tag references the bare column name, as enumCheck does.
+			if dbValidationDB(db) {
+				if c, ok := validate.ColumnCheck(t.Name, col, col.Name); ok {
+					extra = append(extra, "check:"+c.Name+","+validate.TagValue(c.Expr))
+				}
+			}
 			m.Fields = append(m.Fields, fieldView{
 				Comment: col.Comment,
-				Decl:    goField + " " + gt + " `" + structTag(col, extra, telemetryTag(telEnabled, t, col)) + "`",
+				Decl:    goField + " " + gt + " `" + structTag(col, extra, telemetryTag(telEnabled, t, col), validateTag(db, col)) + "`",
 			})
 			// BelongsTo association: emitted alongside the FK column. The field is
 			// named after the FK column (minus _id) so multiple references to the
@@ -123,6 +139,14 @@ func packageView(db *schema.Database, s *schema.Schema, pkg string) map[string]a
 	var third []string
 	if needPQ {
 		third = append(third, "github.com/lib/pq")
+	}
+	// The shared validation runtime is imported only by a package that actually
+	// has a Validate method to emit.
+	for _, m := range models {
+		if len(m.Checks) > 0 {
+			third = append(third, validatexImport(db))
+			break
+		}
 	}
 	for imp := range assocImports {
 		third = append(third, imp)

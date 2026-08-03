@@ -42,6 +42,27 @@ type Config struct {
 	// filterx observer, Registry.Instrument). Nil leaves the telemetry plugin
 	// opt in charge. Replaces the removed `otel:` block.
 	Telemetry *telemetryConfig `yaml:"telemetry"`
+
+	// Validation tunes enforcement of the orm.v1.validate presets (the validatex
+	// runtime and per-model Validate methods, and the DDL CHECK constraints).
+	// Nil leaves the validation plugin opt in charge.
+	Validation *validationConfig `yaml:"validation"`
+}
+
+// validationConfig is the orm.yaml `validation:` block. Every field is a pointer
+// so an unset key inherits the plugin-opt default rather than the Go zero value.
+type validationConfig struct {
+	// Enabled overrides the validation plugin opt: true forces enforcement on for
+	// the tree, false strips it even when the opt enabled it.
+	Enabled *bool `yaml:"enabled"`
+	// App, when explicitly false, drops the application half — no validatex
+	// package, no Validate methods, no store write-path calls — leaving the DDL
+	// CHECK constraints as the only enforcement. Defaults to true.
+	App *bool `yaml:"app"`
+	// DB, when explicitly false, drops the CHECK constraints, leaving the
+	// application checks as the only enforcement. Defaults to true: a constraint
+	// in the database is what keeps out-of-band writers honest.
+	DB *bool `yaml:"db"`
 }
 
 // telemetryConfig is the orm.yaml `telemetry:` block. Every field is a pointer

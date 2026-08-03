@@ -1,0 +1,140 @@
+syntax = "proto3";
+
+package orm.v1;
+
+option go_package = "github.com/the-protobuf-project/orm/plugin/pb/ormpbv1;ormpbv1";
+option java_multiple_files = true;
+option java_outer_classname = "ValidateProto";
+option java_package = "com.orm.v1";
+
+// Validate is a parameterless validation preset applied to a single field, in
+// the style of google.api.field_behavior: a repeated enum option stacked at the
+// call site rather than a nested message.
+//
+// Applied via:
+//
+//	string email = 3 [
+//	  (google.api.field_behavior) = REQUIRED,
+//	  (orm.v1.validate) = VALIDATE_EMAIL,
+//	  (orm.v1.validate) = VALIDATE_LOWERCASE
+//	];
+//
+// Presence and mutability are NOT part of this enum — google.api.field_behavior
+// already owns them and protokit already reads them (REQUIRED / IDENTIFIER →
+// NOT NULL, OUTPUT_ONLY → not application-settable, IMMUTABLE → not updatable).
+// Duplicating them here would give one property two sources of truth.
+//
+// Every preset is parameterless by construction, which is what makes stacking
+// readable. Parameterized constraints (numeric ranges, explicit regexes,
+// cross-field rules) do not belong here: string sizing already lives on
+// ColumnOptions (max_length / precision / scale).
+//
+// Each preset projects two ways where the target permits it: an application
+// check on the generated store's write path, and a DDL CHECK constraint so the
+// database stays correct under out-of-band writes. Presets with no faithful SQL
+// form (VALIDATE_PAST / VALIDATE_FUTURE, which are evaluated against wall-clock
+// time) are enforced application-side only.
+enum Validate {
+  // No preset. Never written explicitly.
+  VALIDATE_UNSPECIFIED = 0;
+
+  // RFC 5322 addr-spec, in the pragmatic single-@ form every validator uses.
+  VALIDATE_EMAIL = 1;
+
+  // Absolute URL with a scheme and host.
+  VALIDATE_URL = 2;
+
+  // RFC 4122 UUID in canonical 8-4-4-4-12 hyphenated form.
+  VALIDATE_UUID = 3;
+
+  // Crockford base32 ULID: 26 characters, excluding I, L, O and U.
+  VALIDATE_ULID = 4;
+
+  // RFC 1123 hostname.
+  VALIDATE_HOSTNAME = 5;
+
+  // IPv4 or IPv6 address.
+  VALIDATE_IP = 6;
+
+  // IPv4 address in dotted-quad form.
+  VALIDATE_IPV4 = 7;
+
+  // IPv6 address.
+  VALIDATE_IPV6 = 8;
+
+  // E.164 phone number: a leading + and up to 15 digits.
+  VALIDATE_E164 = 9;
+
+  // URL-safe slug: lowercase alphanumerics separated by single hyphens.
+  VALIDATE_SLUG = 10;
+
+  // Semantic version, semver.org 2.0.0.
+  VALIDATE_SEMVER = 11;
+
+  // CSS hex color: # followed by 3, 6, or 8 hex digits.
+  VALIDATE_HEX_COLOR = 12;
+
+  // Standard base64, with or without padding.
+  VALIDATE_BASE64 = 13;
+
+  // Parseable JSON document. Prefer a real message or a JSONB column when the
+  // shape is known; this is for genuinely opaque payloads.
+  VALIDATE_JSON = 14;
+
+  // Non-empty after trimming surrounding whitespace. Distinct from REQUIRED:
+  // field_behavior REQUIRED rejects an absent value, this rejects "" and "   ".
+  VALIDATE_NON_EMPTY = 20;
+
+  // No leading or trailing whitespace.
+  VALIDATE_TRIMMED = 21;
+
+  // Equal to its own lowercasing.
+  VALIDATE_LOWERCASE = 22;
+
+  // Equal to its own uppercasing.
+  VALIDATE_UPPERCASE = 23;
+
+  // Printable ASCII only.
+  VALIDATE_ASCII = 24;
+
+  // Letters and digits only, no separators.
+  VALIDATE_ALPHANUMERIC = 25;
+
+  // ISO 3166-1 alpha-2 country code, e.g. "IN", "DE".
+  VALIDATE_COUNTRY_CODE = 30;
+
+  // ISO 4217 currency code, e.g. "INR", "EUR".
+  VALIDATE_CURRENCY_CODE = 31;
+
+  // BCP 47 language tag, e.g. "en-GB".
+  VALIDATE_LANGUAGE_TAG = 32;
+
+  // IANA time zone name, e.g. "Asia/Kolkata".
+  VALIDATE_TIMEZONE = 33;
+
+  // Strictly greater than zero.
+  VALIDATE_POSITIVE = 40;
+
+  // Greater than or equal to zero.
+  VALIDATE_NON_NEGATIVE = 41;
+
+  // Strictly less than zero.
+  VALIDATE_NEGATIVE = 42;
+
+  // Neither NaN nor infinite. Float and double fields only.
+  VALIDATE_FINITE = 43;
+
+  // Strictly in the past at validation time. Application-side only: a DDL CHECK
+  // cannot reference wall-clock time and stay immutable across rewrites.
+  VALIDATE_PAST = 50;
+
+  // Strictly in the future at validation time. Application-side only, for the
+  // same reason as VALIDATE_PAST.
+  VALIDATE_FUTURE = 51;
+
+  // No duplicate elements.
+  VALIDATE_UNIQUE_ITEMS = 60;
+
+  // At least one element.
+  VALIDATE_NON_EMPTY_LIST = 61;
+}

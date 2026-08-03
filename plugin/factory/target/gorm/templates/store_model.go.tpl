@@ -30,6 +30,13 @@ func (s *{{.Store}}) WithTelemetry(t gormx.Telemetry) *{{.Store}} {
 
 // Create inserts m.
 func (s *{{.Store}}) Create(ctx context.Context, m *{{.Name}}) error {
+{{- if .Validation}}
+	// Validated before the span: a value rejected here never reaches the
+	// database, and the span and its op metric describe a database operation.
+	if err := m.Validate(); err != nil {
+		return err
+	}
+{{- end}}
 {{- if .Telemetry}}
 	tel := gormx.OrNop(s.Telemetry)
 {{- if .Metrics}}
@@ -108,6 +115,11 @@ func (s *{{.Store}}) Count(ctx context.Context, opts gormx.ListOptions) (int64, 
 
 // Update persists every field of m, which must carry its primary key.
 func (s *{{.Store}}) Update(ctx context.Context, m *{{.Name}}) error {
+{{- if .Validation}}
+	if err := m.Validate(); err != nil {
+		return err
+	}
+{{- end}}
 {{- if .Telemetry}}
 	tel := gormx.OrNop(s.Telemetry)
 {{- if .Metrics}}

@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package badcache.v1;
+
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "orm/v1/annotations.proto";
+
+option go_package = "example.com/test/gen;badcachev1";
+option (orm.v1.datasource) = {
+  database: "bad_db"
+  schema: "bad"
+};
+
+// Gadget declares a cache policy that cannot mean anything: a key over a column
+// that does not exist, and a stream invalidation with no subject to listen on.
+// Both would be silently inert, so generation must fail.
+message Gadget {
+  option (google.api.resource) = {
+    type: "badcache.v1/Gadget"
+    pattern: "gadgets/{gadget}"
+    singular: "gadget"
+    plural: "gadgets"
+  };
+  option (orm.v1.cache) = {
+    enabled: true
+    keys: [
+      {
+        columns: ["nonexistent_column"]
+      }
+    ]
+    invalidation: INVALIDATION_STREAM
+  };
+
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+}

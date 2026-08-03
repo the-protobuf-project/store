@@ -2,24 +2,13 @@ syntax = "proto3";
 
 package orm.v1;
 
+import "orm/v1/id.proto";
+import "orm/v1/index.proto";
+
 option go_package = "github.com/the-protobuf-project/orm/plugin/pb/ormpbv1;ormpbv1";
 option java_multiple_files = true;
 option java_outer_classname = "TableProto";
 option java_package = "com.orm.v1";
-
-// IndexDef describes one multi-column index on a table.
-// Single-column indexes are expressed more concisely via ColumnOptions.index.
-message IndexDef {
-  // columns lists field names (proto snake_case) participating in the index.
-  repeated string columns = 1;
-
-  // unique makes this a UNIQUE index.
-  bool unique = 2;
-
-  // index is an optional explicit index name.
-  // Auto-generated as idx_<table>_<cols> when empty.
-  string index = 3;
-}
 
 // TableOptions overrides table-level generation for a message.
 //
@@ -51,19 +40,4 @@ message TableOptions {
   // indexes declares additional multi-column indexes beyond those inferred from
   // AIP annotations (e.g. composite unique constraints).
   repeated IndexDef indexes = 5;
-}
-
-// IdStrategy selects how the primary-key column is generated for a table.
-// When set (not UNSPECIFIED), an `id` column becomes the PK and any IDENTIFIER
-// field is demoted to UNIQUE NOT NULL.
-enum IdStrategy {
-  // No synthesized key: the IDENTIFIER field stays the primary key.
-  ID_STRATEGY_UNSPECIFIED = 0;
-
-  // ULID primary key: CHAR(26), Prisma @default(ulid()), app-generated in SQL.
-  ID_STRATEGY_ULID = 1;
-
-  // UUID primary key: native UUID type, DEFAULT gen_random_uuid() in DDL,
-  // Prisma @default(uuid()).
-  ID_STRATEGY_UUID = 2;
 }

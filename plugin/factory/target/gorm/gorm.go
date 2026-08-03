@@ -14,6 +14,7 @@ import (
 
 	"google.golang.org/protobuf/compiler/protogen"
 
+	"github.com/the-protobuf-project/orm/plugin/factory/target/cache"
 	"github.com/the-protobuf-project/orm/plugin/factory/target/types"
 	"github.com/the-protobuf-project/protokit/docs"
 	"github.com/the-protobuf-project/protokit/naming"
@@ -30,11 +31,17 @@ func (g *Generator) Name() string { return "gorm" }
 // generated stores import; it lives at <go_module>/gormx.
 const gormxPkg = "gormx"
 
+// validatexPkg is the package name and output directory of the shared,
+// stdlib-only validation runtime the generated models' Validate methods call;
+// it lives at <go_module>/validatex.
+const validatexPkg = "validatex"
+
 // Generate writes one Go package per schema into the plugin response.
 func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 	gormxEmitted := false     // the shared runtime is emitted once for the whole tree
 	filterxEmitted := false   // likewise the shared filter engine packages
 	telemetryEmitted := false // likewise the SDK adapter package
+	validatexEmitted := false // likewise the shared validation runtime
 	var pbIdx *pbIndex        // built lazily: only the converters emitter needs it
 	for _, db := range dbs {
 		if types.Provider(db.Provider) != types.Postgres {
@@ -52,6 +59,11 @@ func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 				"the generated specs import the shared %q engine package by its import path, "+
 				"so set go_module to the import path of the gorm output directory", db.Name, filterxPkg)
 		}
+		if dbValidation(db) && dbGoModule(db) == "" {
+			return fmt.Errorf("gorm: database %q has the validation opt set but no go_module opt; "+
+				"the generated models import the shared %q runtime package by its import path, "+
+				"so set go_module to the import path of the gorm output directory", db.Name, validatexPkg)
+		}
 		if dbTelemetry(db) && dbGoModule(db) == "" {
 			return fmt.Errorf("gorm: database %q has the telemetry opt set but no go_module opt; "+
 				"the instrumented output imports the shared %q adapter package by its import path, "+
@@ -62,6 +74,16 @@ func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 			f := p.NewGeneratedFile(fmt.Sprintf("%s/%s/models.go", db.Name, pkg), "")
 			if err := renderGo(f, "models.go.tpl", packageView(db, s, pkg)); err != nil {
 				return fmt.Errorf("gorm: %s/%s: %w", db.Name, pkg, err)
+			}
+			// Opt-in: the shared validation runtime, once for the whole tree. The
+			// models' Validate methods call it, so it is emitted for the models
+			// alone — no store or filter opt required.
+			if dbValidation(db) && len(s.Tables) > 0 && !validatexEmitted {
+				vf := p.NewGeneratedFile(fmt.Sprintf("%s/%s.go", validatexPkg, validatexPkg), "")
+				if err := renderGo(vf, "validatex.go.tpl", validatexView(db)); err != nil {
+					return fmt.Errorf("gorm: %s/%s.go: %w", validatexPkg, validatexPkg, err)
+				}
+				validatexEmitted = true
 			}
 			// Opt-in: proto↔model converters, one protobuf.go per schema package.
 			// Skipped when no table in the schema maps back to a proto message.
@@ -167,6 +189,17 @@ func writeReadme(p *protogen.Plugin, db *schema.Database) error {
 		"Nullable columns are pointer types; proto enums become string-typed Go enums.",
 		"Attach in main: `Default.EnsureSchemas(db)` then `Default.Migrate(db)`, or wire the structs into a `*gorm.DB` and run AutoMigrate yourself.",
 	}
+	if dbValidation(db) {
+		outputs = append(outputs,
+			"`<schema>/models.go` also carries a `Validate() error` per model with an `(orm.v1.validate)` preset, returning a `validatex.Violations` that names every offending column; the generated stores call it before `Create`/`Update`.",
+			"`validatex/validatex.go` — the shared validation predicates the `Validate` methods call. Standard library only, so validation adds no dependency to your build. Emitted with the `validation` opt (which also requires `go_module`).",
+		)
+	}
+	if dbValidationDB(db) {
+		outputs = append(outputs,
+			"Columns carrying a DB-expressible preset also get a `CHECK` constraint via their GORM `check:` tag, named to match the one the `sql` target's DDL creates, so `AutoMigrate` and the DDL agree.",
+		)
+	}
 	if dbStores(db) {
 		outputs = append(outputs,
 			"`<schema>/<model>_store.go` — a typed CRUD store per resource (Create, GetByID, List, Count, Update, DeleteByID, plus GetBy/ListBy finders for unique and foreign-key columns); emitted when the `stores` opt is set (which also requires `go_module`). Requires `gorm.io/gorm`.",
@@ -186,6 +219,10 @@ func writeReadme(p *protogen.Plugin, db *schema.Database) error {
 		Naming:  docs.Local(db),
 		TypeOf:  types.SQLForColumn,
 	})
+	// The cache policy is documentation-only, so it is appended to the rendered
+	// README rather than threaded through docs.Meta. Empty when no table declares
+	// a policy.
+	md += cache.Doc(db)
 	if _, err := rf.Write([]byte(md)); err != nil {
 		return fmt.Errorf("gorm: %s/README.md: %w", db.Name, err)
 	}

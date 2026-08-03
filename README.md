@@ -331,6 +331,7 @@ generated/gorm/bookstore_db/bookstorev1/filters.go       # AIP-160/132 filter & 
 generated/gorm/bookstore_db/bookstorev1/protobuf.go      # proto ↔ model converters (converters opt)
 generated/gorm/gormx/gormx.go                       # shared runtime: ListOptions, Store[M], engine (stores opt)
 generated/gorm/filterx/                             # shared filter/order/list engines: SQL + Hasura (filters opt)
+generated/gorm/validatex/validatex.go               # shared validation predicates, stdlib only (validation opt)
 generated/gorm/bookstore_db/migrate.go              # factory Registry + EnsureSchemas + Instrument (needs go_module)
 generated/gorm/bookstore_db/README.md               # ER diagram + model reference
 generated/sql/bookstore_db/migrate.sql              # whole DB, one transactional file
@@ -639,6 +640,177 @@ string state = 5 [(orm.v1.query) = { filterable: false, sortable: false }];
 | `sortable` | Override the type-derived default in the `order_by` allowlist (scalar, date, timestamp, and numeric columns sort by default). Presence matters, as with `filterable`. |
 | `search` | Include the column in bareword free-text search — a filter term with no field (e.g. `beach resort`) matches it with a case-insensitive contains. Off by default. |
 
+### `(orm.v1.cache)` — message level
+
+Declares a table's caching policy: which lookups are cached, for how long,
+where, and what makes an entry stale. Declarative in the same way `indexes` is —
+the schema states which access patterns matter, and a consumer decides how to
+serve them.
+
+```proto
+option (orm.v1.cache) = {
+  enabled: true
+  ttl: {seconds: 300}
+  store: CACHE_STORE_REDIS
+  keys: [{columns: ["id"]}, {columns: ["tenant_id", "slug"]}]
+  strategy: CACHE_STRATEGY_READ_THROUGH
+  invalidation: INVALIDATION_STREAM
+  stream: {subject: "profile.accounts.>", durable: "accounts-cache"}
+};
+```
+
+> [!IMPORTANT]
+> **This is policy metadata.** The generator reads it, checks it against the
+> table, and renders it as a **Cache policy** table in the generated README. No
+> cache client, key builder, or stream consumer is emitted from it. The
+> annotation exists so the contract lives in the schema — next to the indexes it
+> resembles — before any runtime depends on it.
+
+| Field | Description |
+| --- | --- |
+| `enabled` | Master switch. The rest of the policy is inert without it, so a fully-specified policy can be turned off in one place. |
+| `ttl` | How long an entry stays fresh (`google.protobuf.Duration`). Unset means entries live until something invalidates them. |
+| `store` | `CACHE_STORE_REDIS` \| `CACHE_STORE_VALKEY` \| `CACHE_STORE_MEMORY` (default). |
+| `keys` | The cached lookups, each a column set — like an index, the question is which access patterns are worth paying for. `key` names the set (defaults to `cache_<table>_<cols>`). Empty means the primary key alone. |
+| `strategy` | `READ_THROUGH` (default) \| `WRITE_THROUGH` \| `WRITE_BEHIND` \| `REFRESH_AHEAD`. |
+| `invalidation` | `ON_WRITE` (default) \| `TTL_ONLY` (requires `ttl`) \| `STREAM` (requires `stream`). |
+| `stream` | NATS JetStream coordinates for change-event invalidation: `subject`, `durable`, `queue_group`. This is what keeps a cache correct when writers bypass the generated stores. |
+
+A policy that cannot mean anything — a key naming a column that does not exist,
+`INVALIDATION_STREAM` with no subject, `INVALIDATION_TTL_ONLY` with no `ttl` —
+**fails generation**, for the same reason a misapplied validation preset does:
+it would be silently inert.
+
+### `(orm.v1.validate)` — field level
+
+Parameterless validation presets, applied in the style of
+`google.api.field_behavior`: a repeated enum stacked at the call site rather than
+a nested message. Takes effect only with the `validation` opt (or `orm.yaml`
+`validation.enabled`).
+
+```proto
+string email = 2 [
+  (google.api.field_behavior) = REQUIRED,
+  (orm.v1.validate) = VALIDATE_EMAIL,
+  (orm.v1.validate) = VALIDATE_LOWERCASE
+];
+
+int32 credits = 4 [(orm.v1.validate) = VALIDATE_NON_NEGATIVE];
+```
+
+Each preset projects three ways from one table
+(`plugin/factory/target/validate`), so the checks cannot drift apart:
+
+- **Application** — a `Validate() error` method on the model, called by the
+  generated store's `Create`/`Update` before the row reaches the database. It
+  returns a `validatex.Violations` naming every offending column, not just the
+  first, and matches `errors.Is(err, validatex.ErrInvalid)`.
+- **Database** — a `CHECK` constraint in the emitted DDL, and the matching GORM
+  `check:` tag so `AutoMigrate` creates the same named constraint. Out-of-band
+  writers stay honest.
+- **Interop** — a `validate:"..."` struct tag for anyone already running
+  go-playground/validator. Nothing generated reads it; the generated tree takes
+  no validation dependency, since `validatex` is stdlib-only.
+
+Presets are parameterless by construction, which is what makes stacking read
+well. Rules that take an argument — bounds, patterns, value sets — live in the
+companion [`(orm.v1.constraint)`](#ormv1constraint--field-level), and a field may
+carry both.
+
+**There is no `VALIDATE_REQUIRED` or `VALIDATE_IMMUTABLE`.** `google.api.field_behavior`
+already owns presence and mutability, and the generator already reads it
+(`REQUIRED`/`IDENTIFIER` → `NOT NULL`). Duplicating them would give one property
+two sources of truth. `VALIDATE_NON_EMPTY` is the genuinely different one:
+`REQUIRED` rejects an absent value, `NON_EMPTY` rejects `""` and `"   "`.
+
+An absent (nil) optional column is not judged — a preset only inspects a value
+that exists. The `CHECK` behaves the same way, since a constraint that evaluates
+to NULL passes.
+
+| Preset | Must be | `CHECK` |
+| --- | --- | --- |
+| `VALIDATE_EMAIL` | an email address | ✓ |
+| `VALIDATE_URL` | an absolute URL | ✓ |
+| `VALIDATE_UUID` | a canonical hyphenated UUID | ✓ |
+| `VALIDATE_ULID` | a Crockford base32 ULID | ✓ |
+| `VALIDATE_HOSTNAME` | an RFC 1123 hostname | ✓ |
+| `VALIDATE_IP` / `VALIDATE_IPV4` / `VALIDATE_IPV6` | an IP address | IPv4 only |
+| `VALIDATE_E164` | an E.164 phone number | ✓ |
+| `VALIDATE_SLUG` | a URL-safe slug | ✓ |
+| `VALIDATE_SEMVER` | a semantic version | ✓ |
+| `VALIDATE_HEX_COLOR` | a CSS hex color | ✓ |
+| `VALIDATE_BASE64` | base64 | ✓ |
+| `VALIDATE_JSON` | a JSON document | — |
+| `VALIDATE_NON_EMPTY` | non-blank after trimming | ✓ |
+| `VALIDATE_TRIMMED` | free of surrounding whitespace | ✓ |
+| `VALIDATE_LOWERCASE` / `VALIDATE_UPPERCASE` | equal to its own re-casing | ✓ |
+| `VALIDATE_ASCII` | printable ASCII | ✓ |
+| `VALIDATE_ALPHANUMERIC` | letters and digits only | ✓ |
+| `VALIDATE_COUNTRY_CODE` | an ISO 3166-1 alpha-2 code | ✓ |
+| `VALIDATE_CURRENCY_CODE` | an ISO 4217 code | ✓ |
+| `VALIDATE_LANGUAGE_TAG` | a BCP 47 tag | ✓ |
+| `VALIDATE_TIMEZONE` | an IANA time zone | — |
+| `VALIDATE_POSITIVE` / `VALIDATE_NON_NEGATIVE` / `VALIDATE_NEGATIVE` | signed as named | ✓ |
+| `VALIDATE_FINITE` | neither NaN nor infinite | ✓ |
+| `VALIDATE_PAST` / `VALIDATE_FUTURE` | before / after now | — |
+| `VALIDATE_UNIQUE_ITEMS` | free of duplicates | — |
+| `VALIDATE_NON_EMPTY_LIST` | non-empty | ✓ |
+
+The presets without a `CHECK` are enforced application-side only, for a reason
+in each case: `PAST`/`FUTURE` would need `now()`, and a constraint referencing
+wall-clock time is not immutable — the same row would validate differently after
+a table rewrite. `TIMEZONE` needs `pg_timezone_names`, and `UNIQUE_ITEMS` needs
+`unnest`; neither is allowed in a check constraint. `JSON` is inherent in a
+`jsonb` column.
+
+A preset that cannot apply to its column — `VALIDATE_EMAIL` on an `int32`, or a
+single-value preset on a repeated column — **fails generation**, listing every
+offender. Unlike an unresolved reference, it has no fallback: the annotation
+would simply be dropped, leaving you believing a column is validated when
+nothing checks it.
+
+### `(orm.v1.constraint)` — field level
+
+The companion to the presets, carrying the rules that take an argument. Two
+surfaces rather than one because a preset is stackable and reads as a word at the
+call site, which only works while it has nothing to configure; the moment a rule
+needs a bound, a pattern, or a value set, it needs a message. A field may carry
+both, and they compose into one `Validate` method and one `CHECK` constraint.
+
+```proto
+int32  pages  = 4 [(orm.v1.constraint) = {min: 1, max: 10000}];
+string sku    = 5 [(orm.v1.constraint) = {pattern: "^[A-Z]{3}-\\d{4}$"}];
+string tier   = 6 [(orm.v1.constraint) = {in: ["free", "pro", "enterprise"]}];
+
+string handle = 7 [
+  (orm.v1.validate) = VALIDATE_SLUG,
+  (orm.v1.constraint) = {min: 3, max: 40}
+];
+```
+
+| Field | Description |
+| --- | --- |
+| `min` / `max` | Inclusive bounds, read according to the column: the **value** for a numeric column, the **character count** for a string, the **element count** for a repeated column. One pair rather than separate value and length bounds — a column is only ever one of those things. |
+| `pattern` | RE2 regular expression, compiled at generation time so an invalid pattern fails the build rather than every write. Written in the POSIX subset both RE2 and Postgres accept, since it also becomes a `CHECK`. |
+| `in` / `not_in` | Closed sets of accepted / rejected values, for a string column whose values are not worth an enum. |
+
+So `min: 3` means *at least 3* whichever kind of column it lands on:
+
+| Column | Generated check | `CHECK` |
+| --- | --- | --- |
+| `int32 credits` | `validatex.GTE(m.Credits, 3)` | `credits >= 3` |
+| `string bio` | `validatex.MinLen(*m.Bio, 3)` | `length(bio) >= 3` |
+| `repeated string tags` | `validatex.MinItems(m.Tags, 3)` | `cardinality(tags) >= 3` |
+
+There is no `gte`/`gt`/`lte`/`lt`: `min`/`max` cover the inclusive bounds, and an
+exclusive lower bound of zero is what `VALIDATE_POSITIVE` is for.
+
+A constraint that contradicts its column or itself **fails generation** — `min`
+above `max`, a pattern that does not compile, `in` on a numeric column, a `max`
+wider than the column's own `max_length`, or a fractional bound on an integer
+column. That last one would otherwise emit a Go constant that does not convert,
+turning a schema mistake into a compile error in *your* generated tree.
+
 ### `(telemetry.v1.telemetry)` — message level
 
 Tunes a table's generated [telemetry](#gorm-stores-and-tracing) — takes effect
@@ -727,6 +899,7 @@ datasources:
 | `strip_version` | bool | Drop a trailing API version from derived schema names — `bookstore.v1` → schema `bookstore` instead of `bookstore_v1`. Applies to resource-type-derived and config-derived schema names, **never** to an explicit `(orm.v1.datasource).schema` annotation. A per-rule `strip_version` overrides this default. |
 | `dedupe_schema_table` | bool | Rename a table whose name would stutter with its schema in a schema-qualified identifier (`booking` schema + `bookings` table → `bookingBookings` in tools that join schema+table, e.g. Hasura). The redundant leading schema word is stripped; for the schema's primary table — where stripping leaves nothing — the table is renamed to a generic word (`resource`, then `entity`, …). Only the generated table name changes; proto/model names are untouched. |
 | `telemetry` | map | **gorm only.** Tune the first-party opentelementry instrumentation (see the [`telemetry` plugin opt](#plugin-options)). `enabled` (bool) overrides the opt's master switch. `metrics` (bool, default `true`) — set `false` to drop the per-operation ops counter/duration histogram tree-wide; narrow further per table with [`(telemetry.v1.telemetry).metrics`](#telemetryv1telemetry--message-level). `logs` (bool, default `true`) — set `false` to drop the telemetry adapter's trace-correlated error logging. |
+| `validation` | map | Tune enforcement of the [`(orm.v1.validate)`](#ormv1validate--field-level) presets (see the [`validation` plugin opt](#plugin-options)). `enabled` (bool) overrides the opt's master switch. `app` (bool, default `true`) — set `false` to drop the `validatex` package, the `Validate()` methods, and the store write-path calls, leaving the `CHECK` constraints as the only enforcement. `db` (bool, default `true`) — set `false` to drop the `CHECK` constraints, leaving the application checks as the only enforcement. |
 | `graphql` | map | Configures the [GraphQL source](#graphql-client-sdk): `endpoint` **xor** `schema` (a cached GraphQL SDL `.graphql` file), `admin_secret` (`env:VAR` or literal), `headers` (`Key: Value` list), `dialect` (default `hasura`), `max_depth`, `scalars` (`Name=GoType` list). Read by the `target=graphql` plugin entry. |
 | `generate` | list | Per-target settings, keyed by `target`: `go_module`, `package`, `runtime_module`, `dump_schema` for the `graphql` target; the gorm knobs are set as plugin opts instead. buf owns each entry's output dir (`out:`), so it isn't set here. |
 
@@ -814,6 +987,7 @@ Passed via `opt:` in `buf.gen.yaml`.
 | `filters` | **gorm only.** Emit AIP-160 filter / AIP-132 order_by specs per schema (`filters.go`) plus the shared `filterx` engine package serving both **SQL (GORM)** and **Hasura DDN GraphQL** (see [filters and list engines](#aip-160-filters-and-list-engines-sql--hasura)). Off by default; requires `go_module`. The Hasura engine adds a `github.com/the-protobuf-project/runtime-go` dependency. With `telemetry`, also emits an [opentelementry](https://github.com/the-protobuf-project/opentelementry) `Observer` adapter (`filterx.OpentelementryObserver`) for the list engines' spans and debug events. |
 | `converters` | **gorm only.** Emit `protobuf.go` proto ↔ model converters per schema — `<Model>ToProto` / `<Model>FromProto` plus enum value mappers (see [converters](#proto--model-converters)). Off by default. |
 | `telemetry` | **gorm only.** Fold first-party [opentelementry](https://github.com/the-protobuf-project/opentelementry) instrumentation into the generated output — instrumented stores (with `stores`), a `telemetry` adapter/plugin package, a `filterx` observer (with `filters`), and `Registry.Instrument` (see [Telemetry](#gorm-stores-and-tracing)). **Off by default**; takes effect with `go_module`, and adds the `github.com/the-protobuf-project/opentelementry/opentelementry-go` dependency. Tune it further via `orm.yaml` `telemetry:` and `telemetry.v1`'s `(telemetry.v1.telemetry)`/`(telemetry.v1.telemetry_field)` annotations. |
+| `validation` | Enforce the [`(orm.v1.validate)`](#ormv1validate--field-level) presets. The **gorm** target emits a stdlib-only `validatex` runtime, a `Validate()` method per model, and `Create`/`Update` calls (requires `go_module`); the **sql** target emits the matching `CHECK` constraints, and the gorm models carry the equivalent `check:` tags so `AutoMigrate` agrees. **Off by default**; adds no third-party dependency. Tune it via `orm.yaml` `validation:`. |
 | `strict` | Per-rule severity for schema problems. `""` (default) warns on everything; `true` makes every rule a hard error; a spec like `ref:error,collision:warn,index:error,lint:warn` sets severity per rule. Rules: **ref** (unresolved/dropped references), **collision** (global name qualification), **index** (index names an unknown column), **lint** (validate-on-generate advisories). |
 | `config` | Path to a [`orm.yaml`](#configuration--ormyaml) layout config. |
 | `M<proto>=<import>` | Go import-path mapping for a proto file, required when protos omit `option go_package`. |

@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package badpreset.v1;
+
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "orm/v1/annotations.proto";
+
+option go_package = "example.com/test/gen;badpresetv1";
+option (orm.v1.datasource) = {
+  database: "bad_db"
+  schema: "bad"
+};
+
+// Widget misapplies validation presets two ways: a string-format preset on a
+// numeric column, and a single-value preset on a repeated column. Neither can
+// be rendered, so generation must fail rather than silently drop them.
+message Widget {
+  option (google.api.resource) = {
+    type: "badpreset.v1/Widget"
+    pattern: "widgets/{widget}"
+    singular: "widget"
+    plural: "widgets"
+  };
+
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  // VALIDATE_EMAIL judges a string; this column is an int32.
+  int32 quantity = 2 [
+    (google.api.field_behavior) = REQUIRED,
+    (orm.v1.validate) = VALIDATE_EMAIL
+  ];
+
+  // VALIDATE_LOWERCASE judges one value; this column is a list.
+  repeated string labels = 3 [
+    (google.api.field_behavior) = OPTIONAL,
+    (orm.v1.validate) = VALIDATE_LOWERCASE
+  ];
+}

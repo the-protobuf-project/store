@@ -3,10 +3,13 @@ syntax = "proto3";
 package orm.v1;
 
 import "google/protobuf/descriptor.proto";
+import "orm/v1/cache.proto";
 import "orm/v1/column.proto";
+import "orm/v1/constraint.proto";
 import "orm/v1/datasource.proto";
 import "orm/v1/query.proto";
 import "orm/v1/table.proto";
+import "orm/v1/validate.proto";
 
 option go_package = "github.com/the-protobuf-project/orm/plugin/pb/ormpbv1;ormpbv1";
 option java_multiple_files = true;
@@ -38,6 +41,10 @@ extend google.protobuf.FileOptions {
 extend google.protobuf.MessageOptions {
   // table overrides table-level generation: name, id strategy, timestamps, indexes.
   TableOptions table = 50001;
+
+  // cache declares the table's caching policy: which key sets are cached, for
+  // how long, where, and what invalidates them.
+  CacheOptions cache = 50005;
 }
 
 extend google.protobuf.FieldOptions {
@@ -47,4 +54,13 @@ extend google.protobuf.FieldOptions {
   // query tunes the field's generated list-query surface: AIP-160 filter,
   // AIP-132 order_by, and free-text search.
   QueryOptions query = 50003;
+
+  // validate applies parameterless validation presets to the field. Repeated
+  // and stacked at the call site, in the style of google.api.field_behavior;
+  // presence and mutability stay with field_behavior itself.
+  repeated Validate validate = 50004;
+
+  // constraint carries the validation rules that take an argument — bounds,
+  // lengths, patterns, value sets — which a stackable enum cannot express.
+  ConstraintOptions constraint = 50006;
 }

@@ -115,6 +115,11 @@ func main() {
 		"gorm target only: also generate AIP-160 filter / AIP-132 order_by specs per "+
 			"schema plus the shared filterx engine packages (a backend-neutral core and "+
 			"gorm + hasura engines); requires go_module")
+	validation := flags.Bool("validation", false,
+		"enforce the (orm.v1.validate) presets: the gorm target emits a stdlib-only "+
+			"validatex runtime, a Validate method per model, and store write-path calls "+
+			"(requires go_module), and the sql target emits the matching CHECK constraints. "+
+			"orm.yaml validation: tunes it — app: false or db: false keeps just one half")
 	gormModule := flags.String("gorm_module", "",
 		"repository target only: Go import path of the generated gorm output the "+
 			"repository adapters compose (models, stores, filterx)")
@@ -146,6 +151,7 @@ func main() {
 		reg := wire.Registry(
 			protokit.Options{Target: *target, Strict: *strict, Version: v},
 			backend.New(cfg, *goModule, *stores, *telemetry, *converters, *filters).
+				WithValidation(*validation).
 				WithRepositoryModules(*gormModule, *graphqlModule))
 
 		tgt, ok := reg.Targets[*target]

@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package orm.v1;
+
+option go_package = "github.com/the-protobuf-project/orm/plugin/pb/ormpbv1;ormpbv1";
+option java_multiple_files = true;
+option java_outer_classname = "IdProto";
+option java_package = "com.orm.v1";
+
+// IdStrategy selects how the primary-key column is generated for a table.
+// When set (not UNSPECIFIED), an `id` column becomes the PK and any IDENTIFIER
+// field is demoted to UNIQUE NOT NULL.
+enum IdStrategy {
+  // No synthesized key: the IDENTIFIER field stays the primary key.
+  ID_STRATEGY_UNSPECIFIED = 0;
+
+  // ULID primary key: CHAR(26), Prisma @default(ulid()), app-generated in SQL.
+  ID_STRATEGY_ULID = 1;
+
+  // UUID primary key: native UUID type, DEFAULT gen_random_uuid() in DDL,
+  // Prisma @default(uuid()).
+  ID_STRATEGY_UUID = 2;
+}

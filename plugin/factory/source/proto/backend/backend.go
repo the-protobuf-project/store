@@ -8,6 +8,11 @@
 package backend
 
 import (
+	"fmt"
+	"strings"
+
+	"github.com/the-protobuf-project/orm/plugin/factory/target/cache"
+	"github.com/the-protobuf-project/orm/plugin/factory/target/validate"
 	"github.com/the-protobuf-project/orm/plugin/pb/ormpbv1"
 	"github.com/the-protobuf-project/protokit/schema"
 	"google.golang.org/protobuf/proto"
@@ -32,6 +37,13 @@ type Backend struct {
 	// repositories (the open-source posture).
 	gormModule    string
 	graphqlModule string
+
+	// validation / validationDB are the two halves of orm.v1.validate
+	// enforcement: the application checks (validatex + Validate methods) and the
+	// DDL CHECK constraints. Both follow the validation opt, and orm.yaml's
+	// validation: block can disable either half independently.
+	validation   bool
+	validationDB bool
 }
 
 // New builds an orm Backend from the resolved plugin options. The zero value
@@ -45,6 +57,16 @@ func New(cfg *Config, goModule string, stores, telemetry, converters, filters bo
 // module paths (see the gorm_module / graphql_module plugin opts).
 func (b Backend) WithRepositoryModules(gormModule, graphqlModule string) Backend {
 	b.gormModule, b.graphqlModule = gormModule, graphqlModule
+	return b
+}
+
+// WithValidation returns a copy of b carrying the validation opt. Both halves —
+// the application checks and the DDL CHECK constraints — start from it; orm.yaml
+// narrows them in Enrich. A chainable setter rather than another New parameter:
+// New already takes four positional bools, and a fifth and sixth would be easy
+// to transpose at the call site.
+func (b Backend) WithValidation(on bool) Backend {
+	b.validation, b.validationDB = on, on
 	return b
 }
 
@@ -131,9 +153,42 @@ func (b Backend) Enrich(dbs []*schema.Database) error {
 		}
 	}
 
+	// Validation default: the validation plugin opt, then orm.yaml's validation:
+	// block overrides. Both halves default on when validation itself is on, so a
+	// bare validation opt gives defence in depth (app checks plus constraints).
+	valOn, valApp, valDB := b.validation, true, b.validationDB
+	if b.cfg != nil && b.cfg.Validation != nil {
+		if b.cfg.Validation.Enabled != nil {
+			valOn = *b.cfg.Validation.Enabled
+			valDB = valOn
+		}
+		if b.cfg.Validation.App != nil {
+			valApp = *b.cfg.Validation.App
+		}
+		if b.cfg.Validation.DB != nil {
+			valDB = *b.cfg.Validation.DB
+		}
+	}
+
+	// An annotation that cannot mean anything is a hard error, not a warning:
+	// unlike an unresolved reference (which degrades to a soft FK), there is no
+	// fallback — a preset that does not fit its column, or a cache key naming a
+	// column that does not exist, is simply dropped, leaving the author believing
+	// a guarantee holds when nothing implements it. Every offender is collected so
+	// one build reports them all.
+	var bad []string
+
 	for _, db := range dbs {
 		for _, s := range db.Schemas {
 			for _, t := range s.Tables {
+				for _, c := range t.Columns {
+					for _, msg := range validate.Verify(c) {
+						bad = append(bad, fmt.Sprintf("table %q column %q: %s", t.Name, c.Name, msg))
+					}
+				}
+				for _, msg := range cache.Verify(t) {
+					bad = append(bad, fmt.Sprintf("table %q: %s", t.Name, msg))
+				}
 				for _, idx := range tableOptsMsg(t.Source).GetIndexes() {
 					t.Indexes = append(t.Indexes, &schema.Index{
 						Name: idx.GetIndex(), Columns: idx.GetColumns(), Unique: idx.GetUnique(),
@@ -156,8 +211,14 @@ func (b Backend) Enrich(dbs []*schema.Database) error {
 		db.Opts["telemetry_metrics"] = boolStr(telMetrics)
 		db.Opts["telemetry_logs"] = boolStr(telLogs)
 		db.Opts["filters"] = boolStr(b.filters)
+		db.Opts["validation"] = boolStr(valOn && valApp)
+		db.Opts["validation_db"] = boolStr(valOn && valDB)
 		db.Opts["gorm_module"] = b.gormModule
 		db.Opts["graphql_module"] = b.graphqlModule
+	}
+	if len(bad) > 0 {
+		return fmt.Errorf("orm: %d annotation problem(s):\n  - %s",
+			len(bad), strings.Join(bad, "\n  - "))
 	}
 	return nil
 }

@@ -43,8 +43,10 @@ func goType(col *schema.Column) string {
 // indexes) and, for an enum column, a CHECK constraint — so GORM AutoMigrate
 // reproduces the same indexes and enum value integrity the SQL target emits.
 // telemetryTag, when non-empty, is the pre-rendered opentelementry tag the SDK
-// reflects over (span attributes and value metrics).
-func structTag(col *schema.Column, extra []string, telemetryTag string) string {
+// reflects over (span attributes and value metrics). validateTag, likewise, is
+// the pre-rendered go-playground fragment for the column's validation presets,
+// empty when the validation opt is off or the column declares none.
+func structTag(col *schema.Column, extra []string, telemetryTag, validateTag string) string {
 	gormParts := []string{"column:" + col.Name}
 	// Pin the DB type when GORM's Go-type default disagrees with the canonical
 	// column type (timestamptz, jsonb, native arrays) so AutoMigrate produces the
@@ -85,10 +87,21 @@ func structTag(col *schema.Column, extra []string, telemetryTag string) string {
 		tag += ` json:"` + col.Name + `"`
 	}
 
+	// The validate tag is interop only: it lets a consumer already running
+	// go-playground/validator reuse these rules. Nothing generated reads it —
+	// enforcement is the model's Validate method calling validatex — so the
+	// generated tree still compiles with no validation dependency.
+	var vParts []string
 	// Required validation for non-PK NOT NULL fields the application supplies —
 	// DB-managed columns (generated ids, timestamps) are excluded.
 	if col.NotNull && !col.PrimaryKey && !col.AutoCreate && !col.AutoUpdate && col.Generated == "" {
-		tag += ` validate:"required"`
+		vParts = append(vParts, "required")
+	}
+	if validateTag != "" {
+		vParts = append(vParts, validateTag)
+	}
+	if len(vParts) > 0 {
+		tag += ` validate:"` + strings.Join(vParts, ",") + `"`
 	}
 	if telemetryTag != "" {
 		tag += " " + telemetryTag

@@ -21,72 +21,6 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// ReferentialAction is the ON DELETE / ON UPDATE behavior of a foreign key
-// inferred from google.api.resource_reference.
-type ReferentialAction int32
-
-const (
-	// Database default behavior (NO ACTION in PostgreSQL).
-	ReferentialAction_REFERENTIAL_ACTION_UNSPECIFIED ReferentialAction = 0
-	// Delete/update child rows when the parent row is deleted/updated.
-	ReferentialAction_REFERENTIAL_ACTION_CASCADE ReferentialAction = 1
-	// Reject the parent delete/update while child rows exist.
-	ReferentialAction_REFERENTIAL_ACTION_RESTRICT ReferentialAction = 2
-	// Null the FK column when the parent row is deleted/updated.
-	ReferentialAction_REFERENTIAL_ACTION_SET_NULL ReferentialAction = 3
-	// Reset the FK column to its default value.
-	ReferentialAction_REFERENTIAL_ACTION_SET_DEFAULT ReferentialAction = 4
-	// Explicit NO ACTION.
-	ReferentialAction_REFERENTIAL_ACTION_NO_ACTION ReferentialAction = 5
-)
-
-// Enum value maps for ReferentialAction.
-var (
-	ReferentialAction_name = map[int32]string{
-		0: "REFERENTIAL_ACTION_UNSPECIFIED",
-		1: "REFERENTIAL_ACTION_CASCADE",
-		2: "REFERENTIAL_ACTION_RESTRICT",
-		3: "REFERENTIAL_ACTION_SET_NULL",
-		4: "REFERENTIAL_ACTION_SET_DEFAULT",
-		5: "REFERENTIAL_ACTION_NO_ACTION",
-	}
-	ReferentialAction_value = map[string]int32{
-		"REFERENTIAL_ACTION_UNSPECIFIED": 0,
-		"REFERENTIAL_ACTION_CASCADE":     1,
-		"REFERENTIAL_ACTION_RESTRICT":    2,
-		"REFERENTIAL_ACTION_SET_NULL":    3,
-		"REFERENTIAL_ACTION_SET_DEFAULT": 4,
-		"REFERENTIAL_ACTION_NO_ACTION":   5,
-	}
-)
-
-func (x ReferentialAction) Enum() *ReferentialAction {
-	p := new(ReferentialAction)
-	*p = x
-	return p
-}
-
-func (x ReferentialAction) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (ReferentialAction) Descriptor() protoreflect.EnumDescriptor {
-	return file_orm_v1_column_proto_enumTypes[0].Descriptor()
-}
-
-func (ReferentialAction) Type() protoreflect.EnumType {
-	return &file_orm_v1_column_proto_enumTypes[0]
-}
-
-func (x ReferentialAction) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use ReferentialAction.Descriptor instead.
-func (ReferentialAction) EnumDescriptor() ([]byte, []int) {
-	return file_orm_v1_column_proto_rawDescGZIP(), []int{0}
-}
-
 // ColumnOptions overrides column-level generation for a single field.
 //
 // Applied via:
@@ -241,7 +175,7 @@ var File_orm_v1_column_proto protoreflect.FileDescriptor
 
 const file_orm_v1_column_proto_rawDesc = "" +
 	"\n" +
-	"\x13orm/v1/column.proto\x12\x06orm.v1\"\xe5\x02\n" +
+	"\x13orm/v1/column.proto\x12\x06orm.v1\x1a\x16orm/v1/reference.proto\"\xe5\x02\n" +
 	"\rColumnOptions\x12\x16\n" +
 	"\x06column\x18\x01 \x01(\tR\x06column\x12\x12\n" +
 	"\x04type\x18\x02 \x01(\tR\x04type\x12#\n" +
@@ -255,14 +189,7 @@ const file_orm_v1_column_proto_rawDesc = "" +
 	"\x05scale\x18\t \x01(\x05R\x05scale\x126\n" +
 	"\ton_delete\x18\n" +
 	" \x01(\x0e2\x19.orm.v1.ReferentialActionR\bonDelete\x126\n" +
-	"\ton_update\x18\v \x01(\x0e2\x19.orm.v1.ReferentialActionR\bonUpdate*\xdf\x01\n" +
-	"\x11ReferentialAction\x12\"\n" +
-	"\x1eREFERENTIAL_ACTION_UNSPECIFIED\x10\x00\x12\x1e\n" +
-	"\x1aREFERENTIAL_ACTION_CASCADE\x10\x01\x12\x1f\n" +
-	"\x1bREFERENTIAL_ACTION_RESTRICT\x10\x02\x12\x1f\n" +
-	"\x1bREFERENTIAL_ACTION_SET_NULL\x10\x03\x12\"\n" +
-	"\x1eREFERENTIAL_ACTION_SET_DEFAULT\x10\x04\x12 \n" +
-	"\x1cREFERENTIAL_ACTION_NO_ACTION\x10\x05B\x91\x01\n" +
+	"\ton_update\x18\v \x01(\x0e2\x19.orm.v1.ReferentialActionR\bonUpdateB\x91\x01\n" +
 	"\n" +
 	"com.orm.v1B\vColumnProtoP\x01Z=github.com/the-protobuf-project/orm/plugin/pb/ormpbv1;ormpbv1\xa2\x02\x03OXX\xaa\x02\x06Orm.V1\xca\x02\x06Orm\\V1\xe2\x02\x12Orm\\V1\\GPBMetadata\xea\x02\aOrm::V1b\x06proto3"
 
@@ -278,15 +205,14 @@ func file_orm_v1_column_proto_rawDescGZIP() []byte {
 	return file_orm_v1_column_proto_rawDescData
 }
 
-var file_orm_v1_column_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_orm_v1_column_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
 var file_orm_v1_column_proto_goTypes = []any{
-	(ReferentialAction)(0), // 0: orm.v1.ReferentialAction
-	(*ColumnOptions)(nil),  // 1: orm.v1.ColumnOptions
+	(*ColumnOptions)(nil),  // 0: orm.v1.ColumnOptions
+	(ReferentialAction)(0), // 1: orm.v1.ReferentialAction
 }
 var file_orm_v1_column_proto_depIdxs = []int32{
-	0, // 0: orm.v1.ColumnOptions.on_delete:type_name -> orm.v1.ReferentialAction
-	0, // 1: orm.v1.ColumnOptions.on_update:type_name -> orm.v1.ReferentialAction
+	1, // 0: orm.v1.ColumnOptions.on_delete:type_name -> orm.v1.ReferentialAction
+	1, // 1: orm.v1.ColumnOptions.on_update:type_name -> orm.v1.ReferentialAction
 	2, // [2:2] is the sub-list for method output_type
 	2, // [2:2] is the sub-list for method input_type
 	2, // [2:2] is the sub-list for extension type_name
@@ -299,19 +225,19 @@ func file_orm_v1_column_proto_init() {
 	if File_orm_v1_column_proto != nil {
 		return
 	}
+	file_orm_v1_reference_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_orm_v1_column_proto_rawDesc), len(file_orm_v1_column_proto_rawDesc)),
-			NumEnums:      1,
+			NumEnums:      0,
 			NumMessages:   1,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_orm_v1_column_proto_goTypes,
 		DependencyIndexes: file_orm_v1_column_proto_depIdxs,
-		EnumInfos:         file_orm_v1_column_proto_enumTypes,
 		MessageInfos:      file_orm_v1_column_proto_msgTypes,
 	}.Build()
 	File_orm_v1_column_proto = out.File

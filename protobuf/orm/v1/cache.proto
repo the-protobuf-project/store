@@ -1,0 +1,146 @@
+syntax = "proto3";
+
+package orm.v1;
+
+import "google/protobuf/duration.proto";
+
+option go_package = "github.com/the-protobuf-project/orm/plugin/pb/ormpbv1;ormpbv1";
+option java_multiple_files = true;
+option java_outer_classname = "CacheProto";
+option java_package = "com.orm.v1";
+
+// CacheOptions declares a table's caching policy — which lookups are cached, for
+// how long, where, and what makes an entry stale. It is declarative in the same
+// way IndexDef is: the schema states which key sets matter, and a consumer
+// decides how to serve them.
+//
+// Applied via:
+//
+//	option (orm.v1.cache) = {
+//	  enabled: true
+//	  ttl: {seconds: 300}
+//	  store: CACHE_STORE_REDIS
+//	  keys: [{columns: ["id"]}, {columns: ["tenant_id", "slug"]}]
+//	  strategy: CACHE_STRATEGY_READ_THROUGH
+//	  invalidation: INVALIDATION_STREAM
+//	  stream: {subject: "profile.accounts.>", durable: "accounts-cache"}
+//	};
+//
+// This is policy metadata: the generator reads it, checks it against the table,
+// and surfaces it in the generated documentation. No cache client, key builder,
+// or stream consumer is emitted from it yet — the annotation exists so the
+// contract is pinned in the schema, where it belongs, before any runtime
+// depends on it.
+message CacheOptions {
+  // enabled turns caching on for this table. The rest of the policy is inert
+  // without it, so a table can carry a fully-specified policy that is switched
+  // off in one place.
+  bool enabled = 1;
+
+  // ttl is how long an entry stays fresh. Unset means entries live until
+  // something invalidates them, which is only safe with a non-TTL invalidation.
+  google.protobuf.Duration ttl = 2;
+
+  // store selects where entries live. Defaults to CACHE_STORE_MEMORY, the only
+  // one that needs no infrastructure.
+  CacheStore store = 3;
+
+  // keys are the lookups worth caching, each a column set — the primary key, a
+  // unique constraint, a common composite filter. Declared the way indexes are,
+  // because the question is the same one: which access patterns matter enough to
+  // pay for. Empty means the primary key alone.
+  repeated CacheKey keys = 4;
+
+  // strategy is how reads and writes move through the cache.
+  CacheStrategy strategy = 5;
+
+  // invalidation is what makes an entry stale.
+  Invalidation invalidation = 6;
+
+  // stream describes the broker subject carrying change events, required when
+  // invalidation is INVALIDATION_STREAM. It is what lets a cache be filled and
+  // evicted by something other than the writer — a change stream, a projection,
+  // another service.
+  StreamSource stream = 7;
+}
+
+// CacheKey is one cached lookup: the column set it is keyed by.
+message CacheKey {
+  // columns lists field names (proto snake_case) forming the key, in order.
+  repeated string columns = 1;
+
+  // key is an optional explicit name for the key set, used as the cache key
+  // prefix. Auto-generated as cache_<table>_<cols> when empty.
+  string key = 2;
+}
+
+// StreamSource identifies the broker subject carrying this table's change
+// events. Modeled on NATS JetStream's vocabulary; a consumer for another broker
+// maps subject onto its own topic naming.
+message StreamSource {
+  // subject is the NATS subject (or topic) change events are published on.
+  string subject = 1;
+
+  // durable is the durable consumer name, so a restart resumes rather than
+  // replaying from the beginning.
+  string durable = 2;
+
+  // queue_group is the queue group replicas join, so one delivery is handled
+  // once across the group rather than once per replica.
+  string queue_group = 3;
+}
+
+// CacheStore is where cached entries live.
+enum CacheStore {
+  // Process-local memory: no infrastructure, no sharing between replicas.
+  CACHE_STORE_UNSPECIFIED = 0;
+
+  // Redis.
+  CACHE_STORE_REDIS = 1;
+
+  // Valkey, the Redis fork; wire-compatible for these purposes.
+  CACHE_STORE_VALKEY = 2;
+
+  // Explicitly process-local memory, stated rather than defaulted.
+  CACHE_STORE_MEMORY = 3;
+}
+
+// CacheStrategy is how reads and writes move through the cache.
+enum CacheStrategy {
+  // Read-through: a miss reads the database and fills the cache.
+  CACHE_STRATEGY_UNSPECIFIED = 0;
+
+  // Read-through, stated rather than defaulted.
+  CACHE_STRATEGY_READ_THROUGH = 1;
+
+  // Write-through: a write updates the database and the cache together, so a
+  // subsequent read never misses on freshly-written data.
+  CACHE_STRATEGY_WRITE_THROUGH = 2;
+
+  // Write-behind: a write updates the cache and the database asynchronously.
+  // Fastest, and the only strategy where a crash can lose an acknowledged write.
+  CACHE_STRATEGY_WRITE_BEHIND = 3;
+
+  // Refresh-ahead: an entry nearing its TTL is refreshed before it expires, so
+  // a hot key never pays the miss.
+  CACHE_STRATEGY_REFRESH_AHEAD = 4;
+}
+
+// Invalidation is what makes a cached entry stale.
+enum Invalidation {
+  // On write through a generated store, which is the default and is only
+  // complete if every writer goes through one.
+  INVALIDATION_UNSPECIFIED = 0;
+
+  // On write, stated rather than defaulted.
+  INVALIDATION_ON_WRITE = 1;
+
+  // TTL expiry alone: entries are never evicted early, so readers tolerate
+  // staleness up to the TTL. Requires ttl.
+  INVALIDATION_TTL_ONLY = 2;
+
+  // Broker events: a change stream evicts (or refills) entries, which is what
+  // keeps a cache correct when writers bypass the generated stores. Requires
+  // stream.
+  INVALIDATION_STREAM = 3;
+}

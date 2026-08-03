@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package badconstraint.v1;
+
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "orm/v1/annotations.proto";
+
+option go_package = "example.com/test/gen;badconstraintv1";
+option (orm.v1.datasource) = {
+  database: "bad_db"
+  schema: "bad"
+};
+
+// Doodad misapplies the parameterized constraints four ways. Each would either
+// vanish silently or break the user's build instead of this one.
+message Doodad {
+  option (google.api.resource) = {
+    type: "badconstraint.v1/Doodad"
+    pattern: "doodads/{doodad}"
+    singular: "doodad"
+    plural: "doodads"
+  };
+
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  // A bound no value can satisfy.
+  int32 quantity = 2 [(orm.v1.constraint) = {
+    min: 100
+    max: 10
+  }];
+
+  // A fractional bound on an integer column: the generated Go call would not
+  // compile at the far end.
+  int32 batch = 3 [(orm.v1.constraint) = {min: 1.5}];
+
+  // A pattern that does not compile.
+  string code = 4 [(orm.v1.constraint) = {pattern: "^[unclosed"}];
+
+  // A value set on a numeric column, which has no string values to match.
+  int64 weight = 5 [(orm.v1.constraint) = {in: ["heavy"]}];
+}

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/the-protobuf-project/orm/plugin/factory/target/types"
+	"github.com/the-protobuf-project/orm/plugin/factory/target/validate"
 	"github.com/the-protobuf-project/protokit/header"
 	"github.com/the-protobuf-project/protokit/schema"
 )
@@ -60,9 +61,10 @@ type schemaDDL struct {
 func schemaView(db *schema.Database, s *schema.Schema) map[string]any {
 	enums := enumDDLViews(s)
 
+	checks := dbValidationDB(db)
 	var tables []tableView
 	for _, t := range s.Tables {
-		tables = append(tables, tableViewOf(s, t))
+		tables = append(tables, tableViewOf(s, t, checks))
 	}
 
 	ddl := schemaDDLOf(s, false) // per-schema files use plain, readable CREATE TRIGGER
@@ -191,6 +193,7 @@ func migrateView(db *schema.Database) map[string]any {
 	var tables []migrateTableView
 	var alters, indexes, functions, triggers, comments []string
 
+	checks := dbValidationDB(db)
 	for _, s := range db.Schemas {
 		schemaNames = append(schemaNames, quoteIdent(s.Name))
 		for _, e := range enumDDLViews(s) {
@@ -201,7 +204,7 @@ func migrateView(db *schema.Database) map[string]any {
 			ref := qualified(s.Name, t.Name)
 			mt := migrateTableView{Comment: t.Comment, Ref: ref}
 			for _, col := range t.Columns {
-				mt.Cols = append(mt.Cols, itemView{Comment: col.Comment, Def: colDef(s, col)})
+				mt.Cols = append(mt.Cols, itemView{Comment: col.Comment, Def: colDef(s, t, col, checks)})
 			}
 			if n := len(mt.Cols); n > 0 {
 				mt.Cols[n-1].Last = true
@@ -266,11 +269,11 @@ func schemaLabels(db *schema.Database) []string {
 }
 
 // tableViewOf renders one table's column defs, FK constraints, and indexes.
-func tableViewOf(s *schema.Schema, t *schema.Table) tableView {
+func tableViewOf(s *schema.Schema, t *schema.Table, checks bool) tableView {
 	tv := tableView{Comment: t.Comment, Ref: qualified(s.Name, t.Name)}
 
 	for _, col := range t.Columns {
-		tv.Items = append(tv.Items, itemView{Comment: col.Comment, Def: colDef(s, col)})
+		tv.Items = append(tv.Items, itemView{Comment: col.Comment, Def: colDef(s, t, col, checks)})
 	}
 	for _, fk := range t.ForeignKeys {
 		tv.Items = append(tv.Items, itemView{Def: fkDef(t.Name, fk)})
@@ -312,7 +315,7 @@ func indexStmts(s *schema.Schema, t *schema.Table, ifNotExists bool) []string {
 
 // colDef renders a single column definition fragment.
 // Enum columns use the schema-qualified type created by CREATE TYPE.
-func colDef(s *schema.Schema, col *schema.Column) string {
+func colDef(s *schema.Schema, t *schema.Table, col *schema.Column, checks bool) string {
 	sqlType := types.SQLForColumn(col)
 	if col.Enum != nil {
 		sqlType = qualified(s.Name, col.Enum.LocalSQLName)
@@ -338,6 +341,14 @@ func colDef(s *schema.Schema, col *schema.Column) string {
 		def += "  DEFAULT " + quoteLiteral(col.Default)
 	case col.Default != "":
 		def += "  DEFAULT " + col.Default
+	}
+	// Named CHECK constraints from the column's validation presets, using the
+	// same names the gorm target puts in its AutoMigrate tags so both backends
+	// create one constraint rather than two differently-named copies.
+	if checks {
+		if c, ok := validate.ColumnCheck(t.Name, col, quoteIdent(col.Name)); ok {
+			def += "  CONSTRAINT " + quoteIdent(c.Name) + " CHECK (" + c.Expr + ")"
+		}
 	}
 	return def
 }
