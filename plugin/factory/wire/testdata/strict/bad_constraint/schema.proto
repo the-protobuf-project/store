@@ -38,5 +38,7 @@ message Doodad {
   string code = 4 [(orm.v1.constraint) = {pattern: "^[unclosed"}];
 
   // A value set on a numeric column, which has no string values to match.
-  int64 weight = 5 [(orm.v1.constraint) = {in: ["heavy"]}];
+  int64 weight = 5 [(orm.v1.constraint) = {
+    in: ["heavy"]
+  }];
 }

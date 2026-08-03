@@ -92,18 +92,14 @@ message Account {
   int32 credits = 4 [
     (google.api.field_behavior) = REQUIRED,
     (orm.v1.validate) = VALIDATE_NON_NEGATIVE,
-    (orm.v1.constraint) = {
-      max: 1000
-    }
+    (orm.v1.constraint) = {max: 1000}
   ];
 
   // A pattern carrying a backslash, which must survive into the GORM struct tag
   // escaped — an unescaped one voids the whole tag, taking NOT NULL with it.
   string sku = 8 [
     (google.api.field_behavior) = OPTIONAL,
-    (orm.v1.constraint) = {
-      pattern: "^[A-Z]{3}-\\d{4}$"
-    }
+    (orm.v1.constraint) = {pattern: "^[A-Z]{3}-\\d{4}$"}
   ];
 
   // A closed value set, and below it the same min/max fields reading as a
@@ -111,7 +107,11 @@ message Account {
   string tier = 9 [
     (google.api.field_behavior) = REQUIRED,
     (orm.v1.constraint) = {
-      in: ["free", "pro", "enterprise"]
+      in: [
+        "free",
+        "pro",
+        "enterprise"
+      ]
     }
   ];
 

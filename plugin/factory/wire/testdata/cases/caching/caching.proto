@@ -35,12 +35,19 @@ message Booking {
     lists: [
       {
         name: "by_hotel_dates"
-        columns: ["hotel_id", "check_in", "check_out"]
+        columns: [
+          "hotel_id",
+          "check_in",
+          "check_out"
+        ]
         ttl: {seconds: 60}
       },
       {
         name: "availability"
-        columns: ["hotel_id", "check_in"]
+        columns: [
+          "hotel_id",
+          "check_in"
+        ]
         ttl: {seconds: 15}
       }
     ]

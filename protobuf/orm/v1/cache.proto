@@ -40,7 +40,6 @@ message CacheOptions {
   // something invalidates them, which is only safe with a non-TTL invalidation.
   google.protobuf.Duration ttl = 2;
 
-
   // keys are the lookups worth caching, each a column set — the primary key, a
   // unique constraint, a common composite filter. Declared the way indexes are,
   // because the question is the same one: which access patterns matter enough to
@@ -116,7 +115,6 @@ message StreamSource {
   // once across the group rather than once per replica.
   string queue_group = 3;
 }
-
 
 // CacheStrategy is how reads and writes move through the cache.
 enum CacheStrategy {
