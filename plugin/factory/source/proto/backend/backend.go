@@ -44,6 +44,11 @@ type Backend struct {
 	// validation: block can disable either half independently.
 	validation   bool
 	validationDB bool
+
+	// cache turns on read-through caching for tables carrying an
+	// (orm.v1.cache) policy. Off by default: plenty of schemas do not want a
+	// cache, and one that is never wired should cost nothing.
+	cache bool
 }
 
 // New builds an orm Backend from the resolved plugin options. The zero value
@@ -67,6 +72,12 @@ func (b Backend) WithRepositoryModules(gormModule, graphqlModule string) Backend
 // to transpose at the call site.
 func (b Backend) WithValidation(on bool) Backend {
 	b.validation, b.validationDB = on, on
+	return b
+}
+
+// WithCache returns a copy of b carrying the cache opt.
+func (b Backend) WithCache(on bool) Backend {
+	b.cache = on
 	return b
 }
 
@@ -186,6 +197,9 @@ func (b Backend) Enrich(dbs []*schema.Database) error {
 						bad = append(bad, fmt.Sprintf("table %q column %q: %s", t.Name, c.Name, msg))
 					}
 				}
+				for _, msg := range validate.VerifyTable(t) {
+					bad = append(bad, fmt.Sprintf("table %q: %s", t.Name, msg))
+				}
 				for _, msg := range cache.Verify(t) {
 					bad = append(bad, fmt.Sprintf("table %q: %s", t.Name, msg))
 				}
@@ -211,6 +225,7 @@ func (b Backend) Enrich(dbs []*schema.Database) error {
 		db.Opts["telemetry_metrics"] = boolStr(telMetrics)
 		db.Opts["telemetry_logs"] = boolStr(telLogs)
 		db.Opts["filters"] = boolStr(b.filters)
+		db.Opts["cache"] = boolStr(b.cache)
 		db.Opts["validation"] = boolStr(valOn && valApp)
 		db.Opts["validation_db"] = boolStr(valOn && valDB)
 		db.Opts["gorm_module"] = b.gormModule

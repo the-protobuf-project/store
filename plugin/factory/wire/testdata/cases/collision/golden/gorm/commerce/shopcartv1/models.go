@@ -23,9 +23,9 @@ const (
 // Money is a cart-side resource. Its simple name "Money" collides with the order-side Money once both packages merge into the "commerce" database (see orm.yaml). Prisma qualifies the colliding model names (its models share one global namespace), while the schema-namespaced targets — GORM (one package per schema), SQL, and CSV — keep the bare "Money", since the schema already disambiguates them.
 type Money struct {
 	// Unique identifier for the record.
-	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	ID string `gorm:"column:id;type:char(26);primaryKey;not null" json:"id"`
 	// Resource name; the AIP identifier.
-	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
+	Name string `gorm:"column:name;type:varchar(255);not null;uniqueIndex" json:"name" validate:"required"`
 	// Amount in minor units.
 	Amount int64 `gorm:"column:amount;not null" json:"amount" validate:"required"`
 	// Status is a cart-side enum whose simple name collides with order.Status.

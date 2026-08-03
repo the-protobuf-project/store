@@ -56,6 +56,8 @@ Both run through the same binary on `buf generate`, selected per output by a
 | proto | **gorm** | Go structs with GORM tags + a migration registry; optional [CRUD stores + first-party telemetry](#gorm-stores-and-tracing), [AIP-160 filter / AIP-132 order_by list engines for **SQL and Hasura GraphQL**](#aip-160-filters-and-list-engines-sql--hasura), and [proto ↔ model converters](#proto--model-converters). |
 | proto | **sql** | PostgreSQL DDL — per-schema reference files **and** one transactional, **idempotent** `migrate.sql`; FK constraints, indexes, `updated_at` triggers, `COMMENT ON`. |
 | graphql | **graphql** | A typed Go GraphQL client — row models, a fluent predicate DSL, CRUD/subscription methods (see [GraphQL client SDK](#graphql-client-sdk)). |
+| proto | **cache-redis** | Cache keys and a Redis client, generated from each resource's [`(orm.v1.cache)`](#ormv1cache--message-level) policy. The provider is the target: a different cache is a different target, not a schema edit. |
+| proto | **stream-nats** | Change-event subjects and the cache invalidation they drive, as a NATS JetStream consumer. |
 
 Each database target also emits a `README.md` with a Mermaid ER diagram and a
 per-model column reference, so the generated tree is self-documenting. Postgres and
@@ -642,44 +644,54 @@ string state = 5 [(orm.v1.query) = { filterable: false, sortable: false }];
 
 ### `(orm.v1.cache)` — message level
 
-Declares a table's caching policy: which lookups are cached, for how long,
-where, and what makes an entry stale. Declarative in the same way `indexes` is —
-the schema states which access patterns matter, and a consumer decides how to
-serve them.
+Declares a resource's caching policy: which lookups are cached, for how long, and
+what makes an entry stale. Declarative in the same way `indexes` is — the schema
+states which access patterns matter, and a target decides how to serve them.
 
 ```proto
 option (orm.v1.cache) = {
   enabled: true
   ttl: {seconds: 300}
-  store: CACHE_STORE_REDIS
-  keys: [{columns: ["id"]}, {columns: ["tenant_id", "slug"]}]
+  keys: [{columns: ["id"]}]
+  lists: [
+    {name: "by_hotel_dates", columns: ["hotel_id", "check_in", "check_out"], ttl: {seconds: 60}},
+    {name: "availability",   columns: ["hotel_id", "check_in"],              ttl: {seconds: 15}}
+  ]
   strategy: CACHE_STRATEGY_READ_THROUGH
   invalidation: INVALIDATION_STREAM
-  stream: {subject: "profile.accounts.>", durable: "accounts-cache"}
+  stream: {subject: "hotel.bookings.>", durable: "bookings-cache"}
 };
 ```
 
 > [!IMPORTANT]
-> **This is policy metadata.** The generator reads it, checks it against the
-> table, and renders it as a **Cache policy** table in the generated README. No
-> cache client, key builder, or stream consumer is emitted from it. The
-> annotation exists so the contract lives in the schema — next to the indexes it
-> resembles — before any runtime depends on it.
+> **The policy never names a cache product.** Which client ends up in your build
+> is decided by the target: `target=cache-redis` puts a Redis client there,
+> and moving to Valkey or a cache of your own is a different target selection,
+> not a schema edit. There is deliberately no `store:` field — it could only
+> contradict the target actually selected.
 
 | Field | Description |
 | --- | --- |
-| `enabled` | Master switch. The rest of the policy is inert without it, so a fully-specified policy can be turned off in one place. |
-| `ttl` | How long an entry stays fresh (`google.protobuf.Duration`). Unset means entries live until something invalidates them. |
-| `store` | `CACHE_STORE_REDIS` \| `CACHE_STORE_VALKEY` \| `CACHE_STORE_MEMORY` (default). |
-| `keys` | The cached lookups, each a column set — like an index, the question is which access patterns are worth paying for. `key` names the set (defaults to `cache_<table>_<cols>`). Empty means the primary key alone. |
+| `enabled` | Master switch. The rest is inert without it, so a fully-specified policy can be turned off in one place. |
+| `ttl` | Default entry lifetime. Unset means entries live until something invalidates them. |
+| `keys` | The single-resource lookups worth caching, each a column set. `key` names the set; empty means the primary key alone. |
+| `lists` | Named list queries worth caching — "bookings by hotel and date range" — each with its own `ttl` and `strategy`. A list call matching none still caches under the resource `ttl`, keyed by a hash of its query. |
 | `strategy` | `READ_THROUGH` (default) \| `WRITE_THROUGH` \| `WRITE_BEHIND` \| `REFRESH_AHEAD`. |
 | `invalidation` | `ON_WRITE` (default) \| `TTL_ONLY` (requires `ttl`) \| `STREAM` (requires `stream`). |
-| `stream` | NATS JetStream coordinates for change-event invalidation: `subject`, `durable`, `queue_group`. This is what keeps a cache correct when writers bypass the generated stores. |
+| `stream` | Broker coordinates for change-event invalidation: `subject`, `durable`, `queue_group`. This is what keeps a cache correct when writers bypass your stores. |
+
+**Keys read as the resources they hold.** A cached booking lives at
+`hotel.bookings/id:01ARZ3…` and its lists at `hotel.bookings/$list/…`, so a
+keyspace dump is legible. Everything for a resource sits under one prefix, which
+is what lets a write invalidate it in a single call — the `$` segment cannot
+occur in a resource id, so a list key can never collide with a resource key. The
+schema qualifier keeps two schemas that both define `bookings` from colliding in
+a shared Redis.
 
 A policy that cannot mean anything — a key naming a column that does not exist,
-`INVALIDATION_STREAM` with no subject, `INVALIDATION_TTL_ONLY` with no `ttl` —
-**fails generation**, for the same reason a misapplied validation preset does:
-it would be silently inert.
+`INVALIDATION_STREAM` with no subject, `INVALIDATION_TTL_ONLY` with no `ttl`, a
+duplicate list name — **fails generation**, for the same reason a misapplied
+validation preset does: it would be silently inert.
 
 ### `(orm.v1.validate)` — field level
 
@@ -810,6 +822,48 @@ above `max`, a pattern that does not compile, `in` on a numeric column, a `max`
 wider than the column's own `max_length`, or a fractional bound on an integer
 column. That last one would otherwise emit a Go constant that does not convert,
 turning a schema mistake into a compile error in *your* generated tree.
+
+### `(orm.v1.table_constraint)` — message level
+
+A `CHECK` spanning several columns, which no field-level annotation can express:
+`end_time > start_time` is a statement about a row, not about a column. Repeated,
+so a table may declare several.
+
+```proto
+option (orm.v1.table_constraint) = {
+  name: "credits_within_tier"
+  sql:  "tier <> 'free' OR credits <= 100"
+  cel:  "this.tier != 'free' || this.credits <= 100"
+  message: "a free account may not hold more than 100 credits"
+};
+```
+
+| Field | Description |
+| --- | --- |
+| `name` | Constraint identifier. Becomes `chk_<table>_<name>` in the DDL, so a violation names something you can find in the schema. Required. |
+| `sql` | The `CHECK` body, referring to columns by their database names, written verbatim into the constraint. Must be immutable — a `CHECK` referencing `now()` is not, and would validate differently after a table rewrite. |
+| `cel` | Optional application-side twin: a CEL expression over the row bound as `this`. |
+| `message` | Failure text for the application check, phrased to stand alone since it describes a row rather than a field. |
+
+**Why two expressions rather than one translated into the other.** SQL and CEL
+are not inter-translatable in general, and a generated check that silently
+differs from the constraint it claims to mirror is worse than no check. So the
+author states both, and each is used where it belongs. Omitting `cel` is a
+legitimate choice: the constraint is then the database's alone, and the
+application learns of a violation from the write failing.
+
+The CEL twin is rewritten to Go at generation time — `this.<column>` becomes the
+model field, and CEL's single-quoted string literals become Go double-quoted ones
+(a CEL `'free'` emitted verbatim is an illegal Go rune literal). An expression
+that cannot be rewritten faithfully — one touching a nullable column, or naming a
+column this table does not have — is **skipped rather than guessed at**, leaving
+the database to enforce it.
+
+Generation fails when a constraint declares no `sql`, duplicates a name, names no
+column of the table, or when the table has too few columns free of their own
+check to carry each constraint on a distinct one — GORM keeps one `check:` per
+field, so the surplus would be dropped from `AutoMigrate` while the `sql` target
+still emitted it.
 
 ### `(telemetry.v1.telemetry)` — message level
 
@@ -981,7 +1035,7 @@ Passed via `opt:` in `buf.gen.yaml`.
 
 | Option | Description |
 | --- | --- |
-| `target` | What to emit: `prisma` \| `gorm` \| `sql` \| `graphql`. Required. (`graphql` reads its endpoint from `orm.yaml`'s [`graphql`](#top-level-keys) block — see [GraphQL client SDK](#graphql-client-sdk).) |
+| `target` | What to emit: `prisma` \| `gorm` \| `sql` \| `graphql` \| `cache-redis` \| `stream-nats`. Required. (`graphql` reads its endpoint from `orm.yaml`'s [`graphql`](#top-level-keys) block — see [GraphQL client SDK](#graphql-client-sdk).) |
 | `go_module` | **gorm only.** Go import path of the output directory (e.g. `github.com/me/gen`). Enables the `migrate.go` factory registry, whose package imports each per-schema models package. Omit it and the per-schema model packages still generate, just without the aggregator. |
 | `stores` | **gorm only.** Also emit a typed CRUD store per resource — one `<model>_store.go` file each (see [GORM stores](#gorm-stores-and-tracing)). Off by default; turning it on adds a `gorm.io/gorm` dependency to each models package. |
 | `filters` | **gorm only.** Emit AIP-160 filter / AIP-132 order_by specs per schema (`filters.go`) plus the shared `filterx` engine package serving both **SQL (GORM)** and **Hasura DDN GraphQL** (see [filters and list engines](#aip-160-filters-and-list-engines-sql--hasura)). Off by default; requires `go_module`. The Hasura engine adds a `github.com/the-protobuf-project/runtime-go` dependency. With `telemetry`, also emits an [opentelementry](https://github.com/the-protobuf-project/opentelementry) `Observer` adapter (`filterx.OpentelementryObserver`) for the list engines' spans and debug events. |

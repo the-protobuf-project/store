@@ -80,15 +80,28 @@ func GormGoType(pgType string) string {
 	return GoType(pgType)
 }
 
-// gormColumnType maps a scalar PostgreSQL keyword to the explicit GORM `type:`
-// tag value needed when GORM's Go-type default disagrees with the canonical
-// column type: time.Time defaults to timestamptz (so a TIMESTAMP/DATE/TIME loses
-// its kind), and json.RawMessage ([]byte) defaults to bytea (clashing with the
-// Prisma/SQL jsonb). Keywords absent here need no override.
-var gormColumnType = map[string]string{
-	"TIMESTAMPTZ": "timestamptz", "TIMESTAMP": "timestamp",
-	"DATE": "date", "TIME": "time", "TIMETZ": "timetz",
-	"JSONB": "jsonb", "JSON": "json",
+// gormDefaultType is the column type GORM's PostgreSQL driver creates for a Go
+// type when the struct tag pins none. Anything the canonical schema declares
+// that is not exactly this has to be pinned explicitly, or AutoMigrate and the
+// emitted DDL describe different columns.
+//
+// This is the inverse of goScalar, and deliberately expressed as "what does GORM
+// do" rather than "which keywords need an override": an override list only knows
+// about the cases someone thought to add, and every keyword it missed —
+// VARCHAR(n), CHAR(n), REAL, DOUBLE PRECISION, INTERVAL, and every other type
+// that falls back to a Go string — silently migrated as text or numeric.
+var gormDefaultType = map[string]string{
+	"bool":            "BOOLEAN",
+	"int32":           "INTEGER",
+	"int64":           "BIGINT",
+	"float32":         "NUMERIC", // GORM maps both float kinds to decimal
+	"float64":         "NUMERIC",
+	"[]byte":          "BYTEA",
+	"json.RawMessage": "BYTEA", // a []byte alias, so jsonb must be pinned
+	// time.Time is deliberately absent: it never matches, so every temporal
+	// column is pinned. GORM's default for a time.Time is timestamptz, which
+	// would silently flatten a TIMESTAMP, DATE, TIME, or TIMETZ into it.
+	"string": "TEXT",
 }
 
 // gormArrayColumnType maps an array element keyword to the GORM `type:` array
@@ -103,19 +116,42 @@ var gormArrayColumnType = map[string]string{
 	"BYTEA": "bytea[]",
 }
 
+// character are the PostgreSQL string keywords carrying a length modifier, which
+// BaseType strips — the length is exactly what needs pinning.
+var character = map[string]bool{
+	"VARCHAR": true, "CHARACTER VARYING": true,
+	"CHAR": true, "CHARACTER": true, "BPCHAR": true,
+}
+
 // GormColumnType returns the explicit value for a GORM `type:` struct-tag
 // fragment, or "" when GORM's Go-type default already matches the canonical
-// column type. It keeps the three backends agreeing on timestamptz, jsonb, and
-// native arrays so AutoMigrate doesn't fight a Prisma-created column.
+// column type. It keeps the three backends agreeing — on timestamptz, jsonb,
+// native arrays, sized character types, and the float and interval kinds — so
+// AutoMigrate doesn't fight a Prisma-created column.
 func GormColumnType(pgType string) string {
 	base, isArray := BaseType(pgType)
 	if isArray {
 		if t, ok := gormArrayColumnType[base]; ok {
 			return t
 		}
+		// A sized character element keeps its modifier, which BaseType strips,
+		// so a VARCHAR(255)[] column does not migrate as text[]. Other unmapped
+		// element kinds keep the deliberate text[] fallback that matches
+		// Prisma's String[] mapping.
+		if character[base] {
+			return strings.ToLower(strings.TrimSpace(pgType))
+		}
 		return "text[]"
 	}
-	return gormColumnType[base]
+	// Pin whenever the canonical type is not exactly what GORM would produce for
+	// the Go type this column maps to. Comparing against GORM's own behavior
+	// catches every keyword, including the ones with no goScalar entry (VARCHAR,
+	// CHAR, INTERVAL, UUID, NUMERIC, …) that fall back to a Go string.
+	canonical := strings.ToUpper(strings.TrimSpace(pgType))
+	if gormDefaultType[GoType(pgType)] == canonical {
+		return ""
+	}
+	return strings.ToLower(canonical)
 }
 
 // prismaScalar maps a bare PostgreSQL keyword to a Prisma scalar type.

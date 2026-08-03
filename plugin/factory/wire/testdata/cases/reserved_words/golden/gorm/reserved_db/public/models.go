@@ -25,13 +25,13 @@ const (
 // Account is forced onto the reserved table name "user" via a table override, with reserved-word columns and a composite UNIQUE index over them.
 type Account struct {
 	// Unique identifier for the record.
-	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	ID string `gorm:"column:id;type:char(26);primaryKey;not null" json:"id"`
 	// name: IDENTIFIER → PRIMARY KEY.
-	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
+	Name string `gorm:"column:name;type:varchar(255);not null;uniqueIndex" json:"name" validate:"required"`
 	// order is a reserved word; also carries a single-column index.
-	Order *string `gorm:"column:order;index;uniqueIndex:idx_user_order_select,priority:1" json:"order,omitempty"`
+	Order *string `gorm:"column:order;type:varchar(255);index;uniqueIndex:idx_user_order_select,priority:1" json:"order,omitempty"`
 	// select is a reserved word.
-	Select *string `gorm:"column:select;uniqueIndex:idx_user_order_select,priority:2" json:"select,omitempty"`
+	Select *string `gorm:"column:select;type:varchar(255);uniqueIndex:idx_user_order_select,priority:2" json:"select,omitempty"`
 	// state exercises a quoted, schema-qualified enum type reference.
 	State *State `gorm:"column:state;check:chk_user_state,state IN ('ACTIVE','CLOSED')" json:"state,omitempty"`
 }

@@ -36,7 +36,6 @@ message Account {
   option (orm.v1.cache) = {
     enabled: true
     ttl: {seconds: 300}
-    store: CACHE_STORE_REDIS
     keys: [
       {
         columns: ["id"]
@@ -53,6 +52,22 @@ message Account {
       durable: "accounts-cache"
       queue_group: "accounts"
     }
+  };
+
+  // A cross-field CHECK: a statement about the row, which no field-level
+  // annotation can express. The CEL twin is what the application checks; the
+  // sql is what the database enforces.
+  option (orm.v1.table_constraint) = {
+    name: "credits_within_tier"
+    sql: "tier <> 'free' OR credits <= 100"
+    cel: "this.tier != 'free' || this.credits <= 100"
+    message: "a free account may not hold more than 100 credits"
+  };
+
+  // A constraint with no CEL twin: enforced by the database alone.
+  option (orm.v1.table_constraint) = {
+    name: "handle_not_email_local"
+    sql: "handle <> split_part(email, '@', 1)"
   };
 
   string name = 1 [(google.api.field_behavior) = IDENTIFIER];

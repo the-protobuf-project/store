@@ -14,13 +14,13 @@ package promo
 // PromoCode is a redeemable promotion. The human-facing `code` is unique via a single-column unique index, so orm emits GetByCode alongside GetByID and the GetByName finder for the AIP resource name.
 type PromoCode struct {
 	// Unique identifier for the record.
-	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	ID string `gorm:"column:id;type:char(26);primaryKey;not null" json:"id"`
 	// name: AIP resource name → UNIQUE lookup column (id is the synthesized PK).
-	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
+	Name string `gorm:"column:name;type:varchar(255);not null;uniqueIndex" json:"name" validate:"required"`
 	// code is the redeemable token; unique via the table-level index above.
-	Code string `gorm:"column:code;not null;uniqueIndex:idx_promo_codes_code" json:"code" validate:"required"`
+	Code string `gorm:"column:code;type:varchar(255);not null;uniqueIndex:idx_promo_codes_code" json:"code" validate:"required"`
 	// description is free-form, nullable.
-	Description *string `gorm:"column:description" json:"description,omitempty"`
+	Description *string `gorm:"column:description;type:varchar(255)" json:"description,omitempty"`
 }
 
 func (*PromoCode) TableName() string { return "promo.promo_codes" }

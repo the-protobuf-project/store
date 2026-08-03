@@ -21,9 +21,9 @@ import (
 // Sink is one table holding every interesting type mapping.
 type Sink struct {
 	// Unique identifier for the record.
-	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	ID string `gorm:"column:id;type:char(26);primaryKey;not null" json:"id"`
 	// name: IDENTIFIER → PRIMARY KEY.
-	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
+	Name string `gorm:"column:name;type:varchar(255);not null;uniqueIndex" json:"name" validate:"required"`
 	// bool → BOOLEAN.
 	Flag *bool `gorm:"column:flag" json:"flag,omitempty"`
 	// int32 → INTEGER.
@@ -31,23 +31,23 @@ type Sink struct {
 	// int64 → BIGINT.
 	Count64 *int64 `gorm:"column:count64" json:"count64,omitempty"`
 	// float → REAL.
-	Ratio *float32 `gorm:"column:ratio" json:"ratio,omitempty"`
+	Ratio *float32 `gorm:"column:ratio;type:real" json:"ratio,omitempty"`
 	// double → DOUBLE PRECISION.
-	Precise *float64 `gorm:"column:precise" json:"precise,omitempty"`
+	Precise *float64 `gorm:"column:precise;type:double precision" json:"precise,omitempty"`
 	// bytes → BYTEA.
 	Blob []byte `gorm:"column:blob" json:"blob,omitempty"`
 	// Timestamp → TIMESTAMPTZ.
 	EventTime *time.Time `gorm:"column:event_time;type:timestamptz" json:"event_time,omitempty"`
 	// Duration → INTERVAL.
-	Window *string `gorm:"column:window" json:"window,omitempty"`
+	Window *string `gorm:"column:window;type:interval" json:"window,omitempty"`
 	// FieldMask → TEXT.
 	Mask *string `gorm:"column:mask" json:"mask,omitempty"`
 	// Int64 wrapper → BIGINT.
 	MaybeCount *int64 `gorm:"column:maybe_count" json:"maybe_count,omitempty"`
 	// String wrapper → VARCHAR(255).
-	MaybeLabel *string `gorm:"column:maybe_label" json:"maybe_label,omitempty"`
+	MaybeLabel *string `gorm:"column:maybe_label;type:varchar(255)" json:"maybe_label,omitempty"`
 	// repeated string → VARCHAR(255)[].
-	Tags pq.StringArray `gorm:"column:tags;type:text[]" json:"tags,omitempty"`
+	Tags pq.StringArray `gorm:"column:tags;type:varchar(255)[]" json:"tags,omitempty"`
 	// repeated int32 → INTEGER[].
 	Scores pq.Int32Array `gorm:"column:scores;type:integer[]" json:"scores,omitempty"`
 	// map → JSONB.

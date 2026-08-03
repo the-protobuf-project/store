@@ -1,6 +1,9 @@
 package types
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestBaseType(t *testing.T) {
 	cases := []struct {
@@ -74,14 +77,23 @@ func TestGormColumnType(t *testing.T) {
 		"DATE":            "date",
 		"JSONB":           "jsonb", // GORM's []byte default would be bytea
 		"JSON":            "json",
-		"VARCHAR(255)[]":  "text[]", // matches Prisma's String[] → text[]
 		"TEXT[]":          "text[]",
 		"INTEGER[]":       "integer[]",
 		"BIGINT[]":        "bigint[]",
 		"NUMERIC(20,0)[]": "text[]", // unmapped element → text[] fallback
-		"VARCHAR(255)":    "",       // scalar string: GORM default is fine
 		"INTEGER":         "",       // scalar int: GORM default is fine
-		"CHAR(26)":        "",       // FK/ULID column: no override
+		"TEXT":            "",       // unsized string: GORM's default IS text
+
+		// Sized character types keep their modifier. GORM's Postgres driver maps
+		// a Go string to text, so leaving these unpinned migrated every VARCHAR
+		// column — and every CHAR(26) ULID surrogate key — as text, while the sql
+		// and prisma targets emitted the sized type. Verified against a live
+		// Postgres: before this, AutoMigrate and migrate.sql produced different
+		// columns for every string in the schema.
+		"VARCHAR(255)":   "varchar(255)",
+		"VARCHAR(64)":    "varchar(64)",
+		"CHAR(26)":       "char(26)",
+		"VARCHAR(255)[]": "varchar(255)[]",
 	}
 	for in, want := range cases {
 		if got := GormColumnType(in); got != want {
@@ -139,6 +151,54 @@ func TestMongoPrismaType(t *testing.T) {
 	for in, want := range cases {
 		if got := MongoPrismaType(in); got != want {
 			t.Errorf("MongoPrismaType(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestGormColumnTypeCoversEveryCanonicalType is the guard against the failure
+// this function exists to prevent, and which an override list could not: a
+// canonical type that GORM would migrate as something else, left unpinned.
+//
+// The original implementation listed the keywords needing an override, so every
+// keyword nobody thought of — VARCHAR(n), CHAR(n), REAL, DOUBLE PRECISION,
+// INTERVAL — silently became text or numeric under AutoMigrate while the sql and
+// prisma targets emitted the declared type. Verified against a live Postgres:
+// before the fix, every string column in every schema diverged, including the
+// CHAR(26) ULID surrogate key on every table.
+func TestGormColumnTypeCoversEveryCanonicalType(t *testing.T) {
+	// Every type the sql target can emit, paired with what GORM's driver would
+	// create for the Go type it maps to when nothing is pinned.
+	cases := []struct{ canonical, gormDefault string }{
+		{"VARCHAR(255)", "text"},
+		{"CHAR(26)", "text"},
+		{"TEXT", "text"},
+		{"INTEGER", "integer"},
+		{"BIGINT", "bigint"},
+		{"BOOLEAN", "boolean"},
+		{"REAL", "numeric"},
+		{"DOUBLE PRECISION", "numeric"},
+		{"NUMERIC(20,0)", "text"},
+		{"INTERVAL", "text"},
+		{"UUID", "text"},
+		{"BYTEA", "bytea"},
+		{"JSONB", "bytea"},
+		{"TIMESTAMPTZ", "timestamptz"},
+		{"DATE", "timestamptz"},
+	}
+	for _, c := range cases {
+		got := GormColumnType(c.canonical)
+		want := strings.ToLower(c.canonical)
+		// A type GORM already produces needs no tag; anything else must be
+		// pinned to exactly the canonical type.
+		if want == c.gormDefault && c.canonical != "TIMESTAMPTZ" && c.canonical != "DATE" {
+			if got != "" {
+				t.Errorf("GormColumnType(%q) = %q, want \"\" (GORM's default already matches)", c.canonical, got)
+			}
+			continue
+		}
+		if got != want {
+			t.Errorf("GormColumnType(%q) = %q, want %q — GORM would otherwise create %s",
+				c.canonical, got, want, c.gormDefault)
 		}
 	}
 }

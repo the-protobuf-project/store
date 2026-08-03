@@ -14,9 +14,9 @@ package common
 // Money is an amount of money with its currency type.
 type Money struct {
 	// Unique identifier for the record.
-	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	ID string `gorm:"column:id;type:char(26);primaryKey;not null" json:"id"`
 	// The three-letter ISO 4217 currency code.
-	CurrencyCode *string `gorm:"column:currency_code" json:"currency_code,omitempty"`
+	CurrencyCode *string `gorm:"column:currency_code;type:varchar(255)" json:"currency_code,omitempty"`
 	// Whole units of the amount.
 	Units *int64 `gorm:"column:units" json:"units,omitempty"`
 	// Number of nano (10^-9) units of the amount.

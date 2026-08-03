@@ -72,6 +72,6 @@ which lookups are worth caching and what makes them stale. No cache client,
 key builder, or stream consumer is generated from it — the contract is pinned
 here so a runtime can implement it without re-deciding it.
 
-| Model | Store | TTL | Strategy | Invalidation | Keys | Stream |
-| --- | --- | --- | --- | --- | --- | --- |
-| Account | redis | 5m0s | read-through | stream | `cache_accounts_id` (id)<br>`cache_accounts_by_handle` (handle) | `profile.accounts.>` (durable `accounts-cache`) |
+| Model | TTL | Strategy | Invalidation | Keys | Stream |
+| --- | --- | --- | --- | --- | --- |
+| Account | 5m0s | read-through | stream | `profile.accounts/id` (id)<br>`cache_accounts_by_handle` (handle) | `profile.accounts.>` (durable `accounts-cache`) |

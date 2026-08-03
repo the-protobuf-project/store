@@ -22,63 +22,6 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// CacheStore is where cached entries live.
-type CacheStore int32
-
-const (
-	// Process-local memory: no infrastructure, no sharing between replicas.
-	CacheStore_CACHE_STORE_UNSPECIFIED CacheStore = 0
-	// Redis.
-	CacheStore_CACHE_STORE_REDIS CacheStore = 1
-	// Valkey, the Redis fork; wire-compatible for these purposes.
-	CacheStore_CACHE_STORE_VALKEY CacheStore = 2
-	// Explicitly process-local memory, stated rather than defaulted.
-	CacheStore_CACHE_STORE_MEMORY CacheStore = 3
-)
-
-// Enum value maps for CacheStore.
-var (
-	CacheStore_name = map[int32]string{
-		0: "CACHE_STORE_UNSPECIFIED",
-		1: "CACHE_STORE_REDIS",
-		2: "CACHE_STORE_VALKEY",
-		3: "CACHE_STORE_MEMORY",
-	}
-	CacheStore_value = map[string]int32{
-		"CACHE_STORE_UNSPECIFIED": 0,
-		"CACHE_STORE_REDIS":       1,
-		"CACHE_STORE_VALKEY":      2,
-		"CACHE_STORE_MEMORY":      3,
-	}
-)
-
-func (x CacheStore) Enum() *CacheStore {
-	p := new(CacheStore)
-	*p = x
-	return p
-}
-
-func (x CacheStore) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (CacheStore) Descriptor() protoreflect.EnumDescriptor {
-	return file_orm_v1_cache_proto_enumTypes[0].Descriptor()
-}
-
-func (CacheStore) Type() protoreflect.EnumType {
-	return &file_orm_v1_cache_proto_enumTypes[0]
-}
-
-func (x CacheStore) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use CacheStore.Descriptor instead.
-func (CacheStore) EnumDescriptor() ([]byte, []int) {
-	return file_orm_v1_cache_proto_rawDescGZIP(), []int{0}
-}
-
 // CacheStrategy is how reads and writes move through the cache.
 type CacheStrategy int32
 
@@ -127,11 +70,11 @@ func (x CacheStrategy) String() string {
 }
 
 func (CacheStrategy) Descriptor() protoreflect.EnumDescriptor {
-	return file_orm_v1_cache_proto_enumTypes[1].Descriptor()
+	return file_orm_v1_cache_proto_enumTypes[0].Descriptor()
 }
 
 func (CacheStrategy) Type() protoreflect.EnumType {
-	return &file_orm_v1_cache_proto_enumTypes[1]
+	return &file_orm_v1_cache_proto_enumTypes[0]
 }
 
 func (x CacheStrategy) Number() protoreflect.EnumNumber {
@@ -140,7 +83,7 @@ func (x CacheStrategy) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use CacheStrategy.Descriptor instead.
 func (CacheStrategy) EnumDescriptor() ([]byte, []int) {
-	return file_orm_v1_cache_proto_rawDescGZIP(), []int{1}
+	return file_orm_v1_cache_proto_rawDescGZIP(), []int{0}
 }
 
 // Invalidation is what makes a cached entry stale.
@@ -188,11 +131,11 @@ func (x Invalidation) String() string {
 }
 
 func (Invalidation) Descriptor() protoreflect.EnumDescriptor {
-	return file_orm_v1_cache_proto_enumTypes[2].Descriptor()
+	return file_orm_v1_cache_proto_enumTypes[1].Descriptor()
 }
 
 func (Invalidation) Type() protoreflect.EnumType {
-	return &file_orm_v1_cache_proto_enumTypes[2]
+	return &file_orm_v1_cache_proto_enumTypes[1]
 }
 
 func (x Invalidation) Number() protoreflect.EnumNumber {
@@ -201,7 +144,7 @@ func (x Invalidation) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use Invalidation.Descriptor instead.
 func (Invalidation) EnumDescriptor() ([]byte, []int) {
-	return file_orm_v1_cache_proto_rawDescGZIP(), []int{2}
+	return file_orm_v1_cache_proto_rawDescGZIP(), []int{1}
 }
 
 // CacheOptions declares a table's caching policy — which lookups are cached, for
@@ -214,18 +157,17 @@ func (Invalidation) EnumDescriptor() ([]byte, []int) {
 //	option (orm.v1.cache) = {
 //	  enabled: true
 //	  ttl: {seconds: 300}
-//	  store: CACHE_STORE_REDIS
 //	  keys: [{columns: ["id"]}, {columns: ["tenant_id", "slug"]}]
 //	  strategy: CACHE_STRATEGY_READ_THROUGH
 //	  invalidation: INVALIDATION_STREAM
 //	  stream: {subject: "profile.accounts.>", durable: "accounts-cache"}
 //	};
 //
-// This is policy metadata: the generator reads it, checks it against the table,
-// and surfaces it in the generated documentation. No cache client, key builder,
-// or stream consumer is emitted from it yet — the annotation exists so the
-// contract is pinned in the schema, where it belongs, before any runtime
-// depends on it.
+// The policy says what to cache and for how long — never which cache product.
+// That is the target's job: `target=cache-redis` is what puts a Redis client in
+// your build, and moving to Valkey or a cache of your own is a different target
+// selection, not a schema edit. A `store:` field here could only contradict the
+// target actually selected, so there isn't one.
 type CacheOptions struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// enabled turns caching on for this table. The rest of the policy is inert
@@ -235,9 +177,6 @@ type CacheOptions struct {
 	// ttl is how long an entry stays fresh. Unset means entries live until
 	// something invalidates them, which is only safe with a non-TTL invalidation.
 	Ttl *durationpb.Duration `protobuf:"bytes,2,opt,name=ttl,proto3" json:"ttl,omitempty"`
-	// store selects where entries live. Defaults to CACHE_STORE_MEMORY, the only
-	// one that needs no infrastructure.
-	Store CacheStore `protobuf:"varint,3,opt,name=store,proto3,enum=orm.v1.CacheStore" json:"store,omitempty"`
 	// keys are the lookups worth caching, each a column set — the primary key, a
 	// unique constraint, a common composite filter. Declared the way indexes are,
 	// because the question is the same one: which access patterns matter enough to
@@ -247,6 +186,16 @@ type CacheOptions struct {
 	Strategy CacheStrategy `protobuf:"varint,5,opt,name=strategy,proto3,enum=orm.v1.CacheStrategy" json:"strategy,omitempty"`
 	// invalidation is what makes an entry stale.
 	Invalidation Invalidation `protobuf:"varint,6,opt,name=invalidation,proto3,enum=orm.v1.Invalidation" json:"invalidation,omitempty"`
+	// lists are the named list queries worth caching, each identified by the
+	// columns it filters on — "bookings by hotel and date range", "availability by
+	// hotel and date". Declared rather than inferred for the same reason indexes
+	// are: which access patterns deserve a cache, and for how long, is a decision
+	// about the workload, not something to guess from a call site.
+	//
+	// A list call that matches no declared entry still caches under the table's
+	// ttl, keyed by a hash of its filter, ordering, and page. Declaring one buys a
+	// name, its own ttl, and its own strategy.
+	Lists []*CacheList `protobuf:"bytes,8,rep,name=lists,proto3" json:"lists,omitempty"`
 	// stream describes the broker subject carrying change events, required when
 	// invalidation is INVALIDATION_STREAM. It is what lets a cache be filled and
 	// evicted by something other than the writer — a change stream, a projection,
@@ -300,13 +249,6 @@ func (x *CacheOptions) GetTtl() *durationpb.Duration {
 	return nil
 }
 
-func (x *CacheOptions) GetStore() CacheStore {
-	if x != nil {
-		return x.Store
-	}
-	return CacheStore_CACHE_STORE_UNSPECIFIED
-}
-
 func (x *CacheOptions) GetKeys() []*CacheKey {
 	if x != nil {
 		return x.Keys
@@ -326,6 +268,13 @@ func (x *CacheOptions) GetInvalidation() Invalidation {
 		return x.Invalidation
 	}
 	return Invalidation_INVALIDATION_UNSPECIFIED
+}
+
+func (x *CacheOptions) GetLists() []*CacheList {
+	if x != nil {
+		return x.Lists
+	}
+	return nil
 }
 
 func (x *CacheOptions) GetStream() *StreamSource {
@@ -391,6 +340,84 @@ func (x *CacheKey) GetKey() string {
 	return ""
 }
 
+// CacheList is one named, cacheable list query: the columns it filters on, and
+// how long its results stay fresh.
+type CacheList struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// name identifies the list cache, used as its key prefix and in the generated
+	// documentation. Required.
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// columns lists the field names (proto snake_case) the query filters on, in
+	// order. A list call whose filter covers exactly these columns uses this
+	// entry. Empty matches an unfiltered list of the whole table.
+	Columns []string `protobuf:"bytes,2,rep,name=columns,proto3" json:"columns,omitempty"`
+	// ttl overrides CacheOptions.ttl for this list. An availability lookup may
+	// need to be far fresher than the resource rows behind it.
+	Ttl *durationpb.Duration `protobuf:"bytes,3,opt,name=ttl,proto3" json:"ttl,omitempty"`
+	// strategy overrides CacheOptions.strategy for this list.
+	Strategy      CacheStrategy `protobuf:"varint,4,opt,name=strategy,proto3,enum=orm.v1.CacheStrategy" json:"strategy,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CacheList) Reset() {
+	*x = CacheList{}
+	mi := &file_orm_v1_cache_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CacheList) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CacheList) ProtoMessage() {}
+
+func (x *CacheList) ProtoReflect() protoreflect.Message {
+	mi := &file_orm_v1_cache_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CacheList.ProtoReflect.Descriptor instead.
+func (*CacheList) Descriptor() ([]byte, []int) {
+	return file_orm_v1_cache_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *CacheList) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *CacheList) GetColumns() []string {
+	if x != nil {
+		return x.Columns
+	}
+	return nil
+}
+
+func (x *CacheList) GetTtl() *durationpb.Duration {
+	if x != nil {
+		return x.Ttl
+	}
+	return nil
+}
+
+func (x *CacheList) GetStrategy() CacheStrategy {
+	if x != nil {
+		return x.Strategy
+	}
+	return CacheStrategy_CACHE_STRATEGY_UNSPECIFIED
+}
+
 // StreamSource identifies the broker subject carrying this table's change
 // events. Modeled on NATS JetStream's vocabulary; a consumer for another broker
 // maps subject onto its own topic naming.
@@ -410,7 +437,7 @@ type StreamSource struct {
 
 func (x *StreamSource) Reset() {
 	*x = StreamSource{}
-	mi := &file_orm_v1_cache_proto_msgTypes[2]
+	mi := &file_orm_v1_cache_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -422,7 +449,7 @@ func (x *StreamSource) String() string {
 func (*StreamSource) ProtoMessage() {}
 
 func (x *StreamSource) ProtoReflect() protoreflect.Message {
-	mi := &file_orm_v1_cache_proto_msgTypes[2]
+	mi := &file_orm_v1_cache_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -435,7 +462,7 @@ func (x *StreamSource) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamSource.ProtoReflect.Descriptor instead.
 func (*StreamSource) Descriptor() ([]byte, []int) {
-	return file_orm_v1_cache_proto_rawDescGZIP(), []int{2}
+	return file_orm_v1_cache_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *StreamSource) GetSubject() string {
@@ -463,29 +490,28 @@ var File_orm_v1_cache_proto protoreflect.FileDescriptor
 
 const file_orm_v1_cache_proto_rawDesc = "" +
 	"\n" +
-	"\x12orm/v1/cache.proto\x12\x06orm.v1\x1a\x1egoogle/protobuf/duration.proto\"\xc0\x02\n" +
+	"\x12orm/v1/cache.proto\x12\x06orm.v1\x1a\x1egoogle/protobuf/duration.proto\"\xbf\x02\n" +
 	"\fCacheOptions\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12+\n" +
-	"\x03ttl\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\x03ttl\x12(\n" +
-	"\x05store\x18\x03 \x01(\x0e2\x12.orm.v1.CacheStoreR\x05store\x12$\n" +
+	"\x03ttl\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\x03ttl\x12$\n" +
 	"\x04keys\x18\x04 \x03(\v2\x10.orm.v1.CacheKeyR\x04keys\x121\n" +
 	"\bstrategy\x18\x05 \x01(\x0e2\x15.orm.v1.CacheStrategyR\bstrategy\x128\n" +
-	"\finvalidation\x18\x06 \x01(\x0e2\x14.orm.v1.InvalidationR\finvalidation\x12,\n" +
+	"\finvalidation\x18\x06 \x01(\x0e2\x14.orm.v1.InvalidationR\finvalidation\x12'\n" +
+	"\x05lists\x18\b \x03(\v2\x11.orm.v1.CacheListR\x05lists\x12,\n" +
 	"\x06stream\x18\a \x01(\v2\x14.orm.v1.StreamSourceR\x06stream\"6\n" +
 	"\bCacheKey\x12\x18\n" +
 	"\acolumns\x18\x01 \x03(\tR\acolumns\x12\x10\n" +
-	"\x03key\x18\x02 \x01(\tR\x03key\"c\n" +
+	"\x03key\x18\x02 \x01(\tR\x03key\"\x99\x01\n" +
+	"\tCacheList\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
+	"\acolumns\x18\x02 \x03(\tR\acolumns\x12+\n" +
+	"\x03ttl\x18\x03 \x01(\v2\x19.google.protobuf.DurationR\x03ttl\x121\n" +
+	"\bstrategy\x18\x04 \x01(\x0e2\x15.orm.v1.CacheStrategyR\bstrategy\"c\n" +
 	"\fStreamSource\x12\x18\n" +
 	"\asubject\x18\x01 \x01(\tR\asubject\x12\x18\n" +
 	"\adurable\x18\x02 \x01(\tR\adurable\x12\x1f\n" +
 	"\vqueue_group\x18\x03 \x01(\tR\n" +
-	"queueGroup*p\n" +
-	"\n" +
-	"CacheStore\x12\x1b\n" +
-	"\x17CACHE_STORE_UNSPECIFIED\x10\x00\x12\x15\n" +
-	"\x11CACHE_STORE_REDIS\x10\x01\x12\x16\n" +
-	"\x12CACHE_STORE_VALKEY\x10\x02\x12\x16\n" +
-	"\x12CACHE_STORE_MEMORY\x10\x03*\xb5\x01\n" +
+	"queueGroup*\xb5\x01\n" +
 	"\rCacheStrategy\x12\x1e\n" +
 	"\x1aCACHE_STRATEGY_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bCACHE_STRATEGY_READ_THROUGH\x10\x01\x12 \n" +
@@ -513,29 +539,31 @@ func file_orm_v1_cache_proto_rawDescGZIP() []byte {
 	return file_orm_v1_cache_proto_rawDescData
 }
 
-var file_orm_v1_cache_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_orm_v1_cache_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_orm_v1_cache_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_orm_v1_cache_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_orm_v1_cache_proto_goTypes = []any{
-	(CacheStore)(0),             // 0: orm.v1.CacheStore
-	(CacheStrategy)(0),          // 1: orm.v1.CacheStrategy
-	(Invalidation)(0),           // 2: orm.v1.Invalidation
-	(*CacheOptions)(nil),        // 3: orm.v1.CacheOptions
-	(*CacheKey)(nil),            // 4: orm.v1.CacheKey
+	(CacheStrategy)(0),          // 0: orm.v1.CacheStrategy
+	(Invalidation)(0),           // 1: orm.v1.Invalidation
+	(*CacheOptions)(nil),        // 2: orm.v1.CacheOptions
+	(*CacheKey)(nil),            // 3: orm.v1.CacheKey
+	(*CacheList)(nil),           // 4: orm.v1.CacheList
 	(*StreamSource)(nil),        // 5: orm.v1.StreamSource
 	(*durationpb.Duration)(nil), // 6: google.protobuf.Duration
 }
 var file_orm_v1_cache_proto_depIdxs = []int32{
 	6, // 0: orm.v1.CacheOptions.ttl:type_name -> google.protobuf.Duration
-	0, // 1: orm.v1.CacheOptions.store:type_name -> orm.v1.CacheStore
-	4, // 2: orm.v1.CacheOptions.keys:type_name -> orm.v1.CacheKey
-	1, // 3: orm.v1.CacheOptions.strategy:type_name -> orm.v1.CacheStrategy
-	2, // 4: orm.v1.CacheOptions.invalidation:type_name -> orm.v1.Invalidation
+	3, // 1: orm.v1.CacheOptions.keys:type_name -> orm.v1.CacheKey
+	0, // 2: orm.v1.CacheOptions.strategy:type_name -> orm.v1.CacheStrategy
+	1, // 3: orm.v1.CacheOptions.invalidation:type_name -> orm.v1.Invalidation
+	4, // 4: orm.v1.CacheOptions.lists:type_name -> orm.v1.CacheList
 	5, // 5: orm.v1.CacheOptions.stream:type_name -> orm.v1.StreamSource
-	6, // [6:6] is the sub-list for method output_type
-	6, // [6:6] is the sub-list for method input_type
-	6, // [6:6] is the sub-list for extension type_name
-	6, // [6:6] is the sub-list for extension extendee
-	0, // [0:6] is the sub-list for field type_name
+	6, // 6: orm.v1.CacheList.ttl:type_name -> google.protobuf.Duration
+	0, // 7: orm.v1.CacheList.strategy:type_name -> orm.v1.CacheStrategy
+	8, // [8:8] is the sub-list for method output_type
+	8, // [8:8] is the sub-list for method input_type
+	8, // [8:8] is the sub-list for extension type_name
+	8, // [8:8] is the sub-list for extension extendee
+	0, // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_orm_v1_cache_proto_init() }
@@ -548,8 +576,8 @@ func file_orm_v1_cache_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_orm_v1_cache_proto_rawDesc), len(file_orm_v1_cache_proto_rawDesc)),
-			NumEnums:      3,
-			NumMessages:   3,
+			NumEnums:      2,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

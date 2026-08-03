@@ -21,21 +21,21 @@ import (
 // Event exercises nested-message normalization: a singular message field becomes a belongs-to relation, a repeated message field becomes a has-many, while well-known and map fields stay scalar / JSONB.
 type Event struct {
 	// Unique identifier for the record.
-	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	ID string `gorm:"column:id;type:char(26);primaryKey;not null" json:"id"`
 	// Resource name; the AIP identifier.
-	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
+	Name string `gorm:"column:name;type:varchar(255);not null;uniqueIndex" json:"name" validate:"required"`
 	// Well-known type stays a scalar column, not a relation.
 	CreateTime time.Time `gorm:"column:create_time;type:timestamptz;not null;autoCreateTime" json:"create_time"`
 	// Map fields stay JSONB.
 	Labels json.RawMessage `gorm:"column:labels;type:jsonb" json:"labels,omitempty"`
 	// Foreign key to Location.
-	LocationID string    `gorm:"column:location_id;not null;index:idx_events_location_id" json:"location_id" validate:"required"`
+	LocationID string    `gorm:"column:location_id;type:varchar(255);not null;index:idx_events_location_id" json:"location_id" validate:"required"`
 	Location   *Location `gorm:"foreignKey:LocationID;constraint:OnDelete:CASCADE" json:"location,omitempty"`
 	// Foreign key to Location.
-	BillingID *string   `gorm:"column:billing_id;index:idx_events_billing_id" json:"billing_id,omitempty"`
+	BillingID *string   `gorm:"column:billing_id;type:varchar(255);index:idx_events_billing_id" json:"billing_id,omitempty"`
 	Billing   *Location `gorm:"foreignKey:BillingID;constraint:OnDelete:SET NULL" json:"billing,omitempty"`
 	// Foreign key to Metadata.
-	MetadataID *string   `gorm:"column:metadata_id;index:idx_events_metadata_id" json:"metadata_id,omitempty"`
+	MetadataID *string   `gorm:"column:metadata_id;type:char(26);index:idx_events_metadata_id" json:"metadata_id,omitempty"`
 	Metadata   *Metadata `gorm:"foreignKey:MetadataID;constraint:OnDelete:SET NULL" json:"metadata,omitempty"`
 	// Back-relation: Attendee records that reference this via event_id.
 	Attendees []Attendee `gorm:"foreignKey:EventID" json:"attendees,omitempty"`
@@ -48,13 +48,13 @@ func (*Event) TableName() string { return "embedded_v1.events" }
 // Attendee carries an IDENTIFIER, so that field is its primary key.
 type Attendee struct {
 	// Unique identifier for the record.
-	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	ID string `gorm:"column:id;type:char(26);primaryKey;not null" json:"id"`
 	// Resource name; the AIP identifier.
-	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
+	Name string `gorm:"column:name;type:varchar(255);not null;uniqueIndex" json:"name" validate:"required"`
 	// Email address of the attendee.
-	Email string `gorm:"column:email;not null" json:"email" validate:"required"`
+	Email string `gorm:"column:email;type:varchar(255);not null" json:"email" validate:"required"`
 	// Parent reference to Event (from the AIP resource pattern).
-	EventID string `gorm:"column:event_id;not null;index:idx_attendees_event_id" json:"event_id" validate:"required"`
+	EventID string `gorm:"column:event_id;type:char(26);not null;index:idx_attendees_event_id" json:"event_id" validate:"required"`
 	Event   *Event `gorm:"foreignKey:EventID;constraint:OnDelete:CASCADE" json:"event,omitempty"`
 	// Back-relation: Metadata records that reference this via owner.
 	Metadatas []Metadata `gorm:"foreignKey:OwnerID" json:"metadatas,omitempty"`
@@ -67,11 +67,11 @@ func (*Attendee) TableName() string { return "embedded_v1.attendees" }
 // Location is reachable from Event and so becomes its own table; its existing `id` field is promoted to the primary key.
 type Location struct {
 	// Unique identifier for the location, assigned by the server.
-	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	ID string `gorm:"column:id;type:varchar(255);primaryKey;not null" json:"id"`
 	// City where the location resides.
-	City string `gorm:"column:city;not null" json:"city" validate:"required"`
+	City string `gorm:"column:city;type:varchar(255);not null" json:"city" validate:"required"`
 	// Venue name within the city.
-	Venue *string `gorm:"column:venue" json:"venue,omitempty"`
+	Venue *string `gorm:"column:venue;type:varchar(255)" json:"venue,omitempty"`
 	// Back-relation: Event records that reference this via location_id.
 	Events []Event `gorm:"foreignKey:LocationID" json:"events,omitempty"`
 	// Back-relation: Event records that reference this via billing_id.
@@ -83,13 +83,13 @@ func (*Location) TableName() string { return "embedded_v1.locations" }
 // Metadata is reachable only through Event.metadata and carries no resource annotation, yet it still becomes its own table (with a synthesized primary key) rather than an inlined JSONB blob.
 type Metadata struct {
 	// Unique identifier for the record.
-	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	ID string `gorm:"column:id;type:char(26);primaryKey;not null" json:"id"`
 	// Free-form source system label.
-	Source *string `gorm:"column:source" json:"source,omitempty"`
+	Source *string `gorm:"column:source;type:varchar(255)" json:"source,omitempty"`
 	// Arbitrary tags.
-	Tags pq.StringArray `gorm:"column:tags;type:text[]" json:"tags,omitempty"`
+	Tags pq.StringArray `gorm:"column:tags;type:varchar(255)[]" json:"tags,omitempty"`
 	// Singular resource reference → belongs-to with a bare-named FK column (`owner`, no `_id`). Its auto-index must name the scalar field `ownerID`, not the `owner` relation field, or Prisma rejects the @@index.
-	OwnerID *string   `gorm:"column:owner;index:idx_metadatas_owner" json:"owner,omitempty"`
+	OwnerID *string   `gorm:"column:owner;type:char(26);index:idx_metadatas_owner" json:"owner,omitempty"`
 	Owner   *Attendee `gorm:"foreignKey:OwnerID" json:"owner_rel,omitempty"`
 	// Back-relation: Event records that reference this via metadata_id.
 	Events []Event `gorm:"foreignKey:MetadataID" json:"events,omitempty"`
@@ -100,12 +100,12 @@ func (*Metadata) TableName() string { return "embedded_v1.metadatas" }
 // Join table for the many-to-many relation Event.attendees ↔ Attendee.
 type EventAttendees struct {
 	// Unique identifier for the record.
-	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	ID string `gorm:"column:id;type:char(26);primaryKey;not null" json:"id"`
 	// Foreign key to Event.
-	EventID string `gorm:"column:event_id;not null;uniqueIndex:idx_event_attendees_event_id_attendee_id,priority:1" json:"event_id" validate:"required"`
+	EventID string `gorm:"column:event_id;type:char(26);not null;uniqueIndex:idx_event_attendees_event_id_attendee_id,priority:1" json:"event_id" validate:"required"`
 	Event   *Event `gorm:"foreignKey:EventID;constraint:OnDelete:CASCADE" json:"event,omitempty"`
 	// Foreign key to Attendee.
-	AttendeeID string    `gorm:"column:attendee_id;not null;uniqueIndex:idx_event_attendees_event_id_attendee_id,priority:2;index:idx_event_attendees_attendee_id" json:"attendee_id" validate:"required"`
+	AttendeeID string    `gorm:"column:attendee_id;type:char(26);not null;uniqueIndex:idx_event_attendees_event_id_attendee_id,priority:2;index:idx_event_attendees_attendee_id" json:"attendee_id" validate:"required"`
 	Attendee   *Attendee `gorm:"foreignKey:AttendeeID;constraint:OnDelete:CASCADE" json:"attendee,omitempty"`
 	// Full resource name of the referenced Attendee, capturing the parent hierarchy the attendee_id id alone omits.
 	AttendeeName string `gorm:"column:attendee_name;not null" json:"attendee_name" validate:"required"`

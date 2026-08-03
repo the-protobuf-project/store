@@ -14,13 +14,13 @@ package externalv1
 // Product owns a price expressed as an imported Money value type.
 type Product struct {
 	// Unique identifier for the record.
-	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	ID string `gorm:"column:id;type:char(26);primaryKey;not null" json:"id"`
 	// Resource name; the AIP identifier.
-	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
+	Name string `gorm:"column:name;type:varchar(255);not null;uniqueIndex" json:"name" validate:"required"`
 	// Human-readable product title.
-	Title string `gorm:"column:title;not null" json:"title" validate:"required"`
+	Title string `gorm:"column:title;type:varchar(255);not null" json:"title" validate:"required"`
 	// Foreign key to Money.
-	PriceID string `gorm:"column:price_id;not null;index:idx_products_price_id" json:"price_id" validate:"required"`
+	PriceID string `gorm:"column:price_id;type:char(26);not null;index:idx_products_price_id" json:"price_id" validate:"required"`
 	Price   *Money `gorm:"foreignKey:PriceID;constraint:OnDelete:CASCADE" json:"price,omitempty"`
 }
 
@@ -29,9 +29,9 @@ func (*Product) TableName() string { return "external_v1.products" }
 // Money is an amount of money with its currency type.
 type Money struct {
 	// Unique identifier for the record.
-	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	ID string `gorm:"column:id;type:char(26);primaryKey;not null" json:"id"`
 	// The three-letter ISO 4217 currency code.
-	CurrencyCode *string `gorm:"column:currency_code" json:"currency_code,omitempty"`
+	CurrencyCode *string `gorm:"column:currency_code;type:varchar(255)" json:"currency_code,omitempty"`
 	// Whole units of the amount.
 	Units *int64 `gorm:"column:units" json:"units,omitempty"`
 	// Number of nano (10^-9) units of the amount.

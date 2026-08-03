@@ -39,7 +39,9 @@ CREATE TABLE IF NOT EXISTS "profile"."accounts" (
     -- Application-only: a CHECK referencing wall-clock time would not be immutable, so no constraint is emitted for this column.
     "born_at"  TIMESTAMPTZ,
     -- Repeated presets judge the list itself rather than its elements.
-    "tags"  VARCHAR(255)[]  CONSTRAINT "chk_accounts_tags" CHECK (cardinality("tags") > 0)
+    "tags"  VARCHAR(255)[]  CONSTRAINT "chk_accounts_tags" CHECK (cardinality("tags") > 0),
+    CONSTRAINT "chk_accounts_credits_within_tier" CHECK (tier <> 'free' OR credits <= 100),
+    CONSTRAINT "chk_accounts_handle_not_email_local" CHECK (handle <> split_part(email, '@', 1))
 );
 
 -- Device carries no presets at all, proving a table in a validated tree emits no Validate method and no store write-path call when nothing is annotated.

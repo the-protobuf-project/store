@@ -19,18 +19,17 @@ option java_package = "com.orm.v1";
 //	option (orm.v1.cache) = {
 //	  enabled: true
 //	  ttl: {seconds: 300}
-//	  store: CACHE_STORE_REDIS
 //	  keys: [{columns: ["id"]}, {columns: ["tenant_id", "slug"]}]
 //	  strategy: CACHE_STRATEGY_READ_THROUGH
 //	  invalidation: INVALIDATION_STREAM
 //	  stream: {subject: "profile.accounts.>", durable: "accounts-cache"}
 //	};
 //
-// This is policy metadata: the generator reads it, checks it against the table,
-// and surfaces it in the generated documentation. No cache client, key builder,
-// or stream consumer is emitted from it yet — the annotation exists so the
-// contract is pinned in the schema, where it belongs, before any runtime
-// depends on it.
+// The policy says what to cache and for how long — never which cache product.
+// That is the target's job: `target=cache-redis` is what puts a Redis client in
+// your build, and moving to Valkey or a cache of your own is a different target
+// selection, not a schema edit. A `store:` field here could only contradict the
+// target actually selected, so there isn't one.
 message CacheOptions {
   // enabled turns caching on for this table. The rest of the policy is inert
   // without it, so a table can carry a fully-specified policy that is switched
@@ -41,9 +40,6 @@ message CacheOptions {
   // something invalidates them, which is only safe with a non-TTL invalidation.
   google.protobuf.Duration ttl = 2;
 
-  // store selects where entries live. Defaults to CACHE_STORE_MEMORY, the only
-  // one that needs no infrastructure.
-  CacheStore store = 3;
 
   // keys are the lookups worth caching, each a column set — the primary key, a
   // unique constraint, a common composite filter. Declared the way indexes are,
@@ -56,6 +52,17 @@ message CacheOptions {
 
   // invalidation is what makes an entry stale.
   Invalidation invalidation = 6;
+
+  // lists are the named list queries worth caching, each identified by the
+  // columns it filters on — "bookings by hotel and date range", "availability by
+  // hotel and date". Declared rather than inferred for the same reason indexes
+  // are: which access patterns deserve a cache, and for how long, is a decision
+  // about the workload, not something to guess from a call site.
+  //
+  // A list call that matches no declared entry still caches under the table's
+  // ttl, keyed by a hash of its filter, ordering, and page. Declaring one buys a
+  // name, its own ttl, and its own strategy.
+  repeated CacheList lists = 8;
 
   // stream describes the broker subject carrying change events, required when
   // invalidation is INVALIDATION_STREAM. It is what lets a cache be filled and
@@ -74,6 +81,26 @@ message CacheKey {
   string key = 2;
 }
 
+// CacheList is one named, cacheable list query: the columns it filters on, and
+// how long its results stay fresh.
+message CacheList {
+  // name identifies the list cache, used as its key prefix and in the generated
+  // documentation. Required.
+  string name = 1;
+
+  // columns lists the field names (proto snake_case) the query filters on, in
+  // order. A list call whose filter covers exactly these columns uses this
+  // entry. Empty matches an unfiltered list of the whole table.
+  repeated string columns = 2;
+
+  // ttl overrides CacheOptions.ttl for this list. An availability lookup may
+  // need to be far fresher than the resource rows behind it.
+  google.protobuf.Duration ttl = 3;
+
+  // strategy overrides CacheOptions.strategy for this list.
+  CacheStrategy strategy = 4;
+}
+
 // StreamSource identifies the broker subject carrying this table's change
 // events. Modeled on NATS JetStream's vocabulary; a consumer for another broker
 // maps subject onto its own topic naming.
@@ -90,20 +117,6 @@ message StreamSource {
   string queue_group = 3;
 }
 
-// CacheStore is where cached entries live.
-enum CacheStore {
-  // Process-local memory: no infrastructure, no sharing between replicas.
-  CACHE_STORE_UNSPECIFIED = 0;
-
-  // Redis.
-  CACHE_STORE_REDIS = 1;
-
-  // Valkey, the Redis fork; wire-compatible for these purposes.
-  CACHE_STORE_VALKEY = 2;
-
-  // Explicitly process-local memory, stated rather than defaulted.
-  CACHE_STORE_MEMORY = 3;
-}
 
 // CacheStrategy is how reads and writes move through the cache.
 enum CacheStrategy {

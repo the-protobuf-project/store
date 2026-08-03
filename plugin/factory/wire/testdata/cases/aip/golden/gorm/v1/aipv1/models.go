@@ -18,13 +18,13 @@ import (
 // Document exercises the AIP-148/164 system fields: create_time/update_time become auto-managed audit timestamps, delete_time a nullable indexed soft-delete marker, and uid a UNIQUE server-assigned id — all with no orm annotation.
 type Document struct {
 	// Unique identifier for the record.
-	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	ID string `gorm:"column:id;type:char(26);primaryKey;not null" json:"id"`
 	// Resource name; the AIP identifier.
-	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
+	Name string `gorm:"column:name;type:varchar(255);not null;uniqueIndex" json:"name" validate:"required"`
 	// uid is the server-assigned unique id (AIP-148).
-	UID *string `gorm:"column:uid;uniqueIndex" json:"uid,omitempty"`
+	UID *string `gorm:"column:uid;type:varchar(255);uniqueIndex" json:"uid,omitempty"`
 	// title is an ordinary required field.
-	Title string `gorm:"column:title;not null" json:"title" validate:"required"`
+	Title string `gorm:"column:title;type:varchar(255);not null" json:"title" validate:"required"`
 	// create_time is set by the server on creation (AIP-148).
 	CreateTime time.Time `gorm:"column:create_time;type:timestamptz;not null;autoCreateTime" json:"create_time"`
 	// update_time is maintained by the server on every write (AIP-148).

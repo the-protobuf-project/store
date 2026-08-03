@@ -21,25 +21,25 @@ import (
 // Account exercises every projection the validation presets have: stacked presets on one field, the nil-guard an optional column needs, numeric and temporal and repeated presets, a preset whose SQL form repeats the column reference, and a preset with no SQL form at all.
 type Account struct {
 	// Unique identifier for the record.
-	ID   string `gorm:"column:id;primaryKey;not null" json:"id"`
-	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
+	ID   string `gorm:"column:id;type:char(26);primaryKey;not null;check:chk_accounts_credits_within_tier,tier <> 'free' OR credits <= 100" json:"id"`
+	Name string `gorm:"column:name;type:varchar(255);not null;uniqueIndex;check:chk_accounts_handle_not_email_local,handle <> split_part(email, '@', 1)" json:"name" validate:"required"`
 	// Two presets stacked on one required column: both project to an app check and to a CHECK constraint.
-	Email string `gorm:"column:email;not null;check:chk_accounts_email,email ~ '^[^@[:space:]]+@[^@[:space:]]+[.][^@[:space:]]+$' AND email = lower(email)" json:"email" validate:"required,email,lowercase"`
+	Email string `gorm:"column:email;type:varchar(255);not null;check:chk_accounts_email,email ~ '^[^@[:space:]]+@[^@[:space:]]+[.][^@[:space:]]+$' AND email = lower(email)" json:"email" validate:"required,email,lowercase"`
 	// Optional, so the Go field is a pointer and the generated check must guard against nil before dereferencing — absence is field_behavior's business.
-	Website *string `gorm:"column:website;check:chk_accounts_website,website ~ '^[a-zA-Z][a-zA-Z0-9+.-]*://[^[:space:]]+$'" json:"website,omitempty" validate:"url"`
+	Website *string `gorm:"column:website;type:varchar(255);check:chk_accounts_website,website ~ '^[a-zA-Z][a-zA-Z0-9+.-]*://[^[:space:]]+$'" json:"website,omitempty" validate:"url"`
 	// A preset and a parameterized constraint on one column: the two surfaces compose into a single Validate method and a single CHECK constraint.
 	Credits int32 `gorm:"column:credits;not null;check:chk_accounts_credits,credits >= 0 AND credits <= 1000" json:"credits" validate:"required,gte=0,max=1000"`
 	// A pattern carrying a backslash, which must survive into the GORM struct tag escaped — an unescaped one voids the whole tag, taking NOT NULL with it.
-	Sku *string `gorm:"column:sku;check:chk_accounts_sku,sku ~ '^[A-Z]{3}-\\d{4}$'" json:"sku,omitempty"`
+	Sku *string `gorm:"column:sku;type:varchar(255);check:chk_accounts_sku,sku ~ '^[A-Z]{3}-\\d{4}$'" json:"sku,omitempty"`
 	// A closed value set, and below it the same min/max fields reading as a length rather than a value because the column is a string.
-	Tier string  `gorm:"column:tier;not null;check:chk_accounts_tier,tier IN ('free', 'pro', 'enterprise')" json:"tier" validate:"required,oneof=free pro enterprise"`
-	Bio  *string `gorm:"column:bio;check:chk_accounts_bio,length(bio) >= 10 AND length(bio) <= 200" json:"bio,omitempty" validate:"min=10,max=200"`
+	Tier string  `gorm:"column:tier;type:varchar(255);not null;check:chk_accounts_tier,tier IN ('free', 'pro', 'enterprise')" json:"tier" validate:"required,oneof=free pro enterprise"`
+	Bio  *string `gorm:"column:bio;type:varchar(255);check:chk_accounts_bio,length(bio) >= 10 AND length(bio) <= 200" json:"bio,omitempty" validate:"min=10,max=200"`
 	// VALIDATE_TRIMMED's SQL form names the column twice, covering placeholder substitution; VALIDATE_SLUG covers a preset with no go-playground builtin.
-	Handle string `gorm:"column:handle;not null;check:chk_accounts_handle,handle ~ '^[a-z0-9]+(-[a-z0-9]+)*$' AND handle = btrim(handle)" json:"handle" validate:"required"`
+	Handle string `gorm:"column:handle;type:varchar(255);not null;check:chk_accounts_handle,handle ~ '^[a-z0-9]+(-[a-z0-9]+)*$' AND handle = btrim(handle)" json:"handle" validate:"required"`
 	// Application-only: a CHECK referencing wall-clock time would not be immutable, so no constraint is emitted for this column.
 	BornAt *time.Time `gorm:"column:born_at;type:timestamptz" json:"born_at,omitempty"`
 	// Repeated presets judge the list itself rather than its elements.
-	Tags pq.StringArray `gorm:"column:tags;type:text[];check:chk_accounts_tags,cardinality(tags) > 0" json:"tags,omitempty" validate:"unique,min=1"`
+	Tags pq.StringArray `gorm:"column:tags;type:varchar(255)[];check:chk_accounts_tags,cardinality(tags) > 0" json:"tags,omitempty" validate:"unique,min=1"`
 }
 
 func (*Account) TableName() string { return "profile.accounts" }
@@ -92,15 +92,18 @@ func (m *Account) Validate() error {
 	if !(validatex.NonEmptyList(m.Tags)) {
 		v.Add("tags", "not be empty")
 	}
+	if !(m.Tier != "free" || m.Credits <= 100) {
+		v.Add("credits_within_tier", "a free account may not hold more than 100 credits")
+	}
 	return v.Err()
 }
 
 // Device carries no presets at all, proving a table in a validated tree emits no Validate method and no store write-path call when nothing is annotated.
 type Device struct {
 	// Unique identifier for the record.
-	ID    string  `gorm:"column:id;primaryKey;not null" json:"id"`
-	Name  string  `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
-	Label *string `gorm:"column:label" json:"label,omitempty"`
+	ID    string  `gorm:"column:id;type:char(26);primaryKey;not null" json:"id"`
+	Name  string  `gorm:"column:name;type:varchar(255);not null;uniqueIndex" json:"name" validate:"required"`
+	Label *string `gorm:"column:label;type:varchar(255)" json:"label,omitempty"`
 }
 
 func (*Device) TableName() string { return "profile.devices" }

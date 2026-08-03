@@ -142,6 +142,108 @@ func (x *ConstraintOptions) GetNotIn() []string {
 	return nil
 }
 
+// TableConstraint is a CHECK spanning several columns, which the field-level
+// ConstraintOptions cannot express: "end_time > start_time" is a statement about
+// a row, not about a column.
+//
+// Applied via (repeated, so a table may declare several):
+//
+//	option (orm.v1.table_constraint) = {
+//	  name: "ends_after_start"
+//	  sql:  "end_time > start_time"
+//	  cel:  "this.end_time > this.start_time"
+//	  message: "end_time must be after start_time"
+//	};
+//
+// It takes an expression rather than a structured comparison because arbitrary
+// cross-field logic has no portable shorthand — the same reason `indexes` takes
+// column names and a DDL fragment rather than a query DSL.
+type TableConstraint struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// name identifies the constraint. It becomes the DDL constraint name, prefixed
+	// with the table (chk_<table>_<name>), so a violation names something a reader
+	// can find in the schema. Required.
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// sql is the CHECK body, referring to columns by their database names. It is
+	// written verbatim into the constraint, so it must be valid for the target
+	// database and must be immutable — a CHECK referencing now() is not, and would
+	// validate differently after a table rewrite.
+	Sql string `protobuf:"bytes,2,opt,name=sql,proto3" json:"sql,omitempty"`
+	// cel is the optional application-side twin of sql, a CEL expression over the
+	// row bound as `this`. It exists because SQL and CEL are not
+	// inter-translatable in general: rather than guess, the author states both, and
+	// the generator uses each where it belongs.
+	//
+	// Leaving it empty is a legitimate choice — the constraint is then enforced by
+	// the database alone, and the application learns of a violation from the write
+	// failing.
+	Cel string `protobuf:"bytes,3,opt,name=cel,proto3" json:"cel,omitempty"`
+	// message is the failure text the application-side check reports, phrased to
+	// stand alone ("end_time must be after start_time") since it describes a row
+	// rather than a single field. Defaults to the constraint name when empty.
+	Message       string `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TableConstraint) Reset() {
+	*x = TableConstraint{}
+	mi := &file_orm_v1_constraint_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TableConstraint) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TableConstraint) ProtoMessage() {}
+
+func (x *TableConstraint) ProtoReflect() protoreflect.Message {
+	mi := &file_orm_v1_constraint_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TableConstraint.ProtoReflect.Descriptor instead.
+func (*TableConstraint) Descriptor() ([]byte, []int) {
+	return file_orm_v1_constraint_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *TableConstraint) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *TableConstraint) GetSql() string {
+	if x != nil {
+		return x.Sql
+	}
+	return ""
+}
+
+func (x *TableConstraint) GetCel() string {
+	if x != nil {
+		return x.Cel
+	}
+	return ""
+}
+
+func (x *TableConstraint) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
 var File_orm_v1_constraint_proto protoreflect.FileDescriptor
 
 const file_orm_v1_constraint_proto_rawDesc = "" +
@@ -154,7 +256,12 @@ const file_orm_v1_constraint_proto_rawDesc = "" +
 	"\x02in\x18\x04 \x03(\tR\x02in\x12\x15\n" +
 	"\x06not_in\x18\x05 \x03(\tR\x05notInB\x06\n" +
 	"\x04_minB\x06\n" +
-	"\x04_maxB\x95\x01\n" +
+	"\x04_max\"c\n" +
+	"\x0fTableConstraint\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x10\n" +
+	"\x03sql\x18\x02 \x01(\tR\x03sql\x12\x10\n" +
+	"\x03cel\x18\x03 \x01(\tR\x03cel\x12\x18\n" +
+	"\amessage\x18\x04 \x01(\tR\amessageB\x95\x01\n" +
 	"\n" +
 	"com.orm.v1B\x0fConstraintProtoP\x01Z=github.com/the-protobuf-project/orm/plugin/pb/ormpbv1;ormpbv1\xa2\x02\x03OXX\xaa\x02\x06Orm.V1\xca\x02\x06Orm\\V1\xe2\x02\x12Orm\\V1\\GPBMetadata\xea\x02\aOrm::V1b\x06proto3"
 
@@ -170,9 +277,10 @@ func file_orm_v1_constraint_proto_rawDescGZIP() []byte {
 	return file_orm_v1_constraint_proto_rawDescData
 }
 
-var file_orm_v1_constraint_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
+var file_orm_v1_constraint_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_orm_v1_constraint_proto_goTypes = []any{
 	(*ConstraintOptions)(nil), // 0: orm.v1.ConstraintOptions
+	(*TableConstraint)(nil),   // 1: orm.v1.TableConstraint
 }
 var file_orm_v1_constraint_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for method output_type
@@ -194,7 +302,7 @@ func file_orm_v1_constraint_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_orm_v1_constraint_proto_rawDesc), len(file_orm_v1_constraint_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   1,
+			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

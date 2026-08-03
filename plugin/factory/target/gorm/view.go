@@ -64,6 +64,12 @@ func packageView(db *schema.Database, s *schema.Schema, pkg string) map[string]a
 			btByCol[bt.Col] = bt
 		}
 		idxTags := indexTagsByColumn(t)
+		// GORM parses check tags per field but creates table-level constraints, so
+		// a cross-field CHECK can ride on any column's tag. It must be a DIFFERENT
+		// column for each: a field's tag is parsed into a map keyed by setting
+		// name, so two check: fragments on one field silently keep only the last —
+		// which is exactly how the second constraint went missing before this.
+		tableCheckFor := assignTableChecks(db, t)
 		for _, col := range t.Columns {
 			gt := goType(col)
 			needTime = needTime || strings.Contains(gt, "time.Time")
@@ -83,6 +89,9 @@ func packageView(db *schema.Database, s *schema.Schema, pkg string) map[string]a
 			if dbValidationDB(db) {
 				if c, ok := validate.ColumnCheck(t.Name, col, col.Name); ok {
 					extra = append(extra, "check:"+c.Name+","+validate.TagValue(c.Expr))
+				}
+				if frag, ok := tableCheckFor[col.Name]; ok {
+					extra = append(extra, frag)
 				}
 			}
 			m.Fields = append(m.Fields, fieldView{

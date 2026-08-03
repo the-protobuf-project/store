@@ -63,3 +63,47 @@ message ConstraintOptions {
   // not_in is the set of rejected values, applied after every other rule.
   repeated string not_in = 5;
 }
+
+// TableConstraint is a CHECK spanning several columns, which the field-level
+// ConstraintOptions cannot express: "end_time > start_time" is a statement about
+// a row, not about a column.
+//
+// Applied via (repeated, so a table may declare several):
+//
+//	option (orm.v1.table_constraint) = {
+//	  name: "ends_after_start"
+//	  sql:  "end_time > start_time"
+//	  cel:  "this.end_time > this.start_time"
+//	  message: "end_time must be after start_time"
+//	};
+//
+// It takes an expression rather than a structured comparison because arbitrary
+// cross-field logic has no portable shorthand — the same reason `indexes` takes
+// column names and a DDL fragment rather than a query DSL.
+message TableConstraint {
+  // name identifies the constraint. It becomes the DDL constraint name, prefixed
+  // with the table (chk_<table>_<name>), so a violation names something a reader
+  // can find in the schema. Required.
+  string name = 1;
+
+  // sql is the CHECK body, referring to columns by their database names. It is
+  // written verbatim into the constraint, so it must be valid for the target
+  // database and must be immutable — a CHECK referencing now() is not, and would
+  // validate differently after a table rewrite.
+  string sql = 2;
+
+  // cel is the optional application-side twin of sql, a CEL expression over the
+  // row bound as `this`. It exists because SQL and CEL are not
+  // inter-translatable in general: rather than guess, the author states both, and
+  // the generator uses each where it belongs.
+  //
+  // Leaving it empty is a legitimate choice — the constraint is then enforced by
+  // the database alone, and the application learns of a violation from the write
+  // failing.
+  string cel = 3;
+
+  // message is the failure text the application-side check reports, phrased to
+  // stand alone ("end_time must be after start_time") since it describes a row
+  // rather than a single field. Defaults to the constraint name when empty.
+  string message = 4;
+}

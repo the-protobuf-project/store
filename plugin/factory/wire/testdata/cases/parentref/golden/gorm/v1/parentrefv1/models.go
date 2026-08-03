@@ -14,11 +14,11 @@ package parentrefv1
 // User is the parent resource.
 type User struct {
 	// Unique identifier for the record.
-	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	ID string `gorm:"column:id;type:char(26);primaryKey;not null" json:"id"`
 	// Resource name; the AIP identifier.
-	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
+	Name string `gorm:"column:name;type:varchar(255);not null;uniqueIndex" json:"name" validate:"required"`
 	// display_name is shown in UIs.
-	DisplayName string `gorm:"column:display_name;not null" json:"display_name" validate:"required"`
+	DisplayName string `gorm:"column:display_name;type:varchar(255);not null" json:"display_name" validate:"required"`
 	// Back-relation: Note records that reference this via user_id.
 	Notes []Note `gorm:"foreignKey:UserID" json:"notes,omitempty"`
 }
@@ -28,13 +28,13 @@ func (*User) TableName() string { return "parentref_v1.users" }
 // Note is owned by a User. Its pattern carries a {user} parent segment with no corresponding field, so orm materializes a user_id FK → User from the pattern alone.
 type Note struct {
 	// Unique identifier for the record.
-	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	ID string `gorm:"column:id;type:char(26);primaryKey;not null" json:"id"`
 	// Resource name; the AIP identifier.
-	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
+	Name string `gorm:"column:name;type:varchar(255);not null;uniqueIndex" json:"name" validate:"required"`
 	// body is the note's text.
-	Body string `gorm:"column:body;not null" json:"body" validate:"required"`
+	Body string `gorm:"column:body;type:varchar(255);not null" json:"body" validate:"required"`
 	// Parent reference to User (from the AIP resource pattern).
-	UserID string `gorm:"column:user_id;not null;index:idx_notes_user_id" json:"user_id" validate:"required"`
+	UserID string `gorm:"column:user_id;type:char(26);not null;index:idx_notes_user_id" json:"user_id" validate:"required"`
 	User   *User  `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE" json:"user,omitempty"`
 }
 

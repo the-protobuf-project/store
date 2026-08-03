@@ -14,13 +14,13 @@ package weather
 // Reading exercises the telemetry emitter's default path: instrumented store methods with a default span prefix, and labeled fields carrying span attribute struct tags (one default name, one explicit override). Annotated with telemetry.v1's own (telemetry.v1.telemetry) / (telemetry.v1.telemetry_field) options — orm.v1 carries no telemetry extensions of its own.
 type Reading struct {
 	// Unique identifier for the record.
-	ID   string `gorm:"column:id;primaryKey;not null" json:"id"`
-	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
+	ID   string `gorm:"column:id;type:char(26);primaryKey;not null" json:"id"`
+	Name string `gorm:"column:name;type:varchar(255);not null;uniqueIndex" json:"name" validate:"required"`
 	// Station labels every span for this table (default attribute name).
-	Station string `gorm:"column:station;not null" json:"station" validate:"required" opentelementry:"trace:reading.station"`
+	Station string `gorm:"column:station;type:varchar(255);not null" json:"station" validate:"required" opentelementry:"trace:reading.station"`
 	// Condition carries an explicit attribute name override.
-	Condition    *string  `gorm:"column:condition" json:"condition,omitempty" opentelementry:"trace:weather.condition"`
-	TemperatureC *float64 `gorm:"column:temperature_c" json:"temperature_c,omitempty"`
+	Condition    *string  `gorm:"column:condition;type:varchar(255)" json:"condition,omitempty" opentelementry:"trace:weather.condition"`
+	TemperatureC *float64 `gorm:"column:temperature_c;type:double precision" json:"temperature_c,omitempty"`
 }
 
 func (*Reading) TableName() string { return "weather.readings" }
@@ -28,9 +28,9 @@ func (*Reading) TableName() string { return "weather.readings" }
 // Sensor overrides the span prefix and disables its op metrics, keeping spans only.
 type Sensor struct {
 	// Unique identifier for the record.
-	ID     string `gorm:"column:id;primaryKey;not null" json:"id"`
-	Name   string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
-	Serial string `gorm:"column:serial;not null" json:"serial" validate:"required"`
+	ID     string `gorm:"column:id;type:char(26);primaryKey;not null" json:"id"`
+	Name   string `gorm:"column:name;type:varchar(255);not null;uniqueIndex" json:"name" validate:"required"`
+	Serial string `gorm:"column:serial;type:varchar(255);not null" json:"serial" validate:"required"`
 }
 
 func (*Sensor) TableName() string { return "weather.sensors" }
@@ -38,9 +38,9 @@ func (*Sensor) TableName() string { return "weather.sensors" }
 // Calibration opts out of instrumentation entirely, proving a table-level (telemetry.v1.telemetry).enabled=false override wins over the tree-wide default.
 type Calibration struct {
 	// Unique identifier for the record.
-	ID    string  `gorm:"column:id;primaryKey;not null" json:"id"`
-	Name  string  `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
-	Notes *string `gorm:"column:notes" json:"notes,omitempty"`
+	ID    string  `gorm:"column:id;type:char(26);primaryKey;not null" json:"id"`
+	Name  string  `gorm:"column:name;type:varchar(255);not null;uniqueIndex" json:"name" validate:"required"`
+	Notes *string `gorm:"column:notes;type:varchar(255)" json:"notes,omitempty"`
 }
 
 func (*Calibration) TableName() string { return "weather.calibrations" }

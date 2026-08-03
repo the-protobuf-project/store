@@ -27,15 +27,15 @@ const (
 // Audio exercises oneof integrity: the `input` oneof flattens to independent nullable columns, and orm adds a generated input_case discriminator enum recording which member is set so the lost exclusivity invariant is observable.
 type Audio struct {
 	// Unique identifier for the record.
-	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	ID string `gorm:"column:id;type:char(26);primaryKey;not null" json:"id"`
 	// Resource name; the AIP identifier.
-	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
+	Name string `gorm:"column:name;type:varchar(255);not null;uniqueIndex" json:"name" validate:"required"`
 	// Inline audio bytes.
 	AudioData []byte `gorm:"column:audio_data" json:"audio_data,omitempty"`
 	// Path to a previously uploaded file.
-	UploadPath *string `gorm:"column:upload_path" json:"upload_path,omitempty"`
+	UploadPath *string `gorm:"column:upload_path;type:varchar(255)" json:"upload_path,omitempty"`
 	// Path to a file produced by a live pipeline.
-	LivePipelineFilePath *string `gorm:"column:live_pipeline_file_path" json:"live_pipeline_file_path,omitempty"`
+	LivePipelineFilePath *string `gorm:"column:live_pipeline_file_path;type:varchar(255)" json:"live_pipeline_file_path,omitempty"`
 	// sample_rate is a plain scalar outside the oneof.
 	SampleRate *int32 `gorm:"column:sample_rate" json:"sample_rate,omitempty"`
 	// Discriminator: which input oneof member is set (null = none).

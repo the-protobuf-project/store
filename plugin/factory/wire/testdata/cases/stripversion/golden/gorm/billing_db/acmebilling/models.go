@@ -14,11 +14,11 @@ package acmebilling
 // Invoice lands in schema "acme_billing", not "acme_billing_v1": the orm.yaml strip_version option flattens the trailing API version out of the resource-type-derived schema name.
 type Invoice struct {
 	// Unique identifier for the record.
-	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	ID string `gorm:"column:id;type:char(26);primaryKey;not null" json:"id"`
 	// Resource name; the AIP identifier.
-	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
+	Name string `gorm:"column:name;type:varchar(255);not null;uniqueIndex" json:"name" validate:"required"`
 	// Amount due, in minor units.
-	Amount string `gorm:"column:amount;not null" json:"amount" validate:"required"`
+	Amount string `gorm:"column:amount;type:varchar(255);not null" json:"amount" validate:"required"`
 }
 
 func (*Invoice) TableName() string { return "acme_billing.invoices" }

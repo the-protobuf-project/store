@@ -1,0 +1,122 @@
+{{.Header}}
+
+package {{.Package}}
+
+// nats.go is the NATS JetStream binding. It is the only file in this package
+// that knows NATS exists; the handler and subjects are written against Event, so
+// a different broker target emits a different binding and nothing else changes.
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
+)
+
+// Consumer subscribes to the declared subjects and applies each change event to
+// a cache.
+type Consumer struct {
+	// JS is the JetStream context to consume from.
+	JS jetstream.JetStream
+
+	// Stream is the JetStream stream holding the declared subjects.
+	Stream string
+
+	// Handler applies each event. Required.
+	Handler *Handler
+
+	// Decode turns a raw message into an Event. Nil uses DecodeJSON, which
+	// expects the Event shape above; supply your own when the publisher's
+	// envelope differs — which it will, since the envelope is that publisher's
+	// contract, not this package's.
+	Decode func(subject string, data []byte) (Event, error)
+}
+
+// Run subscribes to every declared subject and blocks until ctx is cancelled.
+//
+// A message is acked once its invalidation succeeds. A failed invalidation is
+// nak'd so the broker redelivers: a dropped invalidation leaves a stale entry
+// that nothing else will clean up before its TTL.
+func (c *Consumer) Run(ctx context.Context) error {
+	if c.Handler == nil {
+		return fmt.Errorf("stream: Consumer.Handler is nil")
+	}
+	decode := c.Decode
+	if decode == nil {
+		decode = DecodeJSON
+	}
+
+	for _, s := range Subjects {
+		cfg := jetstream.ConsumerConfig{
+			FilterSubject: s.Subject,
+			AckPolicy:     jetstream.AckExplicitPolicy,
+		}
+		// A durable consumer resumes where it left off; without one a restart
+		// would silently miss every change that happened while it was down.
+		if s.Durable != "" {
+			cfg.Durable = s.Durable
+		}
+		cons, err := c.JS.CreateOrUpdateConsumer(ctx, c.Stream, cfg)
+		if err != nil {
+			return fmt.Errorf("stream: consumer for %s: %w", s.Subject, err)
+		}
+		collection := s.Collection
+		sub, err := cons.Consume(func(msg jetstream.Msg) {
+			ev, err := decode(msg.Subject(), msg.Data())
+			if err != nil {
+				// An undecodable message will never decode: acking it avoids a
+				// redelivery loop that would block the consumer forever.
+				_ = msg.Ack()
+				if c.Handler.OnError != nil {
+					c.Handler.OnError(Event{Subject: msg.Subject()}, err)
+				}
+				return
+			}
+			if ev.Collection == "" {
+				ev.Collection = collection
+			}
+			if err := c.Handler.Apply(ctx, ev); err != nil {
+				_ = msg.Nak()
+				return
+			}
+			_ = msg.Ack()
+		})
+		if err != nil {
+			return fmt.Errorf("stream: consume %s: %w", s.Subject, err)
+		}
+		defer sub.Stop()
+	}
+
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// DecodeJSON is the default decoder: the message body is an Event.
+func DecodeJSON(subject string, data []byte) (Event, error) {
+	var e Event
+	if err := json.Unmarshal(data, &e); err != nil {
+		return Event{}, err
+	}
+	if e.Subject == "" {
+		e.Subject = subject
+	}
+	return e, nil
+}
+
+// Connect is a convenience for the common case: dial NATS and take a JetStream
+// context. Supply your own connection when you need credentials, TLS, or reconnect
+// behaviour beyond the defaults.
+func Connect(url string, opts ...nats.Option) (jetstream.JetStream, *nats.Conn, error) {
+	nc, err := nats.Connect(url, opts...)
+	if err != nil {
+		return nil, nil, err
+	}
+	js, err := jetstream.New(nc)
+	if err != nil {
+		nc.Close()
+		return nil, nil, err
+	}
+	return js, nc, nil
+}

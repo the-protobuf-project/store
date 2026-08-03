@@ -1,0 +1,81 @@
+syntax = "proto3";
+
+package hotel.v1;
+
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "google/protobuf/duration.proto";
+import "orm/v1/annotations.proto";
+
+option go_package = "example.com/test/gen;hotelv1";
+option (orm.v1.datasource) = {
+  database: "hotel_db"
+  schema: "hotel"
+};
+
+// Booking is the read-heavy resource the cache exists for: a booking is fetched
+// by id constantly and listed by hotel and date range on every availability
+// check, while writes are comparatively rare.
+message Booking {
+  option (google.api.resource) = {
+    type: "hotel.v1/Booking"
+    pattern: "bookings/{booking}"
+    singular: "booking"
+    plural: "bookings"
+  };
+  option (orm.v1.table) = {id: ID_STRATEGY_ULID};
+  option (orm.v1.cache) = {
+    enabled: true
+    ttl: {seconds: 300}
+    keys: [
+      {
+        columns: ["id"]
+      }
+    ]
+    lists: [
+      {
+        name: "by_hotel_dates"
+        columns: ["hotel_id", "check_in", "check_out"]
+        ttl: {seconds: 60}
+      },
+      {
+        name: "availability"
+        columns: ["hotel_id", "check_in"]
+        ttl: {seconds: 15}
+      }
+    ]
+    strategy: CACHE_STRATEGY_READ_THROUGH
+    invalidation: INVALIDATION_STREAM
+    stream: {
+      subject: "hotel.bookings.>"
+      durable: "bookings-cache"
+      queue_group: "bookings"
+    }
+  };
+
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  string hotel_id = 2 [(google.api.field_behavior) = REQUIRED];
+
+  string check_in = 3 [(google.api.field_behavior) = REQUIRED];
+
+  string check_out = 4 [(google.api.field_behavior) = REQUIRED];
+
+  int32 guests = 5 [(google.api.field_behavior) = OPTIONAL];
+}
+
+// Audit carries no cache policy, proving a table in a cache-enabled tree gets no
+// Cache field and no invalidation when it declares none.
+message Audit {
+  option (google.api.resource) = {
+    type: "hotel.v1/Audit"
+    pattern: "audits/{audit}"
+    singular: "audit"
+    plural: "audits"
+  };
+  option (orm.v1.table) = {id: ID_STRATEGY_ULID};
+
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  string note = 2 [(google.api.field_behavior) = OPTIONAL];
+}

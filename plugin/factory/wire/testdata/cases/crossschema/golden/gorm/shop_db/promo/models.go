@@ -18,11 +18,11 @@ import (
 // Coupon is a resource in the promo schema referencing Money cross-schema.
 type Coupon struct {
 	// Unique identifier for the record.
-	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	ID string `gorm:"column:id;type:char(26);primaryKey;not null" json:"id"`
 	// name: AIP resource name → UNIQUE lookup column (id is the synthesized PK).
-	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
+	Name string `gorm:"column:name;type:varchar(255);not null;uniqueIndex" json:"name" validate:"required"`
 	// Foreign key to Money.
-	AmountOffID *string         `gorm:"column:amount_off_id;index:idx_coupons_amount_off_id" json:"amount_off_id,omitempty"`
+	AmountOffID *string         `gorm:"column:amount_off_id;type:char(26);index:idx_coupons_amount_off_id" json:"amount_off_id,omitempty"`
 	AmountOff   *ordering.Money `gorm:"foreignKey:AmountOffID;constraint:OnDelete:SET NULL" json:"amountoff,omitempty"`
 }
 

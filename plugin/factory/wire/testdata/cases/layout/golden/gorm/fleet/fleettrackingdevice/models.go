@@ -14,11 +14,11 @@ package fleettrackingdevice
 // Tracker is a fleet device resource. The layout config routes it to the "fleet" database, schema "fleet_tracking_device".
 type Tracker struct {
 	// Unique identifier for the record.
-	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	ID string `gorm:"column:id;type:char(26);primaryKey;not null" json:"id"`
 	// Resource name; the AIP identifier.
-	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
+	Name string `gorm:"column:name;type:varchar(255);not null;uniqueIndex" json:"name" validate:"required"`
 	// serial is the device's hardware serial number.
-	Serial string `gorm:"column:serial;not null" json:"serial" validate:"required"`
+	Serial string `gorm:"column:serial;type:varchar(255);not null" json:"serial" validate:"required"`
 }
 
 func (*Tracker) TableName() string { return "fleet_tracking_device.trackers" }

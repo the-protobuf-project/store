@@ -206,6 +206,13 @@ func migrateView(db *schema.Database) map[string]any {
 			for _, col := range t.Columns {
 				mt.Cols = append(mt.Cols, itemView{Comment: col.Comment, Def: colDef(s, t, col, checks)})
 			}
+			if checks {
+				for _, c := range validate.TableChecks(t) {
+					mt.Cols = append(mt.Cols, itemView{
+						Def: "CONSTRAINT " + quoteIdent(c.ConstraintName) + " CHECK (" + c.SQL + ")",
+					})
+				}
+			}
 			if n := len(mt.Cols); n > 0 {
 				mt.Cols[n-1].Last = true
 			}
@@ -277,6 +284,15 @@ func tableViewOf(s *schema.Schema, t *schema.Table, checks bool) tableView {
 	}
 	for _, fk := range t.ForeignKeys {
 		tv.Items = append(tv.Items, itemView{Def: fkDef(t.Name, fk)})
+	}
+	// Cross-field CHECKs are table-level: they constrain a row, so they sit
+	// beside the FK constraints rather than on any one column.
+	if checks {
+		for _, c := range validate.TableChecks(t) {
+			tv.Items = append(tv.Items, itemView{
+				Def: "CONSTRAINT " + quoteIdent(c.ConstraintName) + " CHECK (" + c.SQL + ")",
+			})
+		}
 	}
 	if n := len(tv.Items); n > 0 {
 		tv.Items[n-1].Last = true

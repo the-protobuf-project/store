@@ -14,11 +14,11 @@ package calendarapp
 // Event is a calendar app resource. The layout config routes it to the "users" database, schema "calendar_app".
 type Event struct {
 	// Unique identifier for the record.
-	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	ID string `gorm:"column:id;type:char(26);primaryKey;not null" json:"id"`
 	// Resource name; the AIP identifier.
-	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
+	Name string `gorm:"column:name;type:varchar(255);not null;uniqueIndex" json:"name" validate:"required"`
 	// title is the event's display title.
-	Title string `gorm:"column:title;not null" json:"title" validate:"required"`
+	Title string `gorm:"column:title;type:varchar(255);not null" json:"title" validate:"required"`
 }
 
 func (*Event) TableName() string { return "calendar_app.events" }

@@ -45,6 +45,11 @@ extend google.protobuf.MessageOptions {
   // cache declares the table's caching policy: which key sets are cached, for
   // how long, where, and what invalidates them.
   CacheOptions cache = 50005;
+
+  // table_constraint declares a CHECK spanning several columns, which the
+  // field-level (orm.v1.constraint) cannot express. Repeated: a table may carry
+  // as many as it needs.
+  repeated TableConstraint table_constraint = 50007;
 }
 
 extend google.protobuf.FieldOptions {

@@ -30,13 +30,13 @@ const (
 // Venue exercises the filters emitter: type-derived kinds for every scalar shape (text, enum, date, timestamp, int, bool, tags), the search opt-in, the filterable/sortable opt-outs, a resource reference (equality-only Ref kind), and shapes that are always excluded (JSONB attributes, the synthesized key).
 type Venue struct {
 	// Unique identifier for the record.
-	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	ID string `gorm:"column:id;type:char(26);primaryKey;not null" json:"id"`
 	// Resource name; the AIP identifier.
-	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
+	Name string `gorm:"column:name;type:varchar(255);not null;uniqueIndex" json:"name" validate:"required"`
 	// Human-friendly name; opted into the bareword free-text search.
-	DisplayName string `gorm:"column:display_name;not null" json:"display_name" validate:"required"`
+	DisplayName string `gorm:"column:display_name;type:varchar(255);not null" json:"display_name" validate:"required"`
 	// The owning operator: a resource reference filters as an identity match.
-	OperatorID string    `gorm:"column:operator;not null;index:idx_venues_operator" json:"operator" validate:"required"`
+	OperatorID string    `gorm:"column:operator;type:char(26);not null;index:idx_venues_operator" json:"operator" validate:"required"`
 	Operator   *Operator `gorm:"foreignKey:OperatorID" json:"operator_rel,omitempty"`
 	// What kind of venue this is.
 	Kind VenueKind `gorm:"column:kind;not null;default:'HALL';check:chk_venues_kind,kind IN ('HALL','ARENA')" json:"kind" validate:"required"`
@@ -47,11 +47,11 @@ type Venue struct {
 	// Date the venue's licence expires: the renewal-reminder bound filter.
 	LicenceExpiry *time.Time `gorm:"column:licence_expiry;type:date" json:"licence_expiry,omitempty"`
 	// Arbitrary tags: `:` containment.
-	Tags pq.StringArray `gorm:"column:tags;type:text[]" json:"tags,omitempty"`
+	Tags pq.StringArray `gorm:"column:tags;type:varchar(255)[]" json:"tags,omitempty"`
 	// An internal code, deliberately unfilterable but still sortable.
-	InternalCode *string `gorm:"column:internal_code" json:"internal_code,omitempty"`
+	InternalCode *string `gorm:"column:internal_code;type:varchar(255)" json:"internal_code,omitempty"`
 	// A per-row nonce, filterable but deliberately unsortable.
-	Nonce *string `gorm:"column:nonce" json:"nonce,omitempty"`
+	Nonce *string `gorm:"column:nonce;type:varchar(255)" json:"nonce,omitempty"`
 	// JSONB attributes are never filterable.
 	Attributes json.RawMessage `gorm:"column:attributes;type:jsonb" json:"attributes,omitempty"`
 	// Creation timestamp: a timestamptz comparable.
@@ -63,11 +63,11 @@ func (*Venue) TableName() string { return "venue_v1.venues" }
 // Operator is the referenced parent so the venue's reference resolves to a real table (a hard FK) instead of degrading to a soft reference.
 type Operator struct {
 	// Unique identifier for the record.
-	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	ID string `gorm:"column:id;type:char(26);primaryKey;not null" json:"id"`
 	// Resource name; the AIP identifier.
-	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
+	Name string `gorm:"column:name;type:varchar(255);not null;uniqueIndex" json:"name" validate:"required"`
 	// Display name, searchable.
-	DisplayName string `gorm:"column:display_name;not null" json:"display_name" validate:"required"`
+	DisplayName string `gorm:"column:display_name;type:varchar(255);not null" json:"display_name" validate:"required"`
 	// Back-relation: Venue records that reference this via operator.
 	Venues []Venue `gorm:"foreignKey:OperatorID" json:"venues,omitempty"`
 }

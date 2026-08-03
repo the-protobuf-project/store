@@ -33,11 +33,11 @@ const (
 // Author is a top-level resource. Inferred table: bookstore_v1.authors. id: ID_STRATEGY_ULID synthesizes a generated `id` PK and demotes the AIP resource name to a UNIQUE lookup column; timestamps adds created_at/updated_at.
 type Author struct {
 	// Unique identifier for the record.
-	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	ID string `gorm:"column:id;type:char(26);primaryKey;not null" json:"id"`
 	// name is the AIP resource name; UNIQUE NOT NULL lookup key (id is the PK).
-	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
+	Name string `gorm:"column:name;type:varchar(255);not null;uniqueIndex" json:"name" validate:"required"`
 	// display_name is REQUIRED → NOT NULL; string → VARCHAR(255) default.
-	DisplayName string `gorm:"column:display_name;not null" json:"display_name" validate:"required"`
+	DisplayName string `gorm:"column:display_name;type:varchar(255);not null" json:"display_name" validate:"required"`
 	// bio is free-form; override the VARCHAR(255) default to unbounded TEXT, nullable.
 	Bio *string `gorm:"column:bio" json:"bio,omitempty"`
 	// Timestamp when the record was created.
@@ -53,16 +53,16 @@ func (*Author) TableName() string { return "bookstore_v1.authors" }
 // Book is a resource nested under Author. Inferred table: bookstore_v1.books.
 type Book struct {
 	// Unique identifier for the record.
-	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	ID string `gorm:"column:id;type:char(26);primaryKey;not null" json:"id"`
 	// name: IDENTIFIER → PRIMARY KEY, VARCHAR(255).
-	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
+	Name string `gorm:"column:name;type:varchar(255);not null;uniqueIndex" json:"name" validate:"required"`
 	// title: REQUIRED NOT NULL; max_length caps the VARCHAR provider-neutrally.
-	Title string `gorm:"column:title;not null" json:"title" validate:"required"`
+	Title string `gorm:"column:title;type:varchar(500);not null" json:"title" validate:"required"`
 	// author_id references Author; orm infers the FOREIGN KEY, aligns the column type with the referenced PK (CHAR(26) ULID), and applies CASCADE.
-	AuthorID string  `gorm:"column:author_id;not null;index:idx_books_author_year,priority:1" json:"author_id" validate:"required"`
+	AuthorID string  `gorm:"column:author_id;type:char(26);not null;index:idx_books_author_year,priority:1" json:"author_id" validate:"required"`
 	Author   *Author `gorm:"foreignKey:AuthorID;constraint:OnDelete:CASCADE" json:"author,omitempty"`
 	// isbn must be globally unique; custom fixed-width type.
-	ISBN *string `gorm:"column:isbn;uniqueIndex" json:"isbn,omitempty"`
+	ISBN *string `gorm:"column:isbn;type:varchar(13);uniqueIndex" json:"isbn,omitempty"`
 	// published_year is a plain integer column; nullable.
 	PublishedYear *int32 `gorm:"column:published_year;index:idx_books_author_year,priority:2" json:"published_year,omitempty"`
 	// genre demonstrates proto enum → database enum generation, and — with the telemetry opt — labels every traced Create/Update span with its value (low-cardinality, so it's safe as a span attribute).

@@ -14,11 +14,13 @@ package wire
 import (
 	"github.com/the-protobuf-project/orm/plugin/factory/coreir"
 	"github.com/the-protobuf-project/orm/plugin/factory/source/proto"
+	"github.com/the-protobuf-project/orm/plugin/factory/target/cache/redis"
 	"github.com/the-protobuf-project/orm/plugin/factory/target/database"
 	"github.com/the-protobuf-project/orm/plugin/factory/target/gorm"
 	"github.com/the-protobuf-project/orm/plugin/factory/target/prisma"
 	"github.com/the-protobuf-project/orm/plugin/factory/target/repository"
 	"github.com/the-protobuf-project/orm/plugin/factory/target/sql"
+	"github.com/the-protobuf-project/orm/plugin/factory/target/stream/nats"
 	"github.com/the-protobuf-project/protokit"
 	"github.com/the-protobuf-project/protokit/factory"
 	"github.com/the-protobuf-project/protokit/schema"
@@ -35,6 +37,13 @@ func ProtoTargets() map[string]schema.Target {
 		"sql":        &sql.Generator{},
 		"prisma":     &prisma.Generator{},
 		"repository": &repository.Generator{},
+		// Cache providers are separate targets rather than a field on the
+		// annotation: the provider decides which client ends up in your build, so
+		// selecting it is a build decision, not a schema one.
+		"cache-redis": &redis.Generator{},
+		// Brokers likewise: the transport that carries change events is a target,
+		// not a field, so only the client you select reaches your build.
+		"stream-nats": &nats.Generator{},
 	}
 }
 

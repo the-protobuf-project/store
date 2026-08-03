@@ -18,11 +18,11 @@ import (
 // Shelf groups books physically. The resource's `plural` fixes the irregular plural ("shelfs" → "shelves") — no table name override needed.
 type Shelf struct {
 	// Unique identifier for the record.
-	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	ID string `gorm:"column:id;type:char(26);primaryKey;not null" json:"id"`
 	// name: IDENTIFIER → PRIMARY KEY, VARCHAR(255).
-	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
+	Name string `gorm:"column:name;type:varchar(255);not null;uniqueIndex" json:"name" validate:"required"`
 	// theme: REQUIRED → NOT NULL VARCHAR(255).
-	Theme string `gorm:"column:theme;not null" json:"theme" validate:"required"`
+	Theme string `gorm:"column:theme;type:varchar(255);not null" json:"theme" validate:"required"`
 	// capacity is the number of books the shelf holds; nullable INTEGER.
 	Capacity *int32 `gorm:"column:capacity" json:"capacity,omitempty"`
 	// Timestamp when the record was created.

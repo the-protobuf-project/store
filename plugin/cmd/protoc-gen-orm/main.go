@@ -120,6 +120,13 @@ func main() {
 			"validatex runtime, a Validate method per model, and store write-path calls "+
 			"(requires go_module), and the sql target emits the matching CHECK constraints. "+
 			"orm.yaml validation: tunes it — app: false or db: false keeps just one half")
+	cache := flags.Bool("cache", false,
+		"gorm target only: fold read-through caching into the generated output for "+
+			"tables carrying an (orm.v1.cache) policy — a stdlib-only cachex runtime "+
+			"(with an LRU store), a Cache field and WithCache setter on each store, "+
+			"cached reads, and invalidation on write. Requires go_module; adds no "+
+			"third-party dependency. A shared store (Redis, Valkey) is your own "+
+			"implementation of the cachex.Cache interface")
 	gormModule := flags.String("gorm_module", "",
 		"repository target only: Go import path of the generated gorm output the "+
 			"repository adapters compose (models, stores, filterx)")
@@ -152,6 +159,7 @@ func main() {
 			protokit.Options{Target: *target, Strict: *strict, Version: v},
 			backend.New(cfg, *goModule, *stores, *telemetry, *converters, *filters).
 				WithValidation(*validation).
+				WithCache(*cache).
 				WithRepositoryModules(*gormModule, *graphqlModule))
 
 		tgt, ok := reg.Targets[*target]

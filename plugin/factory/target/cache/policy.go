@@ -24,9 +24,6 @@ type Policy struct {
 	// TTL is how long an entry stays fresh; zero when unset.
 	TTL time.Duration
 
-	// Store is where entries live, defaulted to memory.
-	Store string
-
 	// Strategy is how reads and writes move through the cache.
 	Strategy string
 
@@ -39,6 +36,23 @@ type Policy struct {
 
 	// Stream is the broker subject carrying change events; zero when unset.
 	Stream Stream
+
+	// Lists are the declared list caches. A list call matching none of these
+	// still caches, under the table TTL and a hash of its query.
+	Lists []List
+}
+
+// List is one named list cache: the columns it filters on and how long its
+// results stay fresh.
+type List struct {
+	Name     string
+	Columns  []string
+	TTL      time.Duration
+	Strategy string
+
+	// Prefix is the cache key prefix for this list, which invalidation drops
+	// wholesale on any write to the table.
+	Prefix string
 }
 
 // Key is one cached lookup: a named column set.
@@ -57,13 +71,12 @@ type Stream struct {
 // Of returns the table's caching policy, reporting false when the table carries
 // no annotation or has caching switched off. A table with a policy present but
 // disabled reads as absent here, so callers need not check twice.
-func Of(t *schema.Table) (Policy, bool) {
+func Of(s *schema.Schema, t *schema.Table) (Policy, bool) {
 	o := opts(t)
 	if !o.GetEnabled() {
 		return Policy{}, false
 	}
 	p := Policy{
-		Store:        storeName(o.GetStore()),
 		Strategy:     strategyName(o.GetStrategy()),
 		Invalidation: invalidationName(o.GetInvalidation()),
 		Stream: Stream{
@@ -75,16 +88,50 @@ func Of(t *schema.Table) (Policy, bool) {
 	if d := o.GetTtl(); d != nil {
 		p.TTL = d.AsDuration()
 	}
+	for _, l := range o.GetLists() {
+		li := List{
+			Name:     l.GetName(),
+			Columns:  l.GetColumns(),
+			TTL:      p.TTL,
+			Strategy: p.Strategy,
+			Prefix:   ListPrefix(s, t) + l.GetName() + "/",
+		}
+		if d := l.GetTtl(); d != nil {
+			li.TTL = d.AsDuration()
+		}
+		if l.GetStrategy() != ormpbv1.CacheStrategy_CACHE_STRATEGY_UNSPECIFIED {
+			li.Strategy = strategyName(l.GetStrategy())
+		}
+		p.Lists = append(p.Lists, li)
+	}
 	for _, k := range o.GetKeys() {
-		p.Keys = append(p.Keys, Key{Name: keyName(t, k), Columns: k.GetColumns()})
+		p.Keys = append(p.Keys, Key{Name: keyName(s, t, k), Columns: k.GetColumns()})
 	}
 	// No declared key set means the primary key alone — the lookup every store
 	// already performs.
 	if len(p.Keys) == 0 && t.PKColumn != "" {
-		p.Keys = []Key{{Name: "cache_" + t.Name + "_" + t.PKColumn, Columns: []string{t.PKColumn}}}
+		p.Keys = []Key{{Name: Prefix(s, t) + t.PKColumn, Columns: []string{t.PKColumn}}}
 	}
 	return p, true
 }
+
+// Prefix is the cache key prefix covering everything cached for one table. It is
+// the AIP resource collection, schema-qualified: "hotel.bookings/". Keys then
+// read as the resources they hold — "hotel.bookings/01ARZ3..." — instead of an
+// invented cache namespace, which is what you want when looking at the keyspace
+// of a shared Redis. The schema qualifier is what keeps two schemas that both
+// define a `bookings` table from colliding there.
+//
+// Every row key and every list key sits under this prefix, so a write drops the
+// table's rows and every list derived from them in a single call, rather than
+// tracking which list a given row participates in. A key outside it would be
+// left stale by a write.
+func Prefix(s *schema.Schema, t *schema.Table) string { return s.Name + "." + t.Name + "/" }
+
+// ListPrefix is where a table's cached list results live. The "$" segment cannot
+// appear in an AIP resource id, so a list key can never collide with a row key
+// while still sitting under the table prefix a write drops.
+func ListPrefix(s *schema.Schema, t *schema.Table) string { return Prefix(s, t) + "$list/" }
 
 // Verify reports the ways a table's cache policy contradicts itself or the
 // table. Like a misapplied validation preset, each of these would otherwise be
@@ -112,6 +159,22 @@ func Verify(t *schema.Table) []string {
 			}
 		}
 	}
+	seen := map[string]bool{}
+	for _, l := range o.GetLists() {
+		if l.GetName() == "" {
+			out = append(out, "cache list declares no name")
+			continue
+		}
+		if seen[l.GetName()] {
+			out = append(out, fmt.Sprintf("duplicate cache list %q", l.GetName()))
+		}
+		seen[l.GetName()] = true
+		for _, name := range l.GetColumns() {
+			if !slices.Contains(cols, name) {
+				out = append(out, fmt.Sprintf("cache list %q names unknown column %q", l.GetName(), name))
+			}
+		}
+	}
 	if o.GetInvalidation() == ormpbv1.Invalidation_INVALIDATION_STREAM && o.GetStream().GetSubject() == "" {
 		out = append(out, "invalidation is INVALIDATION_STREAM but no stream subject is set")
 	}
@@ -130,7 +193,7 @@ func Doc(db *schema.Database) string {
 	var rows []string
 	for _, s := range db.Schemas {
 		for _, t := range s.Tables {
-			p, ok := Of(t)
+			p, ok := Of(s, t)
 			if !ok {
 				continue
 			}
@@ -149,8 +212,8 @@ func Doc(db *schema.Database) string {
 					stream += " (durable `" + p.Stream.Durable + "`)"
 				}
 			}
-			rows = append(rows, fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s |",
-				t.LocalName, p.Store, ttl, p.Strategy, p.Invalidation, strings.Join(keys, "<br>"), stream))
+			rows = append(rows, fmt.Sprintf("| %s | %s | %s | %s | %s | %s |",
+				t.LocalName, ttl, p.Strategy, p.Invalidation, strings.Join(keys, "<br>"), stream))
 		}
 	}
 	if len(rows) == 0 {
@@ -161,29 +224,18 @@ func Doc(db *schema.Database) string {
 		"which lookups are worth caching and what makes them stale. No cache client,\n" +
 		"key builder, or stream consumer is generated from it — the contract is pinned\n" +
 		"here so a runtime can implement it without re-deciding it.\n\n" +
-		"| Model | Store | TTL | Strategy | Invalidation | Keys | Stream |\n" +
-		"| --- | --- | --- | --- | --- | --- | --- |\n" +
+		"| Model | TTL | Strategy | Invalidation | Keys | Stream |\n" +
+		"| --- | --- | --- | --- | --- | --- |\n" +
 		strings.Join(rows, "\n") + "\n"
 }
 
 // keyName is the key set's explicit name, or cache_<table>_<cols> when unnamed —
 // the same shape protokit gives an unnamed index.
-func keyName(t *schema.Table, k *ormpbv1.CacheKey) string {
+func keyName(s *schema.Schema, t *schema.Table, k *ormpbv1.CacheKey) string {
 	if n := k.GetKey(); n != "" {
 		return n
 	}
-	return "cache_" + t.Name + "_" + strings.Join(k.GetColumns(), "_")
-}
-
-func storeName(s ormpbv1.CacheStore) string {
-	switch s {
-	case ormpbv1.CacheStore_CACHE_STORE_REDIS:
-		return "redis"
-	case ormpbv1.CacheStore_CACHE_STORE_VALKEY:
-		return "valkey"
-	default:
-		return "memory"
-	}
+	return Prefix(s, t) + strings.Join(k.GetColumns(), "_")
 }
 
 func strategyName(s ormpbv1.CacheStrategy) string {

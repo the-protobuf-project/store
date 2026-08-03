@@ -1,0 +1,164 @@
+{{.Header}}
+
+// Package {{.Package}} carries the change-event coordinates each resource
+// declares, plus the invalidation handler that turns an event into a cache drop.
+//
+// It names no broker: everything here is written against an Event and a Cache,
+// so the same handler serves {{.Provider}}, another broker, or a test that hands
+// it events directly. The broker client lives in its own file.
+package {{.Package}}
+
+import (
+	"context"
+	"strings"
+)
+
+// Op is what happened to a resource.
+type Op string
+
+const (
+	// OpUpsert is a create or update: the cached copy is stale.
+	OpUpsert Op = "UPSERT"
+	// OpDelete is a removal.
+	OpDelete Op = "DELETE"
+	// OpUnknown is anything else, treated as an upsert — invalidating too much
+	// is recoverable, serving a stale row is not.
+	OpUnknown Op = ""
+)
+
+// Event is one change to one resource, as published by whatever writes to the
+// database — a change-data-capture stream, a projection, another service.
+type Event struct {
+	// Subject is the subject the event arrived on.
+	Subject string `json:"subject"`
+
+	// Collection is the resource collection the change belongs to, matching the
+	// cache key prefix, e.g. "hotel.bookings/".
+	Collection string `json:"collection"`
+
+	// ID identifies the changed resource. Empty means the whole collection is
+	// affected, which a handler treats as a full invalidation.
+	ID string `json:"id"`
+
+	// Op is what happened.
+	Op Op `json:"op"`
+}
+
+// Cache is the subset of the generated cache package this handler needs. It is
+// declared here rather than imported so this package does not depend on which
+// cache provider target you selected.
+type Cache interface {
+	Delete(ctx context.Context, keys ...string) error
+	DeletePrefix(ctx context.Context, prefix string) error
+}
+
+// Handler applies change events to a cache.
+//
+// It always drops the resource's whole collection rather than the single key the
+// event names. Both a row and every list that row appears in go stale on a
+// change, and the lists cannot be identified from the event — so the correct,
+// cheap answer is to drop the collection. Over-invalidating costs a re-read;
+// under-invalidating serves wrong data.
+type Handler struct {
+	// Cache is what gets invalidated; nil makes Apply a no-op.
+	Cache Cache
+
+	// OnError, when set, is called for an invalidation that fails. A failed drop
+	// leaves a stale entry, which is worth reporting even though the handler
+	// itself cannot recover.
+	OnError func(Event, error)
+}
+
+// NewHandler returns a Handler writing to c.
+func NewHandler(c Cache) *Handler { return &Handler{Cache: c} }
+
+// Apply invalidates the cache for one event. It returns an error only when the
+// cache does, so a caller can decide whether to ack or redeliver.
+func (h *Handler) Apply(ctx context.Context, e Event) error {
+	if h.Cache == nil {
+		return nil
+	}
+	col := e.Collection
+	if col == "" {
+		col = CollectionForSubject(e.Subject)
+	}
+	if col == "" {
+		return nil // an event for something this schema does not cache
+	}
+	err := h.Cache.DeletePrefix(ctx, col)
+	if err != nil && h.OnError != nil {
+		h.OnError(e, err)
+	}
+	return err
+}
+
+// Subjects are the declared change-event subjects, one per cached resource that
+// asked for stream invalidation.
+var Subjects = []Subject{
+{{- range .Resources}}
+	{
+		Name:       "{{.Singular}}",
+		Subject:    "{{.Stream.Subject}}",
+		Durable:    "{{.Stream.Durable}}",
+		QueueGroup: "{{.Stream.QueueGroup}}",
+		Collection: "{{.Collection}}",
+	},
+{{- end}}
+}
+
+// Subject binds one resource's broker coordinates to the cache collection its
+// events invalidate.
+type Subject struct {
+	// Name is the resource's bare name.
+	Name string
+
+	// Subject is what to subscribe to.
+	Subject string
+
+	// Durable is the durable consumer name, so a restart resumes rather than
+	// replaying from the beginning. Empty means an ephemeral consumer.
+	Durable string
+
+	// QueueGroup is the group replicas join so one delivery is handled once
+	// across the group rather than once per replica. Empty means every replica
+	// handles every message — correct for cache invalidation, since each has its
+	// own cache, but wrong for a shared one.
+	QueueGroup string
+
+	// Collection is the cache key prefix an event on this subject invalidates.
+	Collection string
+}
+
+// CollectionForSubject resolves the cache collection an arriving subject maps to,
+// or "" when no declared subject matches. A declared subject may end in a
+// wildcard segment, which matches any subject beneath it.
+func CollectionForSubject(subject string) string {
+	for _, s := range Subjects {
+		if matches(s.Subject, subject) {
+			return s.Collection
+		}
+	}
+	return ""
+}
+
+// matches reports whether an arriving subject is covered by a declared pattern,
+// using the broker's wildcard convention: ">" matches the rest of the subject,
+// "*" matches exactly one token.
+func matches(pattern, subject string) bool {
+	if pattern == subject {
+		return true
+	}
+	pt, st := strings.Split(pattern, "."), strings.Split(subject, ".")
+	for i, p := range pt {
+		if p == ">" {
+			return i <= len(st)
+		}
+		if i >= len(st) {
+			return false
+		}
+		if p != "*" && p != st[i] {
+			return false
+		}
+	}
+	return len(pt) == len(st)
+}

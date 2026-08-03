@@ -18,11 +18,11 @@ import (
 // Invoice carries a total expressed as the shared Money value object.
 type Invoice struct {
 	// Unique identifier for the record.
-	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	ID string `gorm:"column:id;type:char(26);primaryKey;not null" json:"id"`
 	// Resource name; the AIP identifier.
-	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
+	Name string `gorm:"column:name;type:varchar(255);not null;uniqueIndex" json:"name" validate:"required"`
 	// Foreign key to Money.
-	TotalID string        `gorm:"column:total_id;not null;index:idx_invoices_total_id" json:"total_id" validate:"required"`
+	TotalID string        `gorm:"column:total_id;type:char(26);not null;index:idx_invoices_total_id" json:"total_id" validate:"required"`
 	Total   *common.Money `gorm:"foreignKey:TotalID;constraint:OnDelete:CASCADE" json:"total,omitempty"`
 }
 

@@ -20,11 +20,11 @@ import (
 // PromoCode is a redeemable discount with a has-many set of redemptions.
 type PromoCode struct {
 	// Unique identifier for the record.
-	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	ID string `gorm:"column:id;type:char(26);primaryKey;not null" json:"id"`
 	// Resource name; the AIP identifier.
-	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
+	Name string `gorm:"column:name;type:varchar(255);not null;uniqueIndex" json:"name" validate:"required"`
 	// Foreign key to Money.
-	AmountOffID *string       `gorm:"column:amount_off_id;index:idx_promo_codes_amount_off_id" json:"amount_off_id,omitempty"`
+	AmountOffID *string       `gorm:"column:amount_off_id;type:char(26);index:idx_promo_codes_amount_off_id" json:"amount_off_id,omitempty"`
 	AmountOff   *common.Money `gorm:"foreignKey:AmountOffID;constraint:OnDelete:SET NULL" json:"amountoff,omitempty"`
 	// Back-relation: Redemption records that reference this via promo_code_id.
 	Redemptions []Redemption `gorm:"foreignKey:PromoCodeID" json:"redemptions,omitempty"`
@@ -35,16 +35,16 @@ func (*PromoCode) TableName() string { return "promocode.promo_codes" }
 // Redemption is one use of a promo code. As a repeated nested message it materializes into promocode.redemptions; its own Money field routes to the shared common.moneys, one schema level down from the parent.
 type Redemption struct {
 	// Unique identifier for the record.
-	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	ID string `gorm:"column:id;type:char(26);primaryKey;not null" json:"id"`
 	// Customer who redeemed the code (resource name).
-	Customer string `gorm:"column:customer;not null" json:"customer" validate:"required"`
+	Customer string `gorm:"column:customer;type:varchar(255);not null" json:"customer" validate:"required"`
 	// When the code was redeemed.
 	RedeemedTime time.Time `gorm:"column:redeemed_time;type:timestamptz;not null" json:"redeemed_time" validate:"required"`
 	// Foreign key to PromoCode.
-	PromoCodeID string     `gorm:"column:promo_code_id;not null;index:idx_redemptions_promo_code_id" json:"promo_code_id" validate:"required"`
+	PromoCodeID string     `gorm:"column:promo_code_id;type:char(26);not null;index:idx_redemptions_promo_code_id" json:"promo_code_id" validate:"required"`
 	PromoCode   *PromoCode `gorm:"foreignKey:PromoCodeID;constraint:OnDelete:CASCADE" json:"promocode,omitempty"`
 	// Foreign key to Money.
-	AmountAppliedID string        `gorm:"column:amount_applied_id;not null;index:idx_redemptions_amount_applied_id" json:"amount_applied_id" validate:"required"`
+	AmountAppliedID string        `gorm:"column:amount_applied_id;type:char(26);not null;index:idx_redemptions_amount_applied_id" json:"amount_applied_id" validate:"required"`
 	AmountApplied   *common.Money `gorm:"foreignKey:AmountAppliedID;constraint:OnDelete:CASCADE" json:"amountapplied,omitempty"`
 }
 
