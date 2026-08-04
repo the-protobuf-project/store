@@ -43,6 +43,3 @@ func dbValidation(db *schema.Database) bool { return db.Opt("validation") == "tr
 // dbValidationDB reports whether the DB-expressible presets also become CHECK
 // constraints (only meaningful when dbValidation is true).
 func dbValidationDB(db *schema.Database) bool { return db.Opt("validation_db") == "true" }
-
-// (the cachex runtime, the stores' Cache field, and the invalidation on write).
-func dbCache(db *schema.Database) bool { return db.Opt("cache") == "true" }
