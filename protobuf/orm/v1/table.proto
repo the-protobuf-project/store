@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package orm.v1;
 
-option go_package = "github.com/the-protobuf-project/orm/plugin/pb/ormpbv1;ormpbv1";
+option go_package = "github.com/the-protobuf-project/store/plugin/pb/ormpbv1;ormpbv1";
 option java_multiple_files = true;
 option java_outer_classname = "TableProto";
 option java_package = "com.orm.v1";
@@ -21,6 +21,9 @@ message IndexDef {
   string index = 3;
 }
 
+// Deprecated: use (protokit.v1.table) for name/skip/id/timestamps/indexes.
+// Removed in v2.
+//
 // TableOptions overrides table-level generation for a message.
 //
 // Applied via:
@@ -33,24 +36,24 @@ message IndexDef {
 message TableOptions {
   // table is an explicit table name.
   // Defaults to snake_case plural of the google.api.resource.type suffix.
-  string table = 1;
+  string table = 1 [deprecated = true];
 
   // skip excludes this message from all output — no table is generated.
-  bool skip = 2;
+  bool skip = 2 [deprecated = true];
 
   // id synthesizes a generated primary-key column (ULID or UUID) and demotes the
   // IDENTIFIER field to a UNIQUE constraint — the production pattern where AIP
   // resource names are lookup keys, not storage keys.
-  IdStrategy id = 3;
+  IdStrategy id = 3 [deprecated = true];
 
   // timestamps appends created_at / updated_at TIMESTAMPTZ columns:
   // created_at DEFAULT now(); updated_at maintained on write
   // (Prisma @updatedAt, GORM autoUpdateTime).
-  bool timestamps = 4;
+  bool timestamps = 4 [deprecated = true];
 
   // indexes declares additional multi-column indexes beyond those inferred from
   // AIP annotations (e.g. composite unique constraints).
-  repeated IndexDef indexes = 5;
+  repeated IndexDef indexes = 5 [deprecated = true];
 }
 
 // IdStrategy selects how the primary-key column is generated for a table.

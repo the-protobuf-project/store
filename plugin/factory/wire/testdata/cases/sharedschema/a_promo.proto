@@ -2,7 +2,7 @@ syntax = "proto3";
 
 // Package freebusy.promocode.v1 lives in the shared freebusy_db under its own
 // "promocode" schema (set by the datasource annotation). Its Money fields are
-// the imported ext.type.v1.Money, which the case's orm.yaml routes to a
+// the imported ext.type.v1.Money, which the case's store.yaml routes to a
 // shared "common" schema — so the materialized money table is deterministically
 // common.moneys, shared with billing.v1, regardless of which file is processed
 // first. This file sorts first, so without config-driven routing Money would

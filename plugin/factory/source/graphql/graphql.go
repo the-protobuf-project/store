@@ -2,7 +2,7 @@
 // introspects a live endpoint (or reads a cached GraphQL SDL schema, .graphql),
 // then builds the GraphQL IR under the configured dialect. Unlike the proto Source it runs
 // outside protoc — its input is an endpoint or a file, supplied via Config — so
-// it drives the CLI (`protoc-gen-orm graphql …`) rather than plugin mode.
+// it drives the CLI (`protoc-gen-store graphql …`) rather than plugin mode.
 package graphql
 
 import (
@@ -12,11 +12,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/the-protobuf-project/orm/plugin/factory/coreir"
 	"github.com/the-protobuf-project/protokit/factory"
 	"github.com/the-protobuf-project/protokit/graphql/dialect"
 	"github.com/the-protobuf-project/protokit/graphql/introspect"
 	"github.com/the-protobuf-project/protokit/graphql/ir"
+	"github.com/the-protobuf-project/store/plugin/factory/coreir"
 )
 
 // Config selects the introspection input and conventions for a GraphQL build.

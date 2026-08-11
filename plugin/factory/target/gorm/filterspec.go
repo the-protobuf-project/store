@@ -12,9 +12,9 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/the-protobuf-project/orm/plugin/factory/facets"
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
+	"github.com/the-protobuf-project/store/plugin/factory/facets"
 )
 
 // filterFieldView is one filterable field in a table spec.

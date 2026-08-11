@@ -87,6 +87,9 @@ func (ReferentialAction) EnumDescriptor() ([]byte, []int) {
 	return file_orm_v1_column_proto_rawDescGZIP(), []int{0}
 }
 
+// Deprecated: use (protokit.v1.column) for column/skip and (store.v1.column)
+// for the physical options. Removed in v2.
+//
 // ColumnOptions overrides column-level generation for a single field.
 //
 // Applied via:
@@ -96,35 +99,57 @@ type ColumnOptions struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// column is an explicit column name.
 	// Defaults to the proto field name, which is already snake_case.
+	//
+	// Deprecated: Marked as deprecated in orm/v1/column.proto.
 	Column string `protobuf:"bytes,1,opt,name=column,proto3" json:"column,omitempty"`
 	// type is an explicit database type, e.g. "VARCHAR(255)", "JSONB", "TIMESTAMPTZ".
 	// Provider-specific escape hatch; prefer max_length / precision for
 	// provider-neutral sizing. Overrides all inference.
+	//
+	// Deprecated: Marked as deprecated in orm/v1/column.proto.
 	Type string `protobuf:"bytes,2,opt,name=type,proto3" json:"type,omitempty"`
 	// default_value is a SQL default expression, e.g. "NOW()", "'active'", "0".
 	// Written verbatim into the DEFAULT clause.
+	//
+	// Deprecated: Marked as deprecated in orm/v1/column.proto.
 	DefaultValue string `protobuf:"bytes,3,opt,name=default_value,json=defaultValue,proto3" json:"default_value,omitempty"`
 	// unique adds a UNIQUE constraint to this column.
+	//
+	// Deprecated: Marked as deprecated in orm/v1/column.proto.
 	Unique bool `protobuf:"varint,4,opt,name=unique,proto3" json:"unique,omitempty"`
 	// index adds a single-column index on this column.
 	// Use TableOptions.indexes for composite indexes.
+	//
+	// Deprecated: Marked as deprecated in orm/v1/column.proto.
 	Index bool `protobuf:"varint,5,opt,name=index,proto3" json:"index,omitempty"`
 	// skip excludes this field from all output — no column is generated.
+	//
+	// Deprecated: Marked as deprecated in orm/v1/column.proto.
 	Skip bool `protobuf:"varint,6,opt,name=skip,proto3" json:"skip,omitempty"`
 	// max_length caps a string field: VARCHAR(max_length) instead of the
 	// VARCHAR(255) default. Provider-neutral (Mongo ignores it).
+	//
+	// Deprecated: Marked as deprecated in orm/v1/column.proto.
 	MaxLength int32 `protobuf:"varint,7,opt,name=max_length,json=maxLength,proto3" json:"max_length,omitempty"`
 	// precision sizes the integral digit count of a numeric field:
 	// NUMERIC(precision, scale). Applies to double/float fields.
+	//
+	// Deprecated: Marked as deprecated in orm/v1/column.proto.
 	Precision int32 `protobuf:"varint,8,opt,name=precision,proto3" json:"precision,omitempty"`
 	// scale sizes the fractional digit count of a numeric field.
 	// Defaults to 0 when only precision is set.
+	//
+	// Deprecated: Marked as deprecated in orm/v1/column.proto.
 	Scale int32 `protobuf:"varint,9,opt,name=scale,proto3" json:"scale,omitempty"`
 	// on_delete sets the FK ON DELETE referential action for a field carrying
 	// google.api.resource_reference. Ignored on non-reference fields.
+	//
+	// Deprecated: Marked as deprecated in orm/v1/column.proto.
 	OnDelete ReferentialAction `protobuf:"varint,10,opt,name=on_delete,json=onDelete,proto3,enum=orm.v1.ReferentialAction" json:"on_delete,omitempty"`
 	// on_update sets the FK ON UPDATE referential action for a field carrying
 	// google.api.resource_reference. Ignored on non-reference fields.
+	//
+	// Deprecated: Marked as deprecated in orm/v1/column.proto.
 	OnUpdate      ReferentialAction `protobuf:"varint,11,opt,name=on_update,json=onUpdate,proto3,enum=orm.v1.ReferentialAction" json:"on_update,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -160,6 +185,7 @@ func (*ColumnOptions) Descriptor() ([]byte, []int) {
 	return file_orm_v1_column_proto_rawDescGZIP(), []int{0}
 }
 
+// Deprecated: Marked as deprecated in orm/v1/column.proto.
 func (x *ColumnOptions) GetColumn() string {
 	if x != nil {
 		return x.Column
@@ -167,6 +193,7 @@ func (x *ColumnOptions) GetColumn() string {
 	return ""
 }
 
+// Deprecated: Marked as deprecated in orm/v1/column.proto.
 func (x *ColumnOptions) GetType() string {
 	if x != nil {
 		return x.Type
@@ -174,6 +201,7 @@ func (x *ColumnOptions) GetType() string {
 	return ""
 }
 
+// Deprecated: Marked as deprecated in orm/v1/column.proto.
 func (x *ColumnOptions) GetDefaultValue() string {
 	if x != nil {
 		return x.DefaultValue
@@ -181,6 +209,7 @@ func (x *ColumnOptions) GetDefaultValue() string {
 	return ""
 }
 
+// Deprecated: Marked as deprecated in orm/v1/column.proto.
 func (x *ColumnOptions) GetUnique() bool {
 	if x != nil {
 		return x.Unique
@@ -188,6 +217,7 @@ func (x *ColumnOptions) GetUnique() bool {
 	return false
 }
 
+// Deprecated: Marked as deprecated in orm/v1/column.proto.
 func (x *ColumnOptions) GetIndex() bool {
 	if x != nil {
 		return x.Index
@@ -195,6 +225,7 @@ func (x *ColumnOptions) GetIndex() bool {
 	return false
 }
 
+// Deprecated: Marked as deprecated in orm/v1/column.proto.
 func (x *ColumnOptions) GetSkip() bool {
 	if x != nil {
 		return x.Skip
@@ -202,6 +233,7 @@ func (x *ColumnOptions) GetSkip() bool {
 	return false
 }
 
+// Deprecated: Marked as deprecated in orm/v1/column.proto.
 func (x *ColumnOptions) GetMaxLength() int32 {
 	if x != nil {
 		return x.MaxLength
@@ -209,6 +241,7 @@ func (x *ColumnOptions) GetMaxLength() int32 {
 	return 0
 }
 
+// Deprecated: Marked as deprecated in orm/v1/column.proto.
 func (x *ColumnOptions) GetPrecision() int32 {
 	if x != nil {
 		return x.Precision
@@ -216,6 +249,7 @@ func (x *ColumnOptions) GetPrecision() int32 {
 	return 0
 }
 
+// Deprecated: Marked as deprecated in orm/v1/column.proto.
 func (x *ColumnOptions) GetScale() int32 {
 	if x != nil {
 		return x.Scale
@@ -223,6 +257,7 @@ func (x *ColumnOptions) GetScale() int32 {
 	return 0
 }
 
+// Deprecated: Marked as deprecated in orm/v1/column.proto.
 func (x *ColumnOptions) GetOnDelete() ReferentialAction {
 	if x != nil {
 		return x.OnDelete
@@ -230,6 +265,7 @@ func (x *ColumnOptions) GetOnDelete() ReferentialAction {
 	return ReferentialAction_REFERENTIAL_ACTION_UNSPECIFIED
 }
 
+// Deprecated: Marked as deprecated in orm/v1/column.proto.
 func (x *ColumnOptions) GetOnUpdate() ReferentialAction {
 	if x != nil {
 		return x.OnUpdate
@@ -241,30 +277,30 @@ var File_orm_v1_column_proto protoreflect.FileDescriptor
 
 const file_orm_v1_column_proto_rawDesc = "" +
 	"\n" +
-	"\x13orm/v1/column.proto\x12\x06orm.v1\"\xe5\x02\n" +
-	"\rColumnOptions\x12\x16\n" +
-	"\x06column\x18\x01 \x01(\tR\x06column\x12\x12\n" +
-	"\x04type\x18\x02 \x01(\tR\x04type\x12#\n" +
-	"\rdefault_value\x18\x03 \x01(\tR\fdefaultValue\x12\x16\n" +
-	"\x06unique\x18\x04 \x01(\bR\x06unique\x12\x14\n" +
-	"\x05index\x18\x05 \x01(\bR\x05index\x12\x12\n" +
-	"\x04skip\x18\x06 \x01(\bR\x04skip\x12\x1d\n" +
+	"\x13orm/v1/column.proto\x12\x06orm.v1\"\x91\x03\n" +
+	"\rColumnOptions\x12\x1a\n" +
+	"\x06column\x18\x01 \x01(\tB\x02\x18\x01R\x06column\x12\x16\n" +
+	"\x04type\x18\x02 \x01(\tB\x02\x18\x01R\x04type\x12'\n" +
+	"\rdefault_value\x18\x03 \x01(\tB\x02\x18\x01R\fdefaultValue\x12\x1a\n" +
+	"\x06unique\x18\x04 \x01(\bB\x02\x18\x01R\x06unique\x12\x18\n" +
+	"\x05index\x18\x05 \x01(\bB\x02\x18\x01R\x05index\x12\x16\n" +
+	"\x04skip\x18\x06 \x01(\bB\x02\x18\x01R\x04skip\x12!\n" +
 	"\n" +
-	"max_length\x18\a \x01(\x05R\tmaxLength\x12\x1c\n" +
-	"\tprecision\x18\b \x01(\x05R\tprecision\x12\x14\n" +
-	"\x05scale\x18\t \x01(\x05R\x05scale\x126\n" +
+	"max_length\x18\a \x01(\x05B\x02\x18\x01R\tmaxLength\x12 \n" +
+	"\tprecision\x18\b \x01(\x05B\x02\x18\x01R\tprecision\x12\x18\n" +
+	"\x05scale\x18\t \x01(\x05B\x02\x18\x01R\x05scale\x12:\n" +
 	"\ton_delete\x18\n" +
-	" \x01(\x0e2\x19.orm.v1.ReferentialActionR\bonDelete\x126\n" +
-	"\ton_update\x18\v \x01(\x0e2\x19.orm.v1.ReferentialActionR\bonUpdate*\xdf\x01\n" +
+	" \x01(\x0e2\x19.orm.v1.ReferentialActionB\x02\x18\x01R\bonDelete\x12:\n" +
+	"\ton_update\x18\v \x01(\x0e2\x19.orm.v1.ReferentialActionB\x02\x18\x01R\bonUpdate*\xdf\x01\n" +
 	"\x11ReferentialAction\x12\"\n" +
 	"\x1eREFERENTIAL_ACTION_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aREFERENTIAL_ACTION_CASCADE\x10\x01\x12\x1f\n" +
 	"\x1bREFERENTIAL_ACTION_RESTRICT\x10\x02\x12\x1f\n" +
 	"\x1bREFERENTIAL_ACTION_SET_NULL\x10\x03\x12\"\n" +
 	"\x1eREFERENTIAL_ACTION_SET_DEFAULT\x10\x04\x12 \n" +
-	"\x1cREFERENTIAL_ACTION_NO_ACTION\x10\x05B\x91\x01\n" +
+	"\x1cREFERENTIAL_ACTION_NO_ACTION\x10\x05B\x93\x01\n" +
 	"\n" +
-	"com.orm.v1B\vColumnProtoP\x01Z=github.com/the-protobuf-project/orm/plugin/pb/ormpbv1;ormpbv1\xa2\x02\x03OXX\xaa\x02\x06Orm.V1\xca\x02\x06Orm\\V1\xe2\x02\x12Orm\\V1\\GPBMetadata\xea\x02\aOrm::V1b\x06proto3"
+	"com.orm.v1B\vColumnProtoP\x01Z?github.com/the-protobuf-project/store/plugin/pb/ormpbv1;ormpbv1\xa2\x02\x03OXX\xaa\x02\x06Orm.V1\xca\x02\x06Orm\\V1\xe2\x02\x12Orm\\V1\\GPBMetadata\xea\x02\aOrm::V1b\x06proto3"
 
 var (
 	file_orm_v1_column_proto_rawDescOnce sync.Once

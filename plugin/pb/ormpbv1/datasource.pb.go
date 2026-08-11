@@ -21,6 +21,9 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// Deprecated: use (protokit.v1.datasource), which protokit reads directly so
+// every plugin derives the same database and schema names. Removed in v2.
+//
 // DatasourceOptions groups the messages of a .proto file into one database and
 // names the schema they live in. Files that share the same database name merge
 // into a single generated schema tree.
@@ -37,16 +40,24 @@ type DatasourceOptions struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// database is the explicit database identifier.
 	// Defaults to the last segment of the proto package name.
+	//
+	// Deprecated: Marked as deprecated in orm/v1/datasource.proto.
 	Database string `protobuf:"bytes,1,opt,name=database,proto3" json:"database,omitempty"`
 	// schema overrides the schema namespace for every table in this file.
 	// When unset, the schema is inferred from the google.api.resource.type prefix
 	// ("bookstore.v1/Book" → "bookstore_v1").
+	//
+	// Deprecated: Marked as deprecated in orm/v1/datasource.proto.
 	Schema string `protobuf:"bytes,2,opt,name=schema,proto3" json:"schema,omitempty"`
 	// url is the database connection URL documented in generated config and DDL
 	// headers. Prisma 7 output reads the URL from <db>.config.ts via env().
+	//
+	// Deprecated: Marked as deprecated in orm/v1/datasource.proto.
 	Url string `protobuf:"bytes,3,opt,name=url,proto3" json:"url,omitempty"`
 	// provider selects the database backend type system.
 	// Accepted values: "postgres" (default), "mongodb".
+	//
+	// Deprecated: Marked as deprecated in orm/v1/datasource.proto.
 	Provider      string `protobuf:"bytes,4,opt,name=provider,proto3" json:"provider,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -82,6 +93,7 @@ func (*DatasourceOptions) Descriptor() ([]byte, []int) {
 	return file_orm_v1_datasource_proto_rawDescGZIP(), []int{0}
 }
 
+// Deprecated: Marked as deprecated in orm/v1/datasource.proto.
 func (x *DatasourceOptions) GetDatabase() string {
 	if x != nil {
 		return x.Database
@@ -89,6 +101,7 @@ func (x *DatasourceOptions) GetDatabase() string {
 	return ""
 }
 
+// Deprecated: Marked as deprecated in orm/v1/datasource.proto.
 func (x *DatasourceOptions) GetSchema() string {
 	if x != nil {
 		return x.Schema
@@ -96,6 +109,7 @@ func (x *DatasourceOptions) GetSchema() string {
 	return ""
 }
 
+// Deprecated: Marked as deprecated in orm/v1/datasource.proto.
 func (x *DatasourceOptions) GetUrl() string {
 	if x != nil {
 		return x.Url
@@ -103,6 +117,7 @@ func (x *DatasourceOptions) GetUrl() string {
 	return ""
 }
 
+// Deprecated: Marked as deprecated in orm/v1/datasource.proto.
 func (x *DatasourceOptions) GetProvider() string {
 	if x != nil {
 		return x.Provider
@@ -114,14 +129,14 @@ var File_orm_v1_datasource_proto protoreflect.FileDescriptor
 
 const file_orm_v1_datasource_proto_rawDesc = "" +
 	"\n" +
-	"\x17orm/v1/datasource.proto\x12\x06orm.v1\"u\n" +
-	"\x11DatasourceOptions\x12\x1a\n" +
-	"\bdatabase\x18\x01 \x01(\tR\bdatabase\x12\x16\n" +
-	"\x06schema\x18\x02 \x01(\tR\x06schema\x12\x10\n" +
-	"\x03url\x18\x03 \x01(\tR\x03url\x12\x1a\n" +
-	"\bprovider\x18\x04 \x01(\tR\bproviderB\x95\x01\n" +
+	"\x17orm/v1/datasource.proto\x12\x06orm.v1\"\x85\x01\n" +
+	"\x11DatasourceOptions\x12\x1e\n" +
+	"\bdatabase\x18\x01 \x01(\tB\x02\x18\x01R\bdatabase\x12\x1a\n" +
+	"\x06schema\x18\x02 \x01(\tB\x02\x18\x01R\x06schema\x12\x14\n" +
+	"\x03url\x18\x03 \x01(\tB\x02\x18\x01R\x03url\x12\x1e\n" +
+	"\bprovider\x18\x04 \x01(\tB\x02\x18\x01R\bproviderB\x97\x01\n" +
 	"\n" +
-	"com.orm.v1B\x0fDatasourceProtoP\x01Z=github.com/the-protobuf-project/orm/plugin/pb/ormpbv1;ormpbv1\xa2\x02\x03OXX\xaa\x02\x06Orm.V1\xca\x02\x06Orm\\V1\xe2\x02\x12Orm\\V1\\GPBMetadata\xea\x02\aOrm::V1b\x06proto3"
+	"com.orm.v1B\x0fDatasourceProtoP\x01Z?github.com/the-protobuf-project/store/plugin/pb/ormpbv1;ormpbv1\xa2\x02\x03OXX\xaa\x02\x06Orm.V1\xca\x02\x06Orm\\V1\xe2\x02\x12Orm\\V1\\GPBMetadata\xea\x02\aOrm::V1b\x06proto3"
 
 var (
 	file_orm_v1_datasource_proto_rawDescOnce sync.Once

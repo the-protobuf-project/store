@@ -5,10 +5,10 @@ package wire
 // identifier in each, no import alias).
 
 import (
-	"github.com/the-protobuf-project/orm/plugin/factory/coreir"
-	"github.com/the-protobuf-project/orm/plugin/factory/target/graphql"
 	"github.com/the-protobuf-project/protokit/factory"
 	"github.com/the-protobuf-project/protokit/graphql/dialect"
+	"github.com/the-protobuf-project/store/plugin/factory/coreir"
+	"github.com/the-protobuf-project/store/plugin/factory/target/graphql"
 )
 
 // NewGraphQLTarget builds the GraphQL client target with its output configuration.

@@ -8,7 +8,7 @@ import "orm/v1/datasource.proto";
 import "orm/v1/query.proto";
 import "orm/v1/table.proto";
 
-option go_package = "github.com/the-protobuf-project/orm/plugin/pb/ormpbv1;ormpbv1";
+option go_package = "github.com/the-protobuf-project/store/plugin/pb/ormpbv1;ormpbv1";
 option java_multiple_files = true;
 option java_outer_classname = "AnnotationsProto";
 option java_package = "com.orm.v1";

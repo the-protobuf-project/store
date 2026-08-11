@@ -11,11 +11,11 @@ import (
 
 	"google.golang.org/protobuf/compiler/protogen"
 
-	"github.com/the-protobuf-project/orm/plugin/factory/target/types"
 	"github.com/the-protobuf-project/protokit/header"
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
 	"github.com/the-protobuf-project/protokit/templates"
+	"github.com/the-protobuf-project/store/plugin/factory/target/types"
 )
 
 // schemaFileView prepares the datasource template data for one database.

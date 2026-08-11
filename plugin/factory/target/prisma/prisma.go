@@ -15,11 +15,11 @@ import (
 
 	"google.golang.org/protobuf/compiler/protogen"
 
-	"github.com/the-protobuf-project/orm/plugin/factory/facets"
-	"github.com/the-protobuf-project/orm/plugin/factory/target/types"
 	"github.com/the-protobuf-project/protokit"
 	"github.com/the-protobuf-project/protokit/schema"
 	"github.com/the-protobuf-project/protokit/templates"
+	"github.com/the-protobuf-project/store/plugin/factory/facets"
+	"github.com/the-protobuf-project/store/plugin/factory/target/types"
 )
 
 // Generator implements schema.IRTarget for Prisma schema output.

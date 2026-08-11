@@ -15,7 +15,7 @@ The latest stable release of orm receives security fixes. We encourage all users
 
 If you believe you have found a security vulnerability in orm, report it privately via GitHub's built-in vulnerability reporting:
 
-1. Navigate to the [Security tab](https://github.com/the-protobuf-project/orm/security) of this repository.
+1. Navigate to the [Security tab](https://github.com/the-protobuf-project/store/security) of this repository.
 2. Click **"Report a vulnerability"**.
 3. Fill in the details described below.
 
@@ -55,7 +55,7 @@ orm is a **code-generation tool** — it runs at development or CI time and prod
   - Panic or crash in a way that could be triggered by a shared CI environment processing untrusted protos.
 - **Supply-chain concerns**: vulnerabilities in orm's Go dependencies that affect the plugin binary or the generated output.
 - **Generated output safety**: defaults or patterns in the generated schema that predictably introduce SQL injection, privilege escalation, or data-exposure risks in downstream applications.
-- **`orm.yaml` config parsing**: path-glob injection or directory traversal via the `match`, `database`, or `schema` fields.
+- **`store.yaml` config parsing**: path-glob injection or directory traversal via the `match`, `database`, or `schema` fields.
 
 ### Out of scope
 

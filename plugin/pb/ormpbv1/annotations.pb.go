@@ -95,9 +95,9 @@ const file_orm_v1_annotations_proto_rawDesc = "" +
 	"datasource:M\n" +
 	"\x05table\x12\x1f.google.protobuf.MessageOptions\x18ц\x03 \x01(\v2\x14.orm.v1.TableOptionsR\x05table:N\n" +
 	"\x06column\x12\x1d.google.protobuf.FieldOptions\x18҆\x03 \x01(\v2\x15.orm.v1.ColumnOptionsR\x06column:K\n" +
-	"\x05query\x12\x1d.google.protobuf.FieldOptions\x18ӆ\x03 \x01(\v2\x14.orm.v1.QueryOptionsR\x05queryB\x96\x01\n" +
+	"\x05query\x12\x1d.google.protobuf.FieldOptions\x18ӆ\x03 \x01(\v2\x14.orm.v1.QueryOptionsR\x05queryB\x98\x01\n" +
 	"\n" +
-	"com.orm.v1B\x10AnnotationsProtoP\x01Z=github.com/the-protobuf-project/orm/plugin/pb/ormpbv1;ormpbv1\xa2\x02\x03OXX\xaa\x02\x06Orm.V1\xca\x02\x06Orm\\V1\xe2\x02\x12Orm\\V1\\GPBMetadata\xea\x02\aOrm::V1b\x06proto3"
+	"com.orm.v1B\x10AnnotationsProtoP\x01Z?github.com/the-protobuf-project/store/plugin/pb/ormpbv1;ormpbv1\xa2\x02\x03OXX\xaa\x02\x06Orm.V1\xca\x02\x06Orm\\V1\xe2\x02\x12Orm\\V1\\GPBMetadata\xea\x02\aOrm::V1b\x06proto3"
 
 var file_orm_v1_annotations_proto_goTypes = []any{
 	(*descriptorpb.FileOptions)(nil),    // 0: google.protobuf.FileOptions

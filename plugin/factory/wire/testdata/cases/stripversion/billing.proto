@@ -8,7 +8,7 @@ import "google/api/resource.proto";
 option go_package = "example.com/test/gen;stripversionv1";
 
 // Invoice lands in schema "acme_billing", not "acme_billing_v1": the
-// orm.yaml strip_version option flattens the trailing API version out of the
+// store.yaml strip_version option flattens the trailing API version out of the
 // resource-type-derived schema name.
 message Invoice {
   option (google.api.resource) = {

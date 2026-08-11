@@ -1,4 +1,4 @@
-// Command protoc-gen-orm is a protoc plugin that reads proto descriptors
+// Command protoc-gen-store is a protoc plugin that reads proto descriptors
 // annotated with google.api.* and orm.v1.* options, then generates database
 // schema artifacts for the requested backend: gorm, sql, or prisma. The generic
 // IR engine lives in the protokit module; the on-chain (solidity/subgraph)
@@ -6,12 +6,12 @@
 //
 // # Install
 //
-//	go install github.com/the-protobuf-project/orm/plugin/cmd/protoc-gen-orm@latest
+//	go install github.com/the-protobuf-project/store/plugin/cmd/protoc-gen-store@latest
 //
 // # Usage via buf.gen.yaml
 //
 //	plugins:
-//	  - local: protoc-gen-orm
+//	  - local: protoc-gen-store
 //	    out: generated/
 //	    opt:
 //	      - target=prisma   # prisma | gorm | sql
@@ -32,13 +32,13 @@ import (
 	"runtime/debug"
 	"strings"
 
-	"github.com/the-protobuf-project/orm/plugin/factory/config"
-	"github.com/the-protobuf-project/orm/plugin/factory/source/proto/backend"
-	"github.com/the-protobuf-project/orm/plugin/factory/wire"
 	"github.com/the-protobuf-project/protokit"
 	"github.com/the-protobuf-project/protokit/factory"
 	"github.com/the-protobuf-project/protokit/graphql/dialect"
 	"github.com/the-protobuf-project/protokit/header"
+	"github.com/the-protobuf-project/store/plugin/factory/config"
+	"github.com/the-protobuf-project/store/plugin/factory/source/proto/backend"
+	"github.com/the-protobuf-project/store/plugin/factory/wire"
 	"google.golang.org/protobuf/compiler/protogen"
 	"google.golang.org/protobuf/types/pluginpb"
 )
@@ -65,7 +65,7 @@ func resolveVersion() string {
 		return v
 	}
 	for _, dep := range bi.Deps {
-		if dep.Path == "github.com/the-protobuf-project/orm" && dep.Version != "" {
+		if dep.Path == "github.com/the-protobuf-project/store" && dep.Version != "" {
 			return dep.Version
 		}
 	}
@@ -78,12 +78,12 @@ func main() {
 	// When invoked directly with -version (not by protoc), print and exit before
 	// protogen tries to read a CodeGeneratorRequest from stdin.
 	if len(os.Args) == 2 && (os.Args[1] == "-version" || os.Args[1] == "--version") {
-		fmt.Printf("protoc-gen-orm %s\n", v)
+		fmt.Printf("protoc-gen-store %s\n", v)
 		return
 	}
 
 	// Every generated file's banner names the tool that produced it.
-	header.SetTool("protoc-gen-orm")
+	header.SetTool("protoc-gen-store")
 
 	// flags are populated by protogen (ParamFunc maps each buf.gen.yaml opt:
 	// "key=value" to flags.Set) before the Run closure reads them.
@@ -93,7 +93,7 @@ func main() {
 		"per-rule severity for schema problems: \"\"=all warn, \"true\"=all error, "+
 			"or \"ref:error,collision:warn,index:error,lint:warn\"")
 	config := flags.String("config", "",
-		"path to an orm.yaml mapping proto packages to databases/schemas")
+		"path to an store.yaml mapping proto packages to databases/schemas")
 	goModule := flags.String("go_module", "",
 		"Go import path of the output directory (e.g. github.com/me/gen); the gorm "+
 			"target needs it to generate the migration aggregator that imports each schema package")
@@ -110,7 +110,7 @@ func main() {
 			"adapter/plugin package, a filterx observer (with filters), and "+
 			"Registry.Instrument. Requires go_module; generated consumers gain a "+
 			"github.com/the-protobuf-project/opentelementry/opentelementry-go dependency. "+
-			"orm.yaml telemetry: and telemetry.v1's (telemetry.v1.telemetry) annotations tune it further")
+			"store.yaml telemetry: and telemetry.v1's (telemetry.v1.telemetry) annotations tune it further")
 	filters := flags.Bool("filters", false,
 		"gorm target only: also generate AIP-160 filter / AIP-132 order_by specs per "+
 			"schema plus the shared filterx engine packages (a backend-neutral core and "+
@@ -127,7 +127,7 @@ func main() {
 		// not synthetic oneofs); declare it so buf/protoc don't warn.
 		p.SupportedFeatures = uint64(pluginpb.CodeGeneratorResponse_FEATURE_PROTO3_OPTIONAL)
 
-		// The graphql target reads a GraphQL endpoint from orm.yaml rather than the
+		// The graphql target reads a GraphQL endpoint from store.yaml rather than the
 		// proto descriptors, so it takes its own path — but still runs as part of a
 		// normal plugin invocation and returns files through the protoc response.
 		if *target == "graphql" {
@@ -147,9 +147,11 @@ func main() {
 		// buf selects exactly one target via opt: [target=...] and owns the output dir.
 		reader := backend.New(cfg, *goModule, *stores, *telemetry, *converters, *filters).
 			WithRepositoryModules(*gormModule, *graphqlModule)
+		// The compat reader keeps schemas written against orm.v1 generating for one
+		// major; protokit warns once per deprecated option per build.
 		reg := wire.Registry(
 			protokit.Options{Target: *target, Strict: *strict, Version: v},
-			[]protokit.FacetReader{reader}, backend.NewLayout(cfg))
+			[]protokit.FacetReader{reader, backend.NewCompat()}, backend.NewLayout(cfg))
 
 		tgt, ok := reg.Targets[*target]
 		if !ok {
@@ -169,7 +171,7 @@ func main() {
 }
 
 // runGraphQL generates the typed GraphQL client during a plugin run. It reads the
-// endpoint (or cached schema) and conventions from orm.yaml's graphql block,
+// endpoint (or cached schema) and conventions from store.yaml's graphql block,
 // introspects, and returns the generated files through the protoc response so buf
 // writes them to the plugin entry's out: directory.
 func runGraphQL(p *protogen.Plugin, configPath, goModuleOpt, version string) error {
@@ -178,7 +180,7 @@ func runGraphQL(p *protogen.Plugin, configPath, goModuleOpt, version string) err
 		return err
 	}
 	if cfg == nil || cfg.GraphQL == nil {
-		return fmt.Errorf("target=graphql needs a `graphql:` block in orm.yaml (set the config=<path> opt)")
+		return fmt.Errorf("target=graphql needs a `graphql:` block in store.yaml (set the config=<path> opt)")
 	}
 	// Validation only needs the registry's shape (which sources and targets exist),
 	// so it is built with no readers and no layout policy.
@@ -207,7 +209,7 @@ func runGraphQL(p *protogen.Plugin, configPath, goModuleOpt, version string) err
 		goModule = entry.GoModule
 	}
 	if goModule == "" {
-		return fmt.Errorf("the graphql target needs go_module (the go_module opt or a generate[].go_module in orm.yaml)")
+		return fmt.Errorf("the graphql target needs go_module (the go_module opt or a generate[].go_module in store.yaml)")
 	}
 	maxDepth := 1
 	if g.MaxDepth != nil {

@@ -1,16 +1,16 @@
 # ORM
 
-> **One contract, many targets.** `protoc-gen-orm` is a co-generation factory:
+> **One contract, many targets.** `protoc-gen-store` is a co-generation factory:
 > feed it **Protobuf** (annotated with [Google AIP](https://google.aip.dev/)) and it
 > emits production-grade **Prisma, GORM, and PostgreSQL** schemas; feed it a
 > **GraphQL** endpoint or `.graphql` SDL and it emits a typed **Go client**. One
-> binary, one `orm.yaml`, outputs that always agree.
+> binary, one `store.yaml`, outputs that always agree.
 
-[![Release](https://img.shields.io/github/v/release/the-protobuf-project/orm?sort=semver&logo=github)](https://github.com/the-protobuf-project/orm/releases)
-[![Go Reference](https://pkg.go.dev/badge/github.com/the-protobuf-project/orm.svg)](https://pkg.go.dev/github.com/the-protobuf-project/orm)
+[![Release](https://img.shields.io/github/v/release/the-protobuf-project/orm?sort=semver&logo=github)](https://github.com/the-protobuf-project/store/releases)
+[![Go Reference](https://pkg.go.dev/badge/github.com/the-protobuf-project/store.svg)](https://pkg.go.dev/github.com/the-protobuf-project/store)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/the-protobuf-project/orm?logo=go)](go.mod)
-[![Buf BSR](https://img.shields.io/badge/BSR-the--protobuf--project%2Form-0B7FFF?logo=buffer)](https://buf.build/the-protobuf-project/orm)
-[![CI](https://github.com/the-protobuf-project/orm/actions/workflows/test.yaml/badge.svg)](https://github.com/the-protobuf-project/orm/actions/workflows/test.yaml)
+[![Buf BSR](https://img.shields.io/badge/BSR-the--protobuf--project%2Form-0B7FFF?logo=buffer)](https://buf.build/the-protobuf-project/store)
+[![CI](https://github.com/the-protobuf-project/store/actions/workflows/test.yaml/badge.svg)](https://github.com/the-protobuf-project/store/actions/workflows/test.yaml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
 ## Contents
@@ -24,7 +24,7 @@
 - [Output layout](#output-layout)
 - [GraphQL client SDK](#graphql-client-sdk)
 - [Annotations reference](#annotations-reference)
-- [Configuration — `orm.yaml`](#configuration--ormyaml)
+- [Configuration — `store.yaml`](#configuration--ormyaml)
 - [Plugin options](#plugin-options)
 - [Defaults applied automatically](#defaults-applied-automatically)
 - [Determinism & migrations](#determinism--migrations)
@@ -36,7 +36,7 @@
 
 ## Overview
 
-**orm** is a single binary, `protoc-gen-orm`, built as a **co-generation factory** —
+**orm** is a single binary, `protoc-gen-store`, built as a **co-generation factory** —
 a `source → target × language` pipeline. A *source* turns a contract into a neutral
 model; a *target* renders that model into code. Two sources ship today:
 
@@ -48,7 +48,7 @@ model; a *target* renders that model into code. Two sources ship today:
   and it introspects the schema.
 
 Both run through the same binary on `buf generate`, selected per output by a
-`target=` plugin entry; everything else lives in one [`orm.yaml`](#configuration--ormyaml).
+`target=` plugin entry; everything else lives in one [`store.yaml`](#configuration--ormyaml).
 
 | Source | Target | Output |
 | --- | --- | --- |
@@ -93,7 +93,7 @@ by adding a template set beside the shared, language-agnostic parsing.
   (`IF NOT EXISTS`, `CREATE OR REPLACE`, deferred FK `ALTER`s) — safe to re-apply.
 - **Relational nesting.** Nested and imported value messages become real child
   tables (PK + FK), never opaque `JSONB` blobs — your structure stays queryable.
-- **Monorepo layout.** An optional [`orm.yaml`](#configuration--ormyaml)
+- **Monorepo layout.** An optional [`store.yaml`](#configuration--ormyaml)
   maps proto packages to databases and schemas without per-file annotations.
 - **Deterministic.** Re-running on unchanged protos produces byte-identical
   output (enforced by golden tests), so regenerate → `migrate diff` is a no-op.
@@ -103,7 +103,7 @@ by adding a template set beside the shared, language-agnostic parsing.
 
 The factory is a `source → model → target` pipeline. A **source** turns an input
 contract into a neutral model; a **target** renders that model. All of it lives in one
-binary, configured by one [`orm.yaml`](#configuration--ormyaml).
+binary, configured by one [`store.yaml`](#configuration--ormyaml).
 
 ```mermaid
 flowchart LR
@@ -173,14 +173,14 @@ flowchart TD
 
 ```bash
 # Homebrew (macOS / Linux)
-brew install the-protobuf-project/tap/protoc-gen-orm
+brew install the-protobuf-project/tap/protoc-gen-store
 
 # or go install
-go install github.com/the-protobuf-project/orm/plugin/cmd/protoc-gen-orm@latest
+go install github.com/the-protobuf-project/store/plugin/cmd/protoc-gen-store@latest
 ```
 
 Releases ship prebuilt binaries for **linux / darwin / windows** on **amd64 / arm64**
-on the [Releases page](https://github.com/the-protobuf-project/orm/releases).
+on the [Releases page](https://github.com/the-protobuf-project/store/releases).
 The plugin must be on your `PATH` so `protoc`/`buf` can find it.
 
 You'll also need the option definitions on your import path. With
@@ -188,7 +188,7 @@ You'll also need the option definitions on your import path. With
 
 ```yaml
 deps:
-  - buf.build/the-protobuf-project/orm
+  - buf.build/the-protobuf-project/store
 ```
 
 then `import "orm/v1/annotations.proto";` in your protos.
@@ -236,7 +236,7 @@ message Author {
 ```yaml
 version: v2
 plugins:
-  - local: protoc-gen-orm
+  - local: protoc-gen-store
     out: generated/prisma
     opt: [target=prisma]   # prisma | gorm | sql
 ```
@@ -430,7 +430,7 @@ domain-level metrics belong to the application, not the ORM. It needs
 `go_module` (the adapter package lives alongside the aggregator) and adds the
 `github.com/the-protobuf-project/opentelementry/opentelementry-go` dependency.
 Tune the generated default — including metrics/logs-off — via
-[`orm.yaml` `telemetry:`](#top-level-keys).
+[`store.yaml` `telemetry:`](#top-level-keys).
 
 ### AIP-160 filters and list engines (SQL + Hasura)
 
@@ -523,15 +523,15 @@ psql "$BOOKSTORE_DB_DATABASE_URL" -f generated/sql/bookstore_db/migrate.sql
 
 ## GraphQL client SDK
 
-The same `protoc-gen-orm` binary also generates a **typed Go GraphQL client** from
+The same `protoc-gen-store` binary also generates a **typed Go GraphQL client** from
 a live server. Where the proto flow is `proto → database schema`, this flow is
 `GraphQL introspection → Go client` — a second *source* into the same
 co-generation factory. There is **no separate CLI**: it runs as a normal target
 during `buf generate`. Add a plugin entry with `target=graphql` and point it at the
-endpoint via `orm.yaml`:
+endpoint via `store.yaml`:
 
 ```yaml
-# orm.yaml
+# store.yaml
 graphql:
   endpoint: https://api.example.com/graphql   # or `schema: schema.graphql` (a cached GraphQL SDL file)
   admin_secret: env:HASURA_ADMIN_SECRET       # sent under the dialect's auth header
@@ -544,11 +544,11 @@ generate:
 ```
 
 ```yaml
-# buf.gen.yaml — the endpoint/output details live in orm.yaml; the entry is minimal
+# buf.gen.yaml — the endpoint/output details live in store.yaml; the entry is minimal
 plugins:
-  - local: protoc-gen-orm
+  - local: protoc-gen-store
     out: gen                    # buf writes the client tree here
-    opt: [target=graphql, config=orm.yaml]
+    opt: [target=graphql, config=store.yaml]
 ```
 
 `buf generate` then introspects the endpoint and writes the client through the
@@ -574,7 +574,7 @@ The engine-specific conventions (bool_exp combinators, `_eq`/`_in` comparisons,
 responses, the `x-hasura-admin-secret` auth header, scalar mappings) live behind
 a pluggable **dialect**. The built-in `hasura` dialect covers the Hasura / DDN /
 Grafbase / Prisma-GraphQL lineage; select it (or a future engine) with
-`--dialect` or the `graphql.dialect` key in `orm.yaml`. Adding another GraphQL
+`--dialect` or the `graphql.dialect` key in `store.yaml`. Adding another GraphQL
 database is a new dialect value plus a registry entry — the IR builder and
 renderer never hardcode a convention. CRUD/filter/aggregate detection itself is
 derived from introspection, not hardcoded, so unconventional schemas still
@@ -642,7 +642,7 @@ string state = 5 [(orm.v1.query) = { filterable: false, sortable: false }];
 ### `(telemetry.v1.telemetry)` — message level
 
 Tunes a table's generated [telemetry](#gorm-stores-and-tracing) — takes effect
-only with the `telemetry` opt (or `orm.yaml` `telemetry.enabled`). Defined in
+only with the `telemetry` opt (or `store.yaml` `telemetry.enabled`). Defined in
 the standalone `telemetry.v1` module (not `orm.v1` — see
 [Telemetry is a separate module](#gorm-stores-and-tracing)); import
 `telemetry/v1/annotations.proto` to use it:
@@ -656,7 +656,7 @@ option (telemetry.v1.telemetry) = { enabled: false };  // opt this table out
 | --- | --- |
 | `enabled` | Override the tree-wide default (every table is instrumented when the `telemetry` opt is on). Presence matters: `enabled: false` strips this table's store instrumentation; unset keeps the default. |
 | `span_prefix` | Override the generated span-name prefix. Defaults to `<schema>.<Model>`, e.g. `bookstore_v1.Book` → span `bookstore_v1.Book/Create`. |
-| `metrics` | Override per-table op-metric recording (defaults to `orm.yaml` `telemetry.metrics`, `true`). Spans are unaffected. |
+| `metrics` | Override per-table op-metric recording (defaults to `store.yaml` `telemetry.metrics`, `true`). Spans are unaffected. |
 
 ### `(telemetry.v1.telemetry_field)` — field level
 
@@ -672,9 +672,9 @@ string state = 5 [(telemetry.v1.telemetry_field) = { label: true, label_key: "bo
 | `label` | Include this field as a span attribute (an `opentelementry:"trace:<name>"` struct tag on the generated model field). Safe for any cardinality — spans absorb per-row values. |
 | `label_key` | Override the attribute name. Defaults to `<model_snake>.<column>`, e.g. `book.genre`. |
 
-## Configuration — `orm.yaml`
+## Configuration — `store.yaml`
 
-`orm.yaml` is the **layout config**: it maps proto packages to databases and
+`store.yaml` is the **layout config**: it maps proto packages to databases and
 schemas *without* per-file annotations — the way to split a multi-service monorepo
 into the intended database boundaries from one central file. It's entirely
 optional; without it, every package falls back to the [package-path
@@ -685,11 +685,11 @@ Pass it with the `config` plugin option:
 ```yaml
 # buf.gen.yaml
 plugins:
-  - local: protoc-gen-orm
+  - local: protoc-gen-store
     out: generated/sql
     opt:
       - target=sql
-      - config=orm.yaml   # path to your layout config
+      - config=store.yaml   # path to your layout config
 ```
 
 ### Anatomy
@@ -761,11 +761,11 @@ wins:
 
 ```mermaid
 flowchart LR
-    A["(orm.v1.datasource)<br/>per-file annotation"] -->|wins over| B["orm.yaml<br/>matched rule"]
+    A["(orm.v1.datasource)<br/>per-file annotation"] -->|wins over| B["store.yaml<br/>matched rule"]
     B -->|wins over| C["package-path<br/>default"]
 ```
 
-So you can set sane monorepo-wide defaults in `orm.yaml` and still override a
+So you can set sane monorepo-wide defaults in `store.yaml` and still override a
 single file inline when it needs to live somewhere unusual.
 
 ### Worked examples
@@ -808,20 +808,20 @@ Passed via `opt:` in `buf.gen.yaml`.
 
 | Option | Description |
 | --- | --- |
-| `target` | What to emit: `prisma` \| `gorm` \| `sql` \| `graphql`. Required. (`graphql` reads its endpoint from `orm.yaml`'s [`graphql`](#top-level-keys) block — see [GraphQL client SDK](#graphql-client-sdk).) |
+| `target` | What to emit: `prisma` \| `gorm` \| `sql` \| `graphql`. Required. (`graphql` reads its endpoint from `store.yaml`'s [`graphql`](#top-level-keys) block — see [GraphQL client SDK](#graphql-client-sdk).) |
 | `go_module` | **gorm only.** Go import path of the output directory (e.g. `github.com/me/gen`). Enables the `migrate.go` factory registry, whose package imports each per-schema models package. Omit it and the per-schema model packages still generate, just without the aggregator. |
 | `stores` | **gorm only.** Also emit a typed CRUD store per resource — one `<model>_store.go` file each (see [GORM stores](#gorm-stores-and-tracing)). Off by default; turning it on adds a `gorm.io/gorm` dependency to each models package. |
 | `filters` | **gorm only.** Emit AIP-160 filter / AIP-132 order_by specs per schema (`filters.go`) plus the shared `filterx` engine package serving both **SQL (GORM)** and **Hasura DDN GraphQL** (see [filters and list engines](#aip-160-filters-and-list-engines-sql--hasura)). Off by default; requires `go_module`. The Hasura engine adds a `github.com/the-protobuf-project/runtime-go` dependency. With `telemetry`, also emits an [opentelementry](https://github.com/the-protobuf-project/opentelementry) `Observer` adapter (`filterx.OpentelementryObserver`) for the list engines' spans and debug events. |
 | `converters` | **gorm only.** Emit `protobuf.go` proto ↔ model converters per schema — `<Model>ToProto` / `<Model>FromProto` plus enum value mappers (see [converters](#proto--model-converters)). Off by default. |
-| `telemetry` | **gorm only.** Fold first-party [opentelementry](https://github.com/the-protobuf-project/opentelementry) instrumentation into the generated output — instrumented stores (with `stores`), a `telemetry` adapter/plugin package, a `filterx` observer (with `filters`), and `Registry.Instrument` (see [Telemetry](#gorm-stores-and-tracing)). **Off by default**; takes effect with `go_module`, and adds the `github.com/the-protobuf-project/opentelementry/opentelementry-go` dependency. Tune it further via `orm.yaml` `telemetry:` and `telemetry.v1`'s `(telemetry.v1.telemetry)`/`(telemetry.v1.telemetry_field)` annotations. |
+| `telemetry` | **gorm only.** Fold first-party [opentelementry](https://github.com/the-protobuf-project/opentelementry) instrumentation into the generated output — instrumented stores (with `stores`), a `telemetry` adapter/plugin package, a `filterx` observer (with `filters`), and `Registry.Instrument` (see [Telemetry](#gorm-stores-and-tracing)). **Off by default**; takes effect with `go_module`, and adds the `github.com/the-protobuf-project/opentelementry/opentelementry-go` dependency. Tune it further via `store.yaml` `telemetry:` and `telemetry.v1`'s `(telemetry.v1.telemetry)`/`(telemetry.v1.telemetry_field)` annotations. |
 | `strict` | Per-rule severity for schema problems. `""` (default) warns on everything; `true` makes every rule a hard error; a spec like `ref:error,collision:warn,index:error,lint:warn` sets severity per rule. Rules: **ref** (unresolved/dropped references), **collision** (global name qualification), **index** (index names an unknown column), **lint** (validate-on-generate advisories). |
-| `config` | Path to a [`orm.yaml`](#configuration--ormyaml) layout config. |
+| `config` | Path to a [`store.yaml`](#configuration--ormyaml) layout config. |
 | `M<proto>=<import>` | Go import-path mapping for a proto file, required when protos omit `option go_package`. |
 
 > [!NOTE]
-> **Migration:** the `otel` and `pulse` opts, and `orm.yaml`'s `otel:` block, are
+> **Migration:** the `otel` and `pulse` opts, and `store.yaml`'s `otel:` block, are
 > removed — an unknown `opt:`/yaml key now fails the build loudly rather than
-> silently doing nothing. Replace them with `telemetry` and `orm.yaml`
+> silently doing nothing. Replace them with `telemetry` and `store.yaml`
 > `telemetry:`. `Registry.Instrument` now takes an
 > `*opentelementry.Opentelementry` handle (`Instrument(db, o)`, not
 > `Instrument(db, opts ...tracing.Option)`), and `filterx.PulseObserver` is now
@@ -904,9 +904,9 @@ buf generate --template buf.gen.example.yaml
 ## Building from source
 
 ```bash
-git clone https://github.com/the-protobuf-project/orm
+git clone https://github.com/the-protobuf-project/store
 cd orm
-go build ./plugin/cmd/protoc-gen-orm   # the plugin binary
+go build ./plugin/cmd/protoc-gen-store   # the plugin binary
 go test ./...                              # golden + unit tests
 buf lint                                   # proto linting
 ```
@@ -919,11 +919,11 @@ buf lint                                   # proto linting
 - **Versioning** follows semantic version tags. While the project is in early
   development (`v0.x`), minor releases may include breaking changes to the API or
   generated output — pin an exact tag in CI and review migration diffs.
-- The **annotation module** is published to the [Buf Schema Registry](https://buf.build/the-protobuf-project/orm)
+- The **annotation module** is published to the [Buf Schema Registry](https://buf.build/the-protobuf-project/store)
   under `orm.v1`; option field numbers live in the `50000`–`99999` range
   reserved for non-Google custom options.
 
-See the [Releases page](https://github.com/the-protobuf-project/orm/releases)
+See the [Releases page](https://github.com/the-protobuf-project/store/releases)
 for binaries and changelogs, and [`SECUIRTY.MD`](SECUIRTY.MD) for the security policy.
 
 ## License

@@ -1,0 +1,63 @@
+syntax = "proto3";
+
+package store.v1;
+
+import "google/protobuf/descriptor.proto";
+import "store/v1/column.proto";
+import "store/v1/query.proto";
+import "store/v1/table.proto";
+
+option go_package = "github.com/the-protobuf-project/store/plugin/pb/storepbv1;storepbv1";
+option java_multiple_files = true;
+option java_outer_classname = "AnnotationsProto";
+option java_package = "com.store.v1";
+
+// annotations.proto is the single import a schema author needs from this
+// plugin:
+//
+//	import "protokit/v1/annotations.proto";  // structure: names, keys, skips
+//	import "store/v1/annotations.proto";     // storage: types, sizing, indexes
+//
+// store.v1 is the *physical* half of the vocabulary. It says how a column is
+// stored and queried — its SQL type, its sizing, its constraints, its
+// referential actions, its filter/sort surface — and nothing about what
+// anything is called.
+//
+// The naming half moved to protokit.v1, which protokit reads directly, so every
+// plugin built on protokit derives the same databases, schemas, tables, and
+// columns from the same protos. That split is the whole point: two plugins over
+// one proto must agree on what a table *is* before they can disagree usefully
+// about how to store it.
+//
+// Field numbers 50000-99999 are reserved for non-Google options. store.v1 uses
+// 50010-50012, clear of both orm.v1's legacy 50000-50003 and protokit.v1's
+// 51000-51002, so a file may carry all three vocabularies while it migrates.
+//
+// Migrating from orm.v1:
+//
+//	(orm.v1.datasource)      → (protokit.v1.datasource)
+//	(orm.v1.table).table     → (protokit.v1.table).table       (same for skip,
+//	                                                            id, timestamps,
+//	                                                            indexes)
+//	(orm.v1.column).column   → (protokit.v1.column).column     (same for skip)
+//	(orm.v1.column).type     → (store.v1.column).type          (and the rest of
+//	                                                            the physical set)
+//	(orm.v1.query)           → (store.v1.query)
+//
+// orm.v1 keeps working for one major: a compatibility reader maps its
+// deprecated fields onto these and warns once per option per build.
+
+extend google.protobuf.MessageOptions {
+  // table overrides table-level storage: the outbox companion table.
+  TableOptions table = 50010;
+}
+
+extend google.protobuf.FieldOptions {
+  // column overrides column-level storage: type, sizing, defaults,
+  // constraints, and foreign-key referential actions.
+  ColumnOptions column = 50011;
+
+  // query tunes the field's generated list-query surface: AIP-160 filter,
+  // AIP-132 order_by, and free-text search.
+  QueryOptions query = 50012;
+}

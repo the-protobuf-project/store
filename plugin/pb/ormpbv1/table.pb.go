@@ -143,6 +143,9 @@ func (x *IndexDef) GetIndex() string {
 	return ""
 }
 
+// Deprecated: use (protokit.v1.table) for name/skip/id/timestamps/indexes.
+// Removed in v2.
+//
 // TableOptions overrides table-level generation for a message.
 //
 // Applied via:
@@ -156,19 +159,29 @@ type TableOptions struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// table is an explicit table name.
 	// Defaults to snake_case plural of the google.api.resource.type suffix.
+	//
+	// Deprecated: Marked as deprecated in orm/v1/table.proto.
 	Table string `protobuf:"bytes,1,opt,name=table,proto3" json:"table,omitempty"`
 	// skip excludes this message from all output — no table is generated.
+	//
+	// Deprecated: Marked as deprecated in orm/v1/table.proto.
 	Skip bool `protobuf:"varint,2,opt,name=skip,proto3" json:"skip,omitempty"`
 	// id synthesizes a generated primary-key column (ULID or UUID) and demotes the
 	// IDENTIFIER field to a UNIQUE constraint — the production pattern where AIP
 	// resource names are lookup keys, not storage keys.
+	//
+	// Deprecated: Marked as deprecated in orm/v1/table.proto.
 	Id IdStrategy `protobuf:"varint,3,opt,name=id,proto3,enum=orm.v1.IdStrategy" json:"id,omitempty"`
 	// timestamps appends created_at / updated_at TIMESTAMPTZ columns:
 	// created_at DEFAULT now(); updated_at maintained on write
 	// (Prisma @updatedAt, GORM autoUpdateTime).
+	//
+	// Deprecated: Marked as deprecated in orm/v1/table.proto.
 	Timestamps bool `protobuf:"varint,4,opt,name=timestamps,proto3" json:"timestamps,omitempty"`
 	// indexes declares additional multi-column indexes beyond those inferred from
 	// AIP annotations (e.g. composite unique constraints).
+	//
+	// Deprecated: Marked as deprecated in orm/v1/table.proto.
 	Indexes       []*IndexDef `protobuf:"bytes,5,rep,name=indexes,proto3" json:"indexes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -204,6 +217,7 @@ func (*TableOptions) Descriptor() ([]byte, []int) {
 	return file_orm_v1_table_proto_rawDescGZIP(), []int{1}
 }
 
+// Deprecated: Marked as deprecated in orm/v1/table.proto.
 func (x *TableOptions) GetTable() string {
 	if x != nil {
 		return x.Table
@@ -211,6 +225,7 @@ func (x *TableOptions) GetTable() string {
 	return ""
 }
 
+// Deprecated: Marked as deprecated in orm/v1/table.proto.
 func (x *TableOptions) GetSkip() bool {
 	if x != nil {
 		return x.Skip
@@ -218,6 +233,7 @@ func (x *TableOptions) GetSkip() bool {
 	return false
 }
 
+// Deprecated: Marked as deprecated in orm/v1/table.proto.
 func (x *TableOptions) GetId() IdStrategy {
 	if x != nil {
 		return x.Id
@@ -225,6 +241,7 @@ func (x *TableOptions) GetId() IdStrategy {
 	return IdStrategy_ID_STRATEGY_UNSPECIFIED
 }
 
+// Deprecated: Marked as deprecated in orm/v1/table.proto.
 func (x *TableOptions) GetTimestamps() bool {
 	if x != nil {
 		return x.Timestamps
@@ -232,6 +249,7 @@ func (x *TableOptions) GetTimestamps() bool {
 	return false
 }
 
+// Deprecated: Marked as deprecated in orm/v1/table.proto.
 func (x *TableOptions) GetIndexes() []*IndexDef {
 	if x != nil {
 		return x.Indexes
@@ -247,23 +265,23 @@ const file_orm_v1_table_proto_rawDesc = "" +
 	"\bIndexDef\x12\x18\n" +
 	"\acolumns\x18\x01 \x03(\tR\acolumns\x12\x16\n" +
 	"\x06unique\x18\x02 \x01(\bR\x06unique\x12\x14\n" +
-	"\x05index\x18\x03 \x01(\tR\x05index\"\xa8\x01\n" +
-	"\fTableOptions\x12\x14\n" +
-	"\x05table\x18\x01 \x01(\tR\x05table\x12\x12\n" +
-	"\x04skip\x18\x02 \x01(\bR\x04skip\x12\"\n" +
-	"\x02id\x18\x03 \x01(\x0e2\x12.orm.v1.IdStrategyR\x02id\x12\x1e\n" +
+	"\x05index\x18\x03 \x01(\tR\x05index\"\xbc\x01\n" +
+	"\fTableOptions\x12\x18\n" +
+	"\x05table\x18\x01 \x01(\tB\x02\x18\x01R\x05table\x12\x16\n" +
+	"\x04skip\x18\x02 \x01(\bB\x02\x18\x01R\x04skip\x12&\n" +
+	"\x02id\x18\x03 \x01(\x0e2\x12.orm.v1.IdStrategyB\x02\x18\x01R\x02id\x12\"\n" +
 	"\n" +
-	"timestamps\x18\x04 \x01(\bR\n" +
-	"timestamps\x12*\n" +
-	"\aindexes\x18\x05 \x03(\v2\x10.orm.v1.IndexDefR\aindexes*U\n" +
+	"timestamps\x18\x04 \x01(\bB\x02\x18\x01R\n" +
+	"timestamps\x12.\n" +
+	"\aindexes\x18\x05 \x03(\v2\x10.orm.v1.IndexDefB\x02\x18\x01R\aindexes*U\n" +
 	"\n" +
 	"IdStrategy\x12\x1b\n" +
 	"\x17ID_STRATEGY_UNSPECIFIED\x10\x00\x12\x14\n" +
 	"\x10ID_STRATEGY_ULID\x10\x01\x12\x14\n" +
-	"\x10ID_STRATEGY_UUID\x10\x02B\x90\x01\n" +
+	"\x10ID_STRATEGY_UUID\x10\x02B\x92\x01\n" +
 	"\n" +
 	"com.orm.v1B\n" +
-	"TableProtoP\x01Z=github.com/the-protobuf-project/orm/plugin/pb/ormpbv1;ormpbv1\xa2\x02\x03OXX\xaa\x02\x06Orm.V1\xca\x02\x06Orm\\V1\xe2\x02\x12Orm\\V1\\GPBMetadata\xea\x02\aOrm::V1b\x06proto3"
+	"TableProtoP\x01Z?github.com/the-protobuf-project/store/plugin/pb/ormpbv1;ormpbv1\xa2\x02\x03OXX\xaa\x02\x06Orm.V1\xca\x02\x06Orm\\V1\xe2\x02\x12Orm\\V1\\GPBMetadata\xea\x02\aOrm::V1b\x06proto3"
 
 var (
 	file_orm_v1_table_proto_rawDescOnce sync.Once

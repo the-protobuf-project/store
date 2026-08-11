@@ -1,0 +1,22 @@
+version: "2"
+
+# The orm.v1 annotation vocabulary is deprecated in favour of protokit.v1
+# (structure) and store.v1 (storage), and its generated Go types carry
+# "Deprecated:" markers so that schema authors and downstream code get the
+# warning in their editors. That is the point of the markers — but it means the
+# two files whose whole job is to keep reading orm.v1 trip SA1019 on every line.
+#
+# Rather than scatter //nolint directives through them, the exemption is declared
+# here, scoped to exactly those two paths. That is the stricter arrangement: any
+# *other* file that reaches for orm.v1 still fails the build, which is what keeps
+# the compatibility shim from quietly spreading. Delete this block when orm.v1 is
+# removed in v2 and the two files go with it.
+linters:
+  exclusions:
+    rules:
+      - path: plugin/factory/source/proto/backend/compat\.go
+        linters: [staticcheck]
+        text: "SA1019"
+      - path: plugin/factory/facets/facets\.go
+        linters: [staticcheck]
+        text: "SA1019"

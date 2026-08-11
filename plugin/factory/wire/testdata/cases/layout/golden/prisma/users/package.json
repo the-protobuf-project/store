@@ -2,7 +2,7 @@
   "name": "users-prisma",
   "version": "0.1.0",
   "private": true,
-  "description": "Generated Prisma schema for the users database. Managed by protoc-gen-orm — edit the source .proto, not these files.",
+  "description": "Generated Prisma schema for the users database. Managed by protoc-gen-store — edit the source .proto, not these files.",
   "scripts": {
     "prisma:generate": "prisma generate --config users.config.ts",
     "prisma:migrate": "prisma migrate dev --config users.config.ts",

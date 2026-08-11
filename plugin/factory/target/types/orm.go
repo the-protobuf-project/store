@@ -1,16 +1,16 @@
 // Package types is orm's projection of the neutral schema.FieldType onto the
 // canonical PostgreSQL type the gorm/sql/prisma targets render from. It is the
 // db-specific half of the type system that used to live in protokit; protokit now
-// carries only the neutral FieldType, and orm's own type override
-// (orm.v1.column.type/max_length/precision) arrives from the column's orm.v1
-// facet rather than being stored back on the shared IR.
+// carries only the neutral FieldType, and the plugin's own type override
+// (store.v1.column.type/max_length/precision) arrives from the column's facet
+// rather than being stored back on the shared IR.
 package types
 
 import (
 	"fmt"
 
-	"github.com/the-protobuf-project/orm/plugin/pb/ormpbv1"
 	"github.com/the-protobuf-project/protokit/schema"
+	"github.com/the-protobuf-project/store/plugin/pb/storepbv1"
 )
 
 // sqlForType maps a neutral FieldType to its canonical PostgreSQL type, matching
@@ -57,24 +57,24 @@ func SQL(t schema.FieldType, list bool) string {
 type TypeOf func(*schema.Column) string
 
 // SQLForColumn returns the effective PostgreSQL type of a column: an explicit
-// orm.v1.column type/max_length/precision override wins; otherwise the neutral
+// store.v1.column type/max_length/precision override wins; otherwise the neutral
 // FieldType — proto-classified, or set by protokit's synthesis and foreign-key
 // alignment — projects to a PostgreSQL type.
 //
-// o comes from the column's orm.v1 facet rather than its Source descriptor, so a
+// o comes from the column's store.v1 facet rather than its Source descriptor, so a
 // synthesized column (a surrogate key, an embedded child's foreign key) resolves
 // correctly instead of silently falling back to the neutral type. Callers pass
 // the never-nil value facets.Set.Column returns.
-func SQLForColumn(col *schema.Column, o *ormpbv1.ColumnOptions) string {
+func SQLForColumn(col *schema.Column, o *storepbv1.ColumnOptions) string {
 	if t := overrideType(o); t != "" {
 		return t
 	}
 	return SQL(col.Type, col.List)
 }
 
-// overrideType returns the SQL type an orm.v1.column type/max_length/precision
+// overrideType returns the SQL type a store.v1.column type/max_length/precision
 // override pins on a column, or "" when it carries no such override.
-func overrideType(o *ormpbv1.ColumnOptions) string {
+func overrideType(o *storepbv1.ColumnOptions) string {
 	switch {
 	case o.GetType() != "":
 		return o.GetType()

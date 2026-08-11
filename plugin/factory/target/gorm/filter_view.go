@@ -10,8 +10,8 @@ import (
 	"strings"
 
 	"github.com/the-protobuf-project/protokit/header"
-	"github.com/the-protobuf-project/orm/plugin/factory/facets"
 	"github.com/the-protobuf-project/protokit/schema"
+	"github.com/the-protobuf-project/store/plugin/factory/facets"
 )
 
 // filterxPkg is the package name and output directory of the shared filter

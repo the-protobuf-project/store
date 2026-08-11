@@ -1,6 +1,6 @@
 package backend
 
-// config.go loads the optional orm.yaml layout config (passed via the
+// config.go loads the optional store.yaml layout config (passed via the
 // `config=<path>` plugin option) and resolves a proto package to its target
 // database and postgres schema. This is what lets a multi-service monorepo split
 // into several databases with clean schema names without annotating every file.
@@ -12,13 +12,15 @@ package backend
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
-// Config is the parsed orm.yaml.
+// Config is the parsed store.yaml.
 type Config struct {
 	Datasources []matchRule `yaml:"datasources"`
 	// StripVersion, when true, flattens the API version out of every derived
@@ -44,7 +46,7 @@ type Config struct {
 	Telemetry *telemetryConfig `yaml:"telemetry"`
 }
 
-// telemetryConfig is the orm.yaml `telemetry:` block. Every field is a pointer
+// telemetryConfig is the store.yaml `telemetry:` block. Every field is a pointer
 // so an unset key inherits the plugin-opt default rather than the Go zero value.
 type telemetryConfig struct {
 	// Enabled overrides the telemetry plugin opt: true forces instrumentation on
@@ -78,11 +80,22 @@ type matchRule struct {
 	StripVersion *bool `yaml:"strip_version"`
 }
 
-// LoadConfig reads orm.yaml from path. A blank path yields nil (no config;
+// LoadConfig reads store.yaml from path. A blank path yields nil (no config;
 // defaults apply).
+//
+// The file was called orm.yaml before the plugin was renamed. A path that names
+// the old file still loads, with a deprecation warning on stderr — and so does a
+// store.yaml path whose directory only has the old file, which is the case that
+// actually matters: a buf.gen.yaml pinning `config=…/store.yaml` is what a user
+// writes *after* reading the release notes, before they have moved the file.
+// Warnings go to stderr because this runs before protokit's diagnostics exist.
 func LoadConfig(path string) (*Config, error) {
 	if path == "" {
 		return nil, nil
+	}
+	path, err := resolveConfigPath(path, os.Stderr)
+	if err != nil {
+		return nil, err
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -95,6 +108,47 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config %q: %w", path, err)
 	}
 	return &c, nil
+}
+
+// legacyConfigName is what store.yaml was called before the plugin was renamed
+// from protoc-gen-orm to protoc-gen-store. Accepted for one major.
+const legacyConfigName = "orm.yaml"
+
+// resolveConfigPath returns the config file to actually read, warning to w when
+// that turns out to be the deprecated orm.yaml.
+//
+// Two shapes are tolerated. Naming orm.yaml outright is the obvious one. The
+// other is a store.yaml path that does not exist next to an orm.yaml that does:
+// falling back there is what keeps a repo generating in the window between
+// updating buf.gen.yaml and renaming the file, which is otherwise a confusing
+// "no such file" for a config the user can plainly see.
+//
+// A path that exists is never second-guessed, and a missing store.yaml with no
+// legacy neighbour is returned unchanged so the caller reports the error the
+// user expects — naming the file they asked for, not one they have never heard of.
+func resolveConfigPath(path string, w io.Writer) (string, error) {
+	if filepath.Base(path) == legacyConfigName {
+		warnLegacyConfig(path, w)
+		return path, nil
+	}
+	if _, err := os.Stat(path); err == nil {
+		return path, nil
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("read config %q: %w", path, err)
+	}
+	legacy := filepath.Join(filepath.Dir(path), legacyConfigName)
+	if _, err := os.Stat(legacy); err != nil {
+		return path, nil // no fallback; let the caller report the original miss
+	}
+	warnLegacyConfig(legacy, w)
+	return legacy, nil
+}
+
+// warnLegacyConfig emits the one-line rename notice.
+func warnLegacyConfig(path string, w io.Writer) {
+	// Best effort: a warning that cannot be written is not worth failing over.
+	_, _ = fmt.Fprintf(w, "protoc-gen-store: warning: [lint] reading deprecated %s; rename it to store.yaml — %s is removed in v2\n",
+		path, legacyConfigName)
 }
 
 // resolve returns the database, schema, and version-stripping decision for a

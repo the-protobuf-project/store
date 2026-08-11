@@ -10,10 +10,10 @@ import (
 	"path"
 	"strings"
 
-	"github.com/the-protobuf-project/orm/plugin/factory/coreir"
-	"github.com/the-protobuf-project/orm/plugin/factory/target/graphql/golang"
 	"github.com/the-protobuf-project/protokit/factory"
 	"github.com/the-protobuf-project/protokit/graphql/dialect"
+	"github.com/the-protobuf-project/store/plugin/factory/coreir"
+	"github.com/the-protobuf-project/store/plugin/factory/target/graphql/golang"
 )
 
 // defaultRuntimeModule is the import path of the Go runtime facade generated

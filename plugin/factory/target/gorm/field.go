@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/the-protobuf-project/orm/plugin/factory/target/types"
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
+	"github.com/the-protobuf-project/store/plugin/factory/target/types"
 )
 
 // gormFieldName is the Go struct field name for a column. Foreign-key columns

@@ -21,6 +21,8 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// Deprecated: use (store.v1.query). Removed in v2.
+//
 // QueryOptions tunes a field's generated list-query surface — the AIP-160
 // filter, AIP-132 order_by, and free-text search specs — separately from the
 // physical column options in ColumnOptions.
@@ -35,14 +37,20 @@ type QueryOptions struct {
 	// specs (scalar columns are filterable by default, with operators inferred
 	// from the column type). Explicit presence matters: `filterable: false`
 	// removes the field from the spec; unset keeps the default.
+	//
+	// Deprecated: Marked as deprecated in orm/v1/query.proto.
 	Filterable *bool `protobuf:"varint,1,opt,name=filterable,proto3,oneof" json:"filterable,omitempty"`
 	// sortable overrides the type-derived default in generated AIP-132 order_by
 	// allowlists (scalar, date, timestamp, and numeric columns are sortable by
 	// default). Explicit presence matters, as with filterable.
+	//
+	// Deprecated: Marked as deprecated in orm/v1/query.proto.
 	Sortable *bool `protobuf:"varint,2,opt,name=sortable,proto3,oneof" json:"sortable,omitempty"`
 	// search includes this column in the bareword free-text search: a filter
 	// term with no field (e.g. `beach resort`) matches it with a
 	// case-insensitive contains. Off by default.
+	//
+	// Deprecated: Marked as deprecated in orm/v1/query.proto.
 	Search        bool `protobuf:"varint,3,opt,name=search,proto3" json:"search,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -78,6 +86,7 @@ func (*QueryOptions) Descriptor() ([]byte, []int) {
 	return file_orm_v1_query_proto_rawDescGZIP(), []int{0}
 }
 
+// Deprecated: Marked as deprecated in orm/v1/query.proto.
 func (x *QueryOptions) GetFilterable() bool {
 	if x != nil && x.Filterable != nil {
 		return *x.Filterable
@@ -85,6 +94,7 @@ func (x *QueryOptions) GetFilterable() bool {
 	return false
 }
 
+// Deprecated: Marked as deprecated in orm/v1/query.proto.
 func (x *QueryOptions) GetSortable() bool {
 	if x != nil && x.Sortable != nil {
 		return *x.Sortable
@@ -92,6 +102,7 @@ func (x *QueryOptions) GetSortable() bool {
 	return false
 }
 
+// Deprecated: Marked as deprecated in orm/v1/query.proto.
 func (x *QueryOptions) GetSearch() bool {
 	if x != nil {
 		return x.Search
@@ -103,18 +114,18 @@ var File_orm_v1_query_proto protoreflect.FileDescriptor
 
 const file_orm_v1_query_proto_rawDesc = "" +
 	"\n" +
-	"\x12orm/v1/query.proto\x12\x06orm.v1\"\x88\x01\n" +
-	"\fQueryOptions\x12#\n" +
+	"\x12orm/v1/query.proto\x12\x06orm.v1\"\x94\x01\n" +
+	"\fQueryOptions\x12'\n" +
 	"\n" +
-	"filterable\x18\x01 \x01(\bH\x00R\n" +
-	"filterable\x88\x01\x01\x12\x1f\n" +
-	"\bsortable\x18\x02 \x01(\bH\x01R\bsortable\x88\x01\x01\x12\x16\n" +
-	"\x06search\x18\x03 \x01(\bR\x06searchB\r\n" +
+	"filterable\x18\x01 \x01(\bB\x02\x18\x01H\x00R\n" +
+	"filterable\x88\x01\x01\x12#\n" +
+	"\bsortable\x18\x02 \x01(\bB\x02\x18\x01H\x01R\bsortable\x88\x01\x01\x12\x1a\n" +
+	"\x06search\x18\x03 \x01(\bB\x02\x18\x01R\x06searchB\r\n" +
 	"\v_filterableB\v\n" +
-	"\t_sortableB\x90\x01\n" +
+	"\t_sortableB\x92\x01\n" +
 	"\n" +
 	"com.orm.v1B\n" +
-	"QueryProtoP\x01Z=github.com/the-protobuf-project/orm/plugin/pb/ormpbv1;ormpbv1\xa2\x02\x03OXX\xaa\x02\x06Orm.V1\xca\x02\x06Orm\\V1\xe2\x02\x12Orm\\V1\\GPBMetadata\xea\x02\aOrm::V1b\x06proto3"
+	"QueryProtoP\x01Z?github.com/the-protobuf-project/store/plugin/pb/ormpbv1;ormpbv1\xa2\x02\x03OXX\xaa\x02\x06Orm.V1\xca\x02\x06Orm\\V1\xe2\x02\x12Orm\\V1\\GPBMetadata\xea\x02\aOrm::V1b\x06proto3"
 
 var (
 	file_orm_v1_query_proto_rawDescOnce sync.Once

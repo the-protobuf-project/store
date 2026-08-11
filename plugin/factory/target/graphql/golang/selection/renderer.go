@@ -12,9 +12,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/the-protobuf-project/orm/plugin/factory/target/graphql/golang/typemap"
 	"github.com/the-protobuf-project/protokit/graphql/ir"
 	"github.com/the-protobuf-project/protokit/naming"
+	"github.com/the-protobuf-project/store/plugin/factory/target/graphql/golang/typemap"
 )
 
 // Renderer builds model bodies for a schema.

@@ -2,7 +2,7 @@
   "name": "{{.PackageName}}",
   "version": "0.1.0",
   "private": true,
-  "description": "Generated Prisma schema for the {{.Database}} database. Managed by protoc-gen-orm — edit the source .proto, not these files.",
+  "description": "Generated Prisma schema for the {{.Database}} database. Managed by protoc-gen-store — edit the source .proto, not these files.",
   "scripts": {
     "prisma:generate": "prisma generate --config {{.Database}}.config.ts",
     "prisma:migrate": "prisma migrate dev --config {{.Database}}.config.ts",

@@ -2,11 +2,13 @@ syntax = "proto3";
 
 package orm.v1;
 
-option go_package = "github.com/the-protobuf-project/orm/plugin/pb/ormpbv1;ormpbv1";
+option go_package = "github.com/the-protobuf-project/store/plugin/pb/ormpbv1;ormpbv1";
 option java_multiple_files = true;
 option java_outer_classname = "QueryProto";
 option java_package = "com.orm.v1";
 
+// Deprecated: use (store.v1.query). Removed in v2.
+//
 // QueryOptions tunes a field's generated list-query surface — the AIP-160
 // filter, AIP-132 order_by, and free-text search specs — separately from the
 // physical column options in ColumnOptions.
@@ -20,15 +22,15 @@ message QueryOptions {
   // specs (scalar columns are filterable by default, with operators inferred
   // from the column type). Explicit presence matters: `filterable: false`
   // removes the field from the spec; unset keeps the default.
-  optional bool filterable = 1;
+  optional bool filterable = 1 [deprecated = true];
 
   // sortable overrides the type-derived default in generated AIP-132 order_by
   // allowlists (scalar, date, timestamp, and numeric columns are sortable by
   // default). Explicit presence matters, as with filterable.
-  optional bool sortable = 2;
+  optional bool sortable = 2 [deprecated = true];
 
   // search includes this column in the bareword free-text search: a filter
   // term with no field (e.g. `beach resort`) matches it with a
   // case-insensitive contains. Off by default.
-  bool search = 3;
+  bool search = 3 [deprecated = true];
 }

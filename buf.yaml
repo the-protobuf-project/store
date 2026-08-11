@@ -1,7 +1,7 @@
 version: v2
 
 # This buf.yaml defines a workspace:
-#   protobuf/           — the publishable BSR module (buf.build/the-protobuf-project/orm)
+#   protobuf/           — the publishable BSR module (buf.build/the-protobuf-project/store)
 #   examples/proto/     — sample annotated protos that consume the options (local only)
 #
 # telemetry.v1 (import "telemetry/v1/*.proto") is no longer a local workspace path —
@@ -16,7 +16,7 @@ version: v2
 # A bare `buf push` errors on the unnamed modules.
 modules:
   - path: protobuf
-    name: buf.build/the-protobuf-project/orm
+    name: buf.build/the-protobuf-project/store
 
   - path: examples/proto
     # examples/proto can import orm options and googleapis because they

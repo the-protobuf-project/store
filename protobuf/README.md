@@ -1,6 +1,6 @@
 # orm annotations
 
-Protobuf custom options that let [**orm**](https://github.com/the-protobuf-project/orm)
+Protobuf custom options that let [**orm**](https://github.com/the-protobuf-project/store)
 turn your service definitions into production database schemas. Annotate your
 messages with the [Google AIP](https://google.aip.dev/) standards you already use
 (`google.api.resource`, `field_behavior`, `resource_reference`); reach for these
@@ -8,7 +8,7 @@ messages with the [Google AIP](https://google.aip.dev/) standards you already us
 indexes, id strategy, referential actions, …).
 
 This module ships **only the option definitions**. Code generation is done by the
-`protoc-gen-orm` plugin — see the [main repo](https://github.com/the-protobuf-project/orm)
+`protoc-gen-store` plugin — see the [main repo](https://github.com/the-protobuf-project/store)
 for installing the plugin and generating Prisma / GORM / SQL output.
 
 ---
@@ -21,7 +21,7 @@ Add the module to your `buf.yaml` `deps` (with [buf](https://buf.build)):
 # buf.yaml
 version: v2
 deps:
-  - buf.build/the-protobuf-project/orm
+  - buf.build/the-protobuf-project/store
 ```
 
 Run `buf dep update`, then import the single entrypoint in your protos:
@@ -120,9 +120,9 @@ Overrides column-level generation for a single field.
 
 The package is `orm.v1`. Option field numbers live in the `50000`–`99999`
 range reserved for non-Google custom options. See the
-[main repository](https://github.com/the-protobuf-project/orm) for the full
+[main repository](https://github.com/the-protobuf-project/store) for the full
 option surface, defaults applied automatically, and the type-mapping table.
 
 ## License
 
-[Apache License 2.0](https://github.com/the-protobuf-project/orm/blob/main/LICENSE).
+[Apache License 2.0](https://github.com/the-protobuf-project/store/blob/main/LICENSE).

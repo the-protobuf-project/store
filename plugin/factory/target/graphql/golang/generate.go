@@ -13,11 +13,11 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/the-protobuf-project/orm/plugin/factory/target/graphql/golang/selection"
-	"github.com/the-protobuf-project/orm/plugin/factory/target/graphql/golang/typemap"
 	"github.com/the-protobuf-project/protokit/graphql/dialect"
 	"github.com/the-protobuf-project/protokit/graphql/ir"
 	"github.com/the-protobuf-project/protokit/header"
+	"github.com/the-protobuf-project/store/plugin/factory/target/graphql/golang/selection"
+	"github.com/the-protobuf-project/store/plugin/factory/target/graphql/golang/typemap"
 )
 
 //go:embed templates/file.go.tmpl

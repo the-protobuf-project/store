@@ -8,13 +8,13 @@
 # Requires: go, buf, protoc-gen-go (for `stubs`). Install buf via
 # `brew install bufbuild/buf/buf`.
 #
-# Note: a Homebrew-installed protoc-gen-orm can sit earlier on PATH and
+# Note: a Homebrew-installed protoc-gen-store can sit earlier on PATH and
 # shadow `just install`'s build. The recipes that run the plugin (examples) use
 # ./bin via a PATH override so the build under test always wins; `just which`
 # shows the resolution order.
 
 # The dev plugin is built into ./bin and that dir is prepended to PATH for buf,
-# so a brew/global protoc-gen-orm never shadows the build under test.
+# so a brew/global protoc-gen-store never shadows the build under test.
 bin := justfile_directory() / "bin"
 
 # -buildvcs=false stamps the generated-file version banner as "dev" (matching the
@@ -29,15 +29,15 @@ _default:
 # Build the dev plugin into ./bin (version banner: "dev").
 build:
     mkdir -p {{bin}}
-    go build {{_flags}} -o {{bin}}/protoc-gen-orm ./plugin/cmd/protoc-gen-orm
+    go build {{_flags}} -o {{bin}}/protoc-gen-store ./plugin/cmd/protoc-gen-store
 
 # Install the dev plugin onto your Go bin (GOBIN) for use in other projects.
 install:
-    go install {{_flags}} ./plugin/cmd/protoc-gen-orm
+    go install {{_flags}} ./plugin/cmd/protoc-gen-store
 
-# Show every protoc-gen-orm on PATH, in resolution order, with versions.
+# Show every protoc-gen-store on PATH, in resolution order, with versions.
 which:
-    @for p in $(which -a protoc-gen-orm 2>/dev/null); do printf '%s\t' "$p"; "$p" --version; done || echo "none on PATH (run: just install)"
+    @for p in $(which -a protoc-gen-store 2>/dev/null); do printf '%s\t' "$p"; "$p" --version; done || echo "none on PATH (run: just install)"
 
 # Regenerate the orm option Go stubs (plugin/pb/ormpbv1/*.pb.go).
 stubs:
@@ -65,7 +65,7 @@ update-goldens:
 # Regenerate examples/ with the freshly-built ./bin plugin (not a global one).
 examples: build
     PATH="{{bin}}:$PATH" buf generate --template buf.gen.example.yaml
-    @echo "examples regenerated with $(./bin/protoc-gen-orm --version)"
+    @echo "examples regenerated with $(./bin/protoc-gen-store --version)"
 
 # Build the examples module to confirm the generated GORM structs compile.
 build-examples:

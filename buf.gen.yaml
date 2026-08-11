@@ -13,7 +13,7 @@ version: v2
 # The module= opt strips the orm module prefix from each go_package so the output
 # lands under plugin/pb/ (go_package .../orm/plugin/pb/ormpbv1 -> plugin/pb/ormpbv1).
 # (buf.gen.example.yaml is the separate template that renders the bookstore example
-# schemas with the protoc-gen-orm plugin.)
+# schemas with the protoc-gen-store plugin.)
 #
 # managed/override below works around a stale go_package in the sibling repo's
 # telemetry/v1/*.proto files: they currently declare
@@ -48,4 +48,4 @@ plugins:
   - remote: buf.build/protocolbuffers/go:v1.36.11
     out: .
     opt:
-      - module=github.com/the-protobuf-project/orm
+      - module=github.com/the-protobuf-project/store

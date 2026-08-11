@@ -1,10 +1,10 @@
-module github.com/the-protobuf-project/orm/examples
+module github.com/the-protobuf-project/store/examples
 
 go 1.26.4
 
 // replace points at the repo root so go.work resolves the local orm module
 // without publishing it to the registry first.
-replace github.com/the-protobuf-project/orm => ../
+replace github.com/the-protobuf-project/store => ../
 
 require (
 	github.com/the-protobuf-project/opentelementry/opentelementry-go v0.0.0-20260721081650-0c2a71dad403
