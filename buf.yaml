@@ -25,6 +25,7 @@ modules:
 deps:
   - buf.build/googleapis/googleapis # google.api.resource, field_behavior, resource_reference
   - buf.build/the-protobuf-project/opentelementry # telemetry.v1 (tracing/metrics annotations)
+  - buf.build/the-protobuf-project/protokit # protokit.v1 (neutral datasource/table/column structure)
 
 lint:
   use:
