@@ -20,8 +20,10 @@ import (
 	"github.com/the-protobuf-project/protokit/header"
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
+
 	"github.com/the-protobuf-project/store/plugin/factory/provenance"
 	"github.com/the-protobuf-project/store/plugin/factory/target/types"
+	"github.com/the-protobuf-project/store/telemetry"
 )
 
 // gormRuntimeModule is the module the generated stores import at run time. Its
@@ -61,7 +63,7 @@ func gormxView(db *schema.Database) map[string]any {
 }
 
 // storeModelView assembles the data for one resource's <model>_store.go file.
-func storeModelView(db *schema.Database, s *schema.Schema, pkg string, t *schema.Table, typeOf types.TypeOf) map[string]any {
+func storeModelView(db *schema.Database, s *schema.Schema, pkg string, t *schema.Table, typeOf types.TypeOf, tel telemetry.Set) map[string]any {
 	var unique, fks []finderView
 	var pkArgType string
 	hasPK := false
@@ -121,7 +123,7 @@ func storeModelView(db *schema.Database, s *schema.Schema, pkg string, t *schema
 	// method body is wrapped in a span and (with metrics) records a DB-scoped op
 	// metric (table/op/status only — no domain-value metrics), which needs
 	// "time" for the duration.
-	telEnabled, telMetrics, spanPrefix := tableTelemetry(db, s, t)
+	telEnabled, telMetrics, spanPrefix := tableTelemetry(tel, db, s, t)
 	std := []string{"context"}
 	if telEnabled && telMetrics {
 		std = append(std, "time")

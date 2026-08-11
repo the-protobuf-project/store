@@ -39,6 +39,7 @@ import (
 	"github.com/the-protobuf-project/store/plugin/factory/config"
 	"github.com/the-protobuf-project/store/plugin/factory/source/proto/backend"
 	"github.com/the-protobuf-project/store/plugin/factory/wire"
+	telemetrygen "github.com/the-protobuf-project/store/telemetry"
 	"google.golang.org/protobuf/compiler/protogen"
 	"google.golang.org/protobuf/types/pluginpb"
 )
@@ -151,7 +152,8 @@ func main() {
 		// major; protokit warns once per deprecated option per build.
 		reg := wire.Registry(
 			protokit.Options{Target: *target, Strict: *strict, Version: v},
-			[]protokit.FacetReader{reader, backend.NewCompat()}, backend.NewLayout(cfg))
+			[]protokit.FacetReader{reader, backend.NewCompat(), telemetrygen.NewReader()},
+			backend.NewLayout(cfg))
 
 		tgt, ok := reg.Targets[*target]
 		if !ok {

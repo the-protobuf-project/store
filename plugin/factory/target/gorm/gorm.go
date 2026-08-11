@@ -16,10 +16,13 @@ import (
 
 	"github.com/the-protobuf-project/protokit"
 	"github.com/the-protobuf-project/protokit/docs"
+	"github.com/the-protobuf-project/protokit/header"
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
 	"github.com/the-protobuf-project/store/plugin/factory/facets"
+	"github.com/the-protobuf-project/store/plugin/factory/provenance"
 	"github.com/the-protobuf-project/store/plugin/factory/target/types"
+	"github.com/the-protobuf-project/store/telemetry"
 )
 
 // Generator implements schema.IRTarget for GORM Go struct output.
@@ -45,6 +48,7 @@ func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 // GenerateIR writes one Go package per schema into the plugin response.
 func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 	fx := facets.New(ir)
+	tel := telemetry.New(ir)
 	typeOf := func(c *schema.Column) string { return types.SQLForColumn(c, fx.Column(c)) }
 	dbs := ir.Databases
 	gormxEmitted := false     // the shared runtime is emitted once for the whole tree
@@ -75,7 +79,7 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 		for _, s := range db.Schemas {
 			pkg := naming.GoPackage(s.Name)
 			f := p.NewGeneratedFile(fmt.Sprintf("%s/%s/models.go", db.Name, pkg), "")
-			if err := renderGo(f, "models.go.tpl", packageView(db, s, pkg, typeOf)); err != nil {
+			if err := renderGo(f, "models.go.tpl", packageView(db, s, pkg, typeOf, tel)); err != nil {
 				return fmt.Errorf("gorm: %s/%s: %w", db.Name, pkg, err)
 			}
 			// Opt-in: proto↔model converters, one protobuf.go per schema package.
@@ -119,7 +123,7 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 						}
 						if dbTelemetry(db) {
 							pf := p.NewGeneratedFile(filterxPkg+"/opentelementry.go", "")
-							if err := renderGo(pf, "filterx_opentelementry.go.tpl", fv); err != nil {
+							if err := telemetry.WriteFilterxObserver(pf, fv); err != nil {
 								return fmt.Errorf("gorm: %s/opentelementry.go: %w", filterxPkg, err)
 							}
 						}
@@ -140,7 +144,7 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 				}
 				for _, t := range s.Tables {
 					sf := p.NewGeneratedFile(fmt.Sprintf("%s/%s/%s", db.Name, pkg, storeFileName(t)), "")
-					if err := renderGo(sf, "store_model.go.tpl", storeModelView(db, s, pkg, t, typeOf)); err != nil {
+					if err := renderGo(sf, "store_model.go.tpl", storeModelView(db, s, pkg, t, typeOf, tel)); err != nil {
 						return fmt.Errorf("gorm: %s/%s/%s: %w", db.Name, pkg, storeFileName(t), err)
 					}
 				}
@@ -150,9 +154,17 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 		// implementation and the SQL-level gorm plugin Registry.Instrument
 		// installs. The only generated code importing the opentelementry SDK.
 		if dbTelemetry(db) && !telemetryEmitted {
-			tf := p.NewGeneratedFile(telemetryPkg+"/"+telemetryPkg+".go", "")
-			if err := renderGo(tf, "telemetry.go.tpl", telemetryPkgView(db)); err != nil {
-				return fmt.Errorf("gorm: %s/%s.go: %w", telemetryPkg, telemetryPkg, err)
+			tf := p.NewGeneratedFile(telemetry.AdapterPath, "")
+			hdr := provenance.Render("//", header.Info{
+				PluginVersion: db.PluginVersion,
+				ProtocVersion: db.ProtocVersion,
+				Database:      db.Name,
+				SchemaLabel:   "package",
+				Schema:        telemetry.Package,
+				Notes:         []string{telemetry.AdapterNote},
+			}, telemetry.Module)
+			if err := telemetry.WriteAdapter(tf, db, hdr, dbGoModule(db), gormxPkg, dbStores(db)); err != nil {
+				return fmt.Errorf("gorm: %s: %w", telemetry.AdapterPath, err)
 			}
 			telemetryEmitted = true
 		}

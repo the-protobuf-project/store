@@ -4,7 +4,11 @@ package gorm
 // backend stamps these onto db.Opts during Enrich (protokit itself never
 // interprets them); the gorm target is the only consumer.
 
-import "github.com/the-protobuf-project/protokit/schema"
+import (
+	"github.com/the-protobuf-project/protokit/schema"
+
+	"github.com/the-protobuf-project/store/telemetry"
+)
 
 // dbGoModule is the Go import path of the generated output directory, needed to
 // import each per-schema models package from the migration aggregator. Empty
@@ -20,16 +24,12 @@ func dbConverters(db *schema.Database) bool { return db.Opt("converters") == "tr
 // dbTelemetry reports whether to fold first-party opentelementry
 // instrumentation into the generated output (instrumented stores, the
 // telemetry package, the filterx observer, Registry.Instrument).
-func dbTelemetry(db *schema.Database) bool { return db.Opt("telemetry") == "true" }
+func dbTelemetry(db *schema.Database) bool { return telemetry.Enabled(db) }
 
 // dbTelemetryMetrics reports whether instrumented code records op metrics in
 // addition to spans (only meaningful when dbTelemetry is true; per-table
 // (telemetry.v1.telemetry).metrics narrows it further).
-func dbTelemetryMetrics(db *schema.Database) bool { return db.Opt("telemetry_metrics") == "true" }
-
-// dbTelemetryLogs reports whether the telemetry adapter logs failed
-// operations (only meaningful when dbTelemetry is true).
-func dbTelemetryLogs(db *schema.Database) bool { return db.Opt("telemetry_logs") == "true" }
+func dbTelemetryMetrics(db *schema.Database) bool { return telemetry.Metrics(db) }
 
 // dbFilters reports whether to emit AIP-160 filter / AIP-132 order_by specs per
 // schema plus the shared filterx engine packages.
