@@ -95,7 +95,7 @@ func storeModelView(db *schema.Database, s *schema.Schema, pkg string, t *schema
 	}
 	// A column made unique via a single-column unique index gets a finder too —
 	// table-level uniqueness is as good a lookup key as column.unique (e.g. a
-	// `code` column declared in orm.v1.table.indexes). Deduped against the
+	// `code` column declared in protokit.v1.table.indexes). Deduped against the
 	// column.unique finders above; the PK is covered by GetByID.
 	for _, idx := range t.Indexes {
 		if !idx.Unique || len(idx.Columns) != 1 {

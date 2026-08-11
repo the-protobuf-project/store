@@ -39,7 +39,7 @@ const gormxPkg = "gormx"
 
 // Generate renders from the databases alone, for callers that have no IR. Column
 // types then fall back to the neutral FieldType and every field's query surface to
-// its type-derived default, since the orm.v1 overrides live in the facets this
+// its type-derived default, since the store.v1 overrides live in the facets this
 // form does not carry.
 func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 	return g.GenerateIR(p, &schema.IR{Databases: dbs})

@@ -5,7 +5,7 @@ package gorm
 // maps plus the free-text search and sort allowlists); the behavior lives in the
 // once-per-tree filterx engine package, so the same spec drives both the gorm
 // and the hasura engine. Field selection is type-driven with per-field
-// orm.v1.query overrides (filterable / sortable / search), read from the
+// store.v1.query overrides (filterable / sortable / search), read from the
 // column's facet.
 
 import (

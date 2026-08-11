@@ -4,7 +4,7 @@ package backend
 // `config=<path>` plugin option) and resolves a proto package to its target
 // database and postgres schema. This is what lets a multi-service monorepo split
 // into several databases with clean schema names without annotating every file.
-// Precedence: a per-file (orm.v1.datasource) annotation wins over the config,
+// Precedence: a per-file (protokit.v1.datasource) annotation wins over the config,
 // which in turn wins over the package-path defaults. The config is orm's alone —
 // protokit owns no configuration; the Backend resolves grouping from it before
 // handing protokit a fully-resolved Datasource.
@@ -26,7 +26,7 @@ type Config struct {
 	// StripVersion, when true, flattens the API version out of every derived
 	// schema name ("bookstore.v1" → schema "bookstore" instead of "bookstore_v1").
 	// It applies to resource-type-derived and config-derived schema names, but
-	// never to an explicit (orm.v1.datasource).schema annotation. A per-rule
+	// never to an explicit (protokit.v1.datasource).schema annotation. A per-rule
 	// strip_version overrides this default for that rule.
 	StripVersion bool `yaml:"strip_version"`
 

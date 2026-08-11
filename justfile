@@ -39,7 +39,7 @@ install:
 which:
     @for p in $(which -a protoc-gen-store 2>/dev/null); do printf '%s\t' "$p"; "$p" --version; done || echo "none on PATH (run: just install)"
 
-# Regenerate the orm option Go stubs (plugin/pb/ormpbv1/*.pb.go).
+# Regenerate the store option Go stubs (plugin/pb/storepbv1/*.pb.go).
 stubs:
     buf generate
 

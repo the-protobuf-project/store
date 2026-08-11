@@ -1,5 +1,5 @@
 # Layout config (P1.1): split two service packages into separate databases with
-# clean schema names, without any per-file (orm.v1.datasource) annotation.
+# clean schema names, without any per-file (protokit.v1.datasource) annotation.
 datasources:
   - match: "fleet.**"
     database: fleet

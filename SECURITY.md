@@ -75,7 +75,7 @@ orm writes SQL DDL, Go source files, and Prisma schemas. Apply the same review d
 
 ### The `default_value` and `type` escape hatches
 
-The `(orm.v1.column).default_value` and `(orm.v1.column).type` options are written **verbatim** into generated DDL and Prisma schemas. If you allow external contributors to set these fields, review their values carefully — a malicious `default_value` can inject arbitrary SQL that executes during schema migration.
+The `(store.v1.column).default_value` and `(store.v1.column).type` options are written **verbatim** into generated DDL and Prisma schemas. If you allow external contributors to set these fields, review their values carefully — a malicious `default_value` can inject arbitrary SQL that executes during schema migration.
 
 ### Connection URLs in generated files
 

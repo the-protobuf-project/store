@@ -31,7 +31,7 @@ var _ schema.IRTarget = (*Generator)(nil)
 func (g *Generator) Name() string { return "sql" }
 
 // Generate renders from the databases alone, for callers that have no IR. Column
-// types then fall back to the neutral FieldType, since the orm.v1 overrides live
+// types then fall back to the neutral FieldType, since the store.v1 overrides live
 // in the facets this form does not carry.
 func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 	return g.GenerateIR(p, &schema.IR{Databases: dbs})

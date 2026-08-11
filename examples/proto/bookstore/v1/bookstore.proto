@@ -6,9 +6,7 @@ syntax = "proto3";
 // It is annotated in the two current vocabularies, which is the split a schema
 // author sees: protokit.v1 decides what things are *named* (and every plugin
 // built on protokit reads it, so they all agree), while store.v1 decides how
-// they are *stored*. The deprecated orm.v1 spelling still generates — see
-// plugin/factory/wire/testdata/vocabulary/ormv1_legacy for a working copy — but
-// warns, and is removed in v2.
+// they are *stored*.
 package bookstore.v1;
 
 import "google/api/field_behavior.proto";

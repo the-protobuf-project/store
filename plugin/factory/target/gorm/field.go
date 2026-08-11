@@ -98,7 +98,7 @@ func structTag(col *schema.Column, extra []string, telemetryTag string, typeOf t
 
 // indexTagsByColumn maps each column to the GORM index struct-tag fragments for
 // the table-level indexes it participates in (composite indexes from
-// orm.v1.table.indexes and the synthesized single-column FK indexes). A
+// protokit.v1.table.indexes and the synthesized single-column FK indexes). A
 // multi-column index carries a per-column priority so GORM preserves column
 // order; a single-column index needs none. The index name matches the SQL
 // target's (assigned in the build's nameIndexes pass), so both backends create
