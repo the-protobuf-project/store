@@ -6,11 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/the-protobuf-project/orm/plugin/factory/config"
-	"github.com/the-protobuf-project/orm/plugin/factory/coreir"
-	"github.com/the-protobuf-project/orm/plugin/factory/wire"
 	"github.com/the-protobuf-project/protokit"
 	"github.com/the-protobuf-project/protokit/factory"
+	"github.com/the-protobuf-project/store/plugin/factory/config"
+	"github.com/the-protobuf-project/store/plugin/factory/coreir"
+	"github.com/the-protobuf-project/store/plugin/factory/wire"
 )
 
 func testRegistry() *factory.Registry[*coreir.Model] {
@@ -21,7 +21,7 @@ func testRegistry() *factory.Registry[*coreir.Model] {
 // loadFrom writes yaml to a temp file and loads it (exercising strict decode).
 func loadFrom(t *testing.T, yaml string) (*config.Config, error) {
 	t.Helper()
-	p := filepath.Join(t.TempDir(), "orm.yaml")
+	p := filepath.Join(t.TempDir(), "store.yaml")
 	if err := os.WriteFile(p, []byte(yaml), 0o644); err != nil {
 		t.Fatal(err)
 	}

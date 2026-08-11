@@ -10,8 +10,8 @@ import (
 
 	"github.com/the-protobuf-project/protokit/schema"
 
-	"github.com/the-protobuf-project/orm/plugin/factory/coreir"
 	"github.com/the-protobuf-project/protokit/factory"
+	"github.com/the-protobuf-project/store/plugin/factory/coreir"
 )
 
 // Target wraps one protokit schema.Target.

@@ -17,20 +17,20 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/the-protobuf-project/orm/plugin/factory/target/graphql/golang"
 	"github.com/the-protobuf-project/protokit/graphql/dialect"
 	"github.com/the-protobuf-project/protokit/graphql/introspect"
 	"github.com/the-protobuf-project/protokit/graphql/ir"
 	"github.com/the-protobuf-project/protokit/header"
+	"github.com/the-protobuf-project/store/plugin/factory/target/graphql/golang"
 )
 
 var update = flag.Bool("update", false, "rewrite golden files from current output")
 
-// TestMain stamps the orm tool name into generated banners so goldens match
-// what the protoc-gen-orm binary produces (every target shares the exact same
+// TestMain stamps the store tool name into generated banners so goldens match
+// what the protoc-gen-store binary produces (every target shares the exact same
 // header format and tool stamp).
 func TestMain(m *testing.M) {
-	header.SetTool("protoc-gen-orm")
+	header.SetTool("protoc-gen-store")
 	os.Exit(m.Run())
 }
 

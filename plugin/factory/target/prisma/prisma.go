@@ -1,4 +1,4 @@
-// Package prisma generates a multi-file Prisma schema tree from the orm IR,
+// Package prisma generates a multi-file Prisma schema tree from the store IR,
 // replicating the hand-written layout this repository uses:
 //
 //	<db>/schema.prisma                       — datasource + generator blocks
@@ -15,11 +15,11 @@ import (
 
 	"google.golang.org/protobuf/compiler/protogen"
 
-	"github.com/the-protobuf-project/orm/plugin/factory/facets"
-	"github.com/the-protobuf-project/orm/plugin/factory/target/types"
 	"github.com/the-protobuf-project/protokit"
 	"github.com/the-protobuf-project/protokit/schema"
 	"github.com/the-protobuf-project/protokit/templates"
+	"github.com/the-protobuf-project/store/plugin/factory/facets"
+	"github.com/the-protobuf-project/store/plugin/factory/target/types"
 )
 
 // Generator implements schema.IRTarget for Prisma schema output.
@@ -32,7 +32,7 @@ func (g *Generator) Name() string { return "prisma" }
 
 // Generate writes the datasource file and every per-domain fragment for each database.
 // Generate renders from the databases alone, for callers that have no IR. Column
-// types then fall back to the neutral FieldType, since the orm.v1 overrides live
+// types then fall back to the neutral FieldType, since the store.v1 overrides live
 // in the facets this form does not carry.
 func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 	return g.GenerateIR(p, &schema.IR{Databases: dbs})

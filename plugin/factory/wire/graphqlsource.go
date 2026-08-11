@@ -6,10 +6,10 @@ package wire
 // import alias.
 
 import (
-	"github.com/the-protobuf-project/orm/plugin/factory/coreir"
-	"github.com/the-protobuf-project/orm/plugin/factory/source/graphql"
 	"github.com/the-protobuf-project/protokit/factory"
 	"github.com/the-protobuf-project/protokit/graphql/dialect"
+	"github.com/the-protobuf-project/store/plugin/factory/coreir"
+	"github.com/the-protobuf-project/store/plugin/factory/source/graphql"
 )
 
 // NewGraphQLSource builds the GraphQL source from an endpoint (or cached SDL/JSON

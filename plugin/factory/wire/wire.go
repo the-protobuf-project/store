@@ -2,7 +2,7 @@
 // sources and targets into one Registry. It lives outside the factory package
 // because it imports the concrete targets (which import factory), which the
 // factory package importing them back would make a cycle. A single Registry
-// constructor keeps plugin dispatch, orm.yaml validation, and the tests all
+// constructor keeps plugin dispatch, store.yaml validation, and the tests all
 // agreeing on the exact source/target set — add a new source or target here once.
 //
 // The graphql source and the graphql target are both package `graphql` (at
@@ -12,16 +12,16 @@
 package wire
 
 import (
-	"github.com/the-protobuf-project/orm/plugin/factory/coreir"
-	"github.com/the-protobuf-project/orm/plugin/factory/source/proto"
-	"github.com/the-protobuf-project/orm/plugin/factory/target/database"
-	"github.com/the-protobuf-project/orm/plugin/factory/target/gorm"
-	"github.com/the-protobuf-project/orm/plugin/factory/target/prisma"
-	"github.com/the-protobuf-project/orm/plugin/factory/target/repository"
-	"github.com/the-protobuf-project/orm/plugin/factory/target/sql"
 	"github.com/the-protobuf-project/protokit"
 	"github.com/the-protobuf-project/protokit/factory"
 	"github.com/the-protobuf-project/protokit/schema"
+	"github.com/the-protobuf-project/store/plugin/factory/coreir"
+	"github.com/the-protobuf-project/store/plugin/factory/source/proto"
+	"github.com/the-protobuf-project/store/plugin/factory/target/database"
+	"github.com/the-protobuf-project/store/plugin/factory/target/gorm"
+	"github.com/the-protobuf-project/store/plugin/factory/target/prisma"
+	"github.com/the-protobuf-project/store/plugin/factory/target/repository"
+	"github.com/the-protobuf-project/store/plugin/factory/target/sql"
 )
 
 // ProtoTargets returns the proto-source database targets — the ones that satisfy
@@ -53,7 +53,7 @@ func Plugin(readers []protokit.FacetReader, layout protokit.LayoutResolver) prot
 // every target. protoOpts, readers, and layout configure the proto source; the
 // graphql source and target are added with zero config, which is enough to
 // validate and list them (a graphql run configures its own instances from
-// orm.yaml, via NewGraphQLSource/NewGraphQLTarget). This one constructor is used
+// store.yaml, via NewGraphQLSource/NewGraphQLTarget). This one constructor is used
 // by plugin dispatch, config validation, and the tests.
 func Registry(protoOpts protokit.Options, readers []protokit.FacetReader, layout protokit.LayoutResolver) *factory.Registry[*coreir.Model] {
 	reg := factory.NewRegistry[*coreir.Model]()

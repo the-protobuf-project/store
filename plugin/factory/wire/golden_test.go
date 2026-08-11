@@ -16,18 +16,19 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/the-protobuf-project/orm/plugin/factory/source/proto/backend"
-	"github.com/the-protobuf-project/orm/plugin/factory/wire"
 	"github.com/the-protobuf-project/protokit"
 	"github.com/the-protobuf-project/protokit/golden"
 	"github.com/the-protobuf-project/protokit/header"
+	"github.com/the-protobuf-project/store/plugin/factory/source/proto/backend"
+	"github.com/the-protobuf-project/store/plugin/factory/wire"
+	telemetrygen "github.com/the-protobuf-project/store/telemetry"
 )
 
 // defaultTargets are the database backends every golden case runs unless it
 // ships a "targets" file.
 var defaultTargets = []string{"gorm", "prisma", "sql"}
 
-// ormPlugin builds the protokit.Plugin for one golden case: it reads any orm.yaml
+// ormPlugin builds the protokit.Plugin for one golden case: it reads any store.yaml
 // the case ships (grouping/telemetry config) and its optional "stores"/
 // "converters"/"filters"/"telemetry" markers, and mirrors the binary's opt
 // defaults (go_module set so the gorm aggregator is emitted; telemetry off, as
@@ -36,17 +37,17 @@ var defaultTargets = []string{"gorm", "prisma", "sql"}
 // in the harness.
 //
 // ormPlugin is the plugin for a run with no fixture config, which is what the
-// non-golden tests (targets, strict) want: the orm.v1 reader, no layout policy.
-// They still need the reader — their fixtures declare provider and indexes
-// through orm.v1, and a run without it would not see them.
+// non-golden tests (targets, strict) want: the store.v1 reader, no layout
+// policy. They still need the reader — their fixtures declare storage options
+// through store.v1, and a run without it would not see them.
 func ormPlugin() protokit.Plugin {
-	return wire.Plugin([]protokit.FacetReader{backend.New(nil, "", false, false, false, false)}, nil)
+	return wire.Plugin([]protokit.FacetReader{backend.New(nil, "", false, false, false, false), telemetrygen.NewReader()}, nil)
 }
 
 // ormCasePlugin is ormPlugin for a golden case directory.
 func ormCasePlugin(dir string) protokit.Plugin {
 	var cfg *backend.Config
-	if path := filepath.Join(dir, "orm.yaml"); fileExists(path) {
+	if path := filepath.Join(dir, "store.yaml"); fileExists(path) {
 		c, err := backend.LoadConfig(path)
 		if err != nil {
 			panic(err) // a malformed fixture config is a test-authoring bug
@@ -59,7 +60,7 @@ func ormCasePlugin(dir string) protokit.Plugin {
 	telemetry := fileExists(filepath.Join(dir, "telemetry"))
 	reader := backend.New(cfg, "example.com/test/gen", stores, telemetry, converters, filters).
 		WithRepositoryModules(optFile(dir, "gorm_module"), optFile(dir, "graphql_module"))
-	return wire.Plugin([]protokit.FacetReader{reader}, backend.NewLayout(cfg))
+	return wire.Plugin([]protokit.FacetReader{reader, telemetrygen.NewReader()}, backend.NewLayout(cfg))
 }
 
 // optFile reads a valued marker file (e.g. gorm_module holding a module path),
@@ -77,11 +78,11 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-// TestMain stamps the orm tool name into generated banners so goldens match what
-// the protoc-gen-orm binary produces (protokit's generator-neutral default names
+// TestMain stamps the store tool name into generated banners so goldens match what
+// the protoc-gen-store binary produces (protokit's generator-neutral default names
 // the framework instead).
 func TestMain(m *testing.M) {
-	header.SetTool("protoc-gen-orm")
+	header.SetTool("protoc-gen-store")
 	os.Exit(m.Run())
 }
 

@@ -10,9 +10,9 @@ package freebusy.billing.v1;
 import "google/api/field_behavior.proto";
 import "google/api/resource.proto";
 import "money.proto";
-import "orm/v1/annotations.proto";
+import "protokit/v1/annotations.proto";
 
-option (orm.v1.datasource) = {
+option (protokit.v1.datasource) = {
   database: "freebusy_db"
   schema: "billing"
 };

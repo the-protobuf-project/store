@@ -1,19 +1,19 @@
 version: v2
 
-# Regenerates the pre-compiled Go stubs for orm's own option protos (orm.v1).
+# Regenerates the pre-compiled Go stubs for this plugin's own option protos (store.v1).
 #
 # Run:  buf generate --template buf.gen.yaml
-# Out:  plugin/pb/ormpbv1/*.pb.go
+# Out:  plugin/pb/storepbv1/*.pb.go
 #
 # telemetry.v1's Go stubs are NOT regenerated from here — that standalone module
 # now lives in the sibling opentelementry-go repo, and its stubs are generated
-# separately over there (see telemetrypbv1). orm only regenerates its own orm.v1
+# separately over there (see telemetrypbv1). store only regenerates its own store.v1
 # stubs, which reference telemetry.v1 types via the Go import path, not codegen.
 #
-# The module= opt strips the orm module prefix from each go_package so the output
-# lands under plugin/pb/ (go_package .../orm/plugin/pb/ormpbv1 -> plugin/pb/ormpbv1).
+# The module= opt strips the store module prefix from each go_package so the output
+# lands under plugin/pb/ (go_package .../store/plugin/pb/storepbv1 -> plugin/pb/storepbv1).
 # (buf.gen.example.yaml is the separate template that renders the bookstore example
-# schemas with the protoc-gen-orm plugin.)
+# schemas with the protoc-gen-store plugin.)
 #
 # managed/override below works around a stale go_package in the sibling repo's
 # telemetry/v1/*.proto files: they currently declare
@@ -22,11 +22,11 @@ version: v2
 # match its real Go import path (confirmed via `go list` in that repo):
 #   github.com/the-protobuf-project/opentelementry/opentelementry-go/protobuf/telemetry/v1/telemetrypbv1
 # Without this override, annotations.pb.go's generated import for
-# ormpbv1.E_Telemetry/E_TelemetryField's TelemetryOptions/TelemetryFieldOptions types
+# the telemetry reader's TelemetryOptions/TelemetryFieldOptions types
 # would point at a Go package that doesn't exist. This is a local, generation-time fix
 # only — it doesn't touch the sibling repo's proto source (owned there) — and should be
 # dropped once that repo corrects its own go_package options. Overriding go_package only
-# for these three paths (not enabling a blanket go_package_prefix) leaves orm.v1's own
+# for these three paths (not enabling a blanket go_package_prefix) leaves store.v1's own
 # explicit go_package options, and the module= stripping above, untouched.
 managed:
   enabled: true
@@ -48,4 +48,4 @@ plugins:
   - remote: buf.build/protocolbuffers/go:v1.36.11
     out: .
     opt:
-      - module=github.com/the-protobuf-project/orm
+      - module=github.com/the-protobuf-project/store

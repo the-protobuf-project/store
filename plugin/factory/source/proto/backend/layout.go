@@ -1,7 +1,7 @@
 package backend
 
 // layout.go is the schema.LayoutResolver half of the seam: the database/schema
-// naming policy this plugin resolves from orm.yaml, kept deliberately apart from
+// naming policy this plugin resolves from store.yaml, kept deliberately apart from
 // the annotation reading in reader.go.
 //
 // The separation is what makes cross-plugin agreement testable. The same protos
@@ -12,7 +12,7 @@ package backend
 
 import "github.com/the-protobuf-project/protokit/schema"
 
-// Layout resolves proto packages to databases and schemas from orm.yaml.
+// Layout resolves proto packages to databases and schemas from store.yaml.
 //
 // The zero Layout (nil config) has no opinion, which is the correct answer for a
 // run with no config file: protokit falls back to its package-path defaults.
@@ -25,7 +25,7 @@ var _ schema.LayoutResolver = Layout{}
 func NewLayout(cfg *Config) Layout { return Layout{cfg: cfg} }
 
 // ResolveDatasource maps a proto package to its database and schema under the
-// first matching orm.yaml rule.
+// first matching store.yaml rule.
 //
 // ok reports whether this resolver has an opinion *at all*, not whether a rule
 // matched: a loaded config still applies its global strip_version to packages no
@@ -38,7 +38,7 @@ func (l Layout) ResolveDatasource(pkg string) (database, schemaName string, stri
 	return db, s, strip, true
 }
 
-// DedupeSchemaTable reports orm.yaml's dedupe_schema_table policy (false when no
+// DedupeSchemaTable reports store.yaml's dedupe_schema_table policy (false when no
 // config was supplied).
 func (l Layout) DedupeSchemaTable() bool {
 	return l.cfg != nil && l.cfg.DedupeSchemaTable

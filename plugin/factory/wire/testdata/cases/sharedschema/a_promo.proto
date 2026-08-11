@@ -2,7 +2,7 @@ syntax = "proto3";
 
 // Package freebusy.promocode.v1 lives in the shared freebusy_db under its own
 // "promocode" schema (set by the datasource annotation). Its Money fields are
-// the imported ext.type.v1.Money, which the case's orm.yaml routes to a
+// the imported ext.type.v1.Money, which the case's store.yaml routes to a
 // shared "common" schema — so the materialized money table is deterministically
 // common.moneys, shared with billing.v1, regardless of which file is processed
 // first. This file sorts first, so without config-driven routing Money would
@@ -13,9 +13,9 @@ import "google/api/field_behavior.proto";
 import "google/api/resource.proto";
 import "google/protobuf/timestamp.proto";
 import "money.proto";
-import "orm/v1/annotations.proto";
+import "protokit/v1/annotations.proto";
 
-option (orm.v1.datasource) = {
+option (protokit.v1.datasource) = {
   database: "freebusy_db"
   schema: "promocode"
 };

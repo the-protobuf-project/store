@@ -1,0 +1,52 @@
+# What protoc-gen-store is, declared for anything that has to compose plugins.
+#
+# protokit's manifest package parses and validates this file; it deliberately
+# resolves nothing — no module is fetched, no constraint is compared against a
+# real version. So this is useful for exactly two things today: telling a human
+# what the plugin expects, and failing fast when that declaration contradicts
+# itself. Whatever eventually schedules a multi-plugin run reads it later.
+#
+# Decoding is strict: an unknown key is an error, not a silently ignored line.
+
+# The vocabulary this plugin owns and the key its FacetReader registers under.
+provides: store
+
+# store cannot run on its own: protokit reads the neutral structure (databases,
+# schemas, tables, columns) that everything here is layered on.
+requires:
+  - protokit
+
+# Proto modules and the versions of them this plugin needs.
+#   protokit  — protokit.v1 structure options; 1.2.0 is where facets and the
+#               neutral vocabulary landed, so nothing earlier will do.
+#   store     — this plugin's own storage options.
+annotations:
+  buf.build/the-protobuf-project/protokit: '>=1.2.0'
+  buf.build/the-protobuf-project/store: '^1'
+
+# A property of what the plugin *emits*, not of what builds it: the generated
+# Go must compile on this toolchain. Bumped only when generated code starts
+# using a newer language or stdlib feature.
+runtime:
+  go: '>=1.26'
+
+facets:
+  # protokit.v1 is not listed: it is not a facet, it is the neutral IR every
+  # plugin gets. reads names what this plugin consumes from *other* plugins.
+  reads: []
+
+  # telemetry.v1 tunes the instrumentation woven into the generated stores.
+  # Optional because a build without it simply generates uninstrumented output —
+  # less, not broken. store.v1 is absent for a different reason: this plugin
+  # provides it, so declaring a dependency on it would say nothing.
+  optional_reads:
+    - telemetry.v1
+
+# The footprint, relative to the plugin's output directory. Enough for a
+# scheduler to spot two plugins that would write the same path.
+outputs:
+  - '**/*.go'
+  - '**/*.sql'
+  - '**/*.prisma'
+  - '**/*.ts'
+  - '**/README.md'

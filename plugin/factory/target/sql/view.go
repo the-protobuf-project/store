@@ -7,9 +7,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/the-protobuf-project/orm/plugin/factory/target/types"
 	"github.com/the-protobuf-project/protokit/header"
 	"github.com/the-protobuf-project/protokit/schema"
+	"github.com/the-protobuf-project/store/plugin/factory/provenance"
+	"github.com/the-protobuf-project/store/plugin/factory/target/types"
 )
 
 // quoteIdent wraps a SQL identifier in double quotes (doubling any embedded
@@ -67,7 +68,7 @@ func schemaView(db *schema.Database, s *schema.Schema, typeOf types.TypeOf) map[
 
 	ddl := schemaDDLOf(s, false) // per-schema files use plain, readable CREATE TRIGGER
 	return map[string]any{
-		"Header": header.Render("--", header.Info{
+		"Header": provenance.Render("--", header.Info{
 			PluginVersion: db.PluginVersion,
 			ProtocVersion: db.ProtocVersion,
 			Source:        strings.Join(s.SourceProtos(), ", "),
@@ -226,7 +227,7 @@ func migrateView(db *schema.Database, typeOf types.TypeOf) map[string]any {
 	}
 
 	return map[string]any{
-		"Header": header.Render("--", header.Info{
+		"Header": provenance.Render("--", header.Info{
 			PluginVersion: db.PluginVersion,
 			ProtocVersion: db.ProtocVersion,
 			Database:      db.Name,

@@ -1,4 +1,4 @@
-// Package config loads and validates orm.yaml — the factory's single source of
+// Package config loads and validates store.yaml — the factory's single source of
 // truth. One file configures both the proto/DB side (datasources, telemetry,
 // schema naming, inherited from the backend package) and the GraphQL side (the
 // graphql source block and the generate list). Decoding is strict (unknown keys error)
@@ -14,13 +14,13 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/the-protobuf-project/orm/plugin/factory/coreir"
-	"github.com/the-protobuf-project/orm/plugin/factory/source/proto/backend"
 	"github.com/the-protobuf-project/protokit/factory"
 	"github.com/the-protobuf-project/protokit/graphql/dialect"
+	"github.com/the-protobuf-project/store/plugin/factory/coreir"
+	"github.com/the-protobuf-project/store/plugin/factory/source/proto/backend"
 )
 
-// Config is the whole orm.yaml. The proto/DB keys (datasources, strip_version,
+// Config is the whole store.yaml. The proto/DB keys (datasources, strip_version,
 // dedupe_schema_table, telemetry) are inlined from backend.Config so the proto
 // plugin path keeps reading them unchanged; GraphQL and Generate are the factory
 // additions.
@@ -37,7 +37,7 @@ type Config struct {
 	Generate []GenerateEntry `yaml:"generate"`
 }
 
-// GraphQL is the orm.yaml `graphql:` block.
+// GraphQL is the store.yaml `graphql:` block.
 type GraphQL struct {
 	Endpoint    string   `yaml:"endpoint"`
 	Schema      string   `yaml:"schema"`
@@ -78,7 +78,7 @@ func (c *Config) GraphQLEntry() GenerateEntry {
 	return GenerateEntry{}
 }
 
-// Load reads and strictly decodes orm.yaml from path. Unknown keys are rejected.
+// Load reads and strictly decodes store.yaml from path. Unknown keys are rejected.
 // A blank path yields a nil Config (no file; defaults apply).
 func Load(path string) (*Config, error) {
 	if path == "" {
@@ -176,7 +176,7 @@ func (c *Config) Validate(reg *factory.Registry[*coreir.Model]) error {
 	}
 
 	if len(errs) > 0 {
-		return fmt.Errorf("invalid orm.yaml:\n  - %s", strings.Join(errs, "\n  - "))
+		return fmt.Errorf("invalid store.yaml:\n  - %s", strings.Join(errs, "\n  - "))
 	}
 	return nil
 }

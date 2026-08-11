@@ -9,11 +9,12 @@ import (
 
 	"github.com/the-protobuf-project/protokit/header"
 	"github.com/the-protobuf-project/protokit/schema"
+	"github.com/the-protobuf-project/store/plugin/factory/provenance"
 )
 
 // fileHeader renders the banner for one generated file of schema s.
 func fileHeader(db *schema.Database, s *schema.Schema, note string) string {
-	return header.Render("//", header.Info{
+	return provenance.Render("//", header.Info{
 		PluginVersion: db.PluginVersion,
 		ProtocVersion: db.ProtocVersion,
 		Source:        strings.Join(s.SourceProtos(), ", "),

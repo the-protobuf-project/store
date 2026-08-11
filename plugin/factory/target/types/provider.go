@@ -1,8 +1,8 @@
 package types
 
-// provider.go is orm's datasource-provider model: the backend a datasource
+// provider.go is store's datasource-provider model: the backend a datasource
 // targets and the Prisma-specific projections of it. protokit carries its own
-// generic Provider for grouping/validation during the build; orm keeps its own
+// generic Provider for grouping/validation during the build; store keeps its own
 // here so its type package is self-contained (the two never cross — the IR passes
 // the provider as a plain string on schema.Database.Provider).
 

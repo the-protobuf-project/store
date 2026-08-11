@@ -14,9 +14,9 @@ import (
 	"google.golang.org/protobuf/compiler/protogen"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/the-protobuf-project/orm/plugin/factory/target/gorm"
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
+	"github.com/the-protobuf-project/store/plugin/factory/target/gorm"
 )
 
 // resource is one repository-managed table: a proto message carrying

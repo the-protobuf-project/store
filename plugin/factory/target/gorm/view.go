@@ -7,10 +7,13 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/the-protobuf-project/orm/plugin/factory/target/types"
 	"github.com/the-protobuf-project/protokit/header"
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
+
+	"github.com/the-protobuf-project/store/plugin/factory/provenance"
+	"github.com/the-protobuf-project/store/plugin/factory/target/types"
+	"github.com/the-protobuf-project/store/telemetry"
 )
 
 type fieldView struct{ Comment, Decl string }
@@ -28,7 +31,7 @@ type enumView struct {
 }
 
 // packageView assembles the template data for one schema package.
-func packageView(db *schema.Database, s *schema.Schema, pkg string, typeOf types.TypeOf) map[string]any {
+func packageView(db *schema.Database, s *schema.Schema, pkg string, typeOf types.TypeOf, tel telemetry.Set) map[string]any {
 	var models []modelView
 	needTime, needJSON, needPQ := false, false, false
 
@@ -44,7 +47,7 @@ func packageView(db *schema.Database, s *schema.Schema, pkg string, typeOf types
 			Name:      t.LocalName,
 			TableName: s.Name + "." + t.Name,
 		}
-		telEnabled, _, _ := tableTelemetry(db, s, t)
+		telEnabled, _, _ := tableTelemetry(tel, db, s, t)
 		// Association fields come from the shared plan (see assoc.go): same-schema
 		// belongs-to and has-many targets get a direct field; a cross-schema target
 		// would need importing another package, which risks an import cycle, so it
@@ -72,7 +75,7 @@ func packageView(db *schema.Database, s *schema.Schema, pkg string, typeOf types
 			}
 			m.Fields = append(m.Fields, fieldView{
 				Comment: col.Comment,
-				Decl:    goField + " " + gt + " `" + structTag(col, extra, telemetryTag(telEnabled, t, col), typeOf) + "`",
+				Decl:    goField + " " + gt + " `" + structTag(col, extra, telemetryTag(tel, telEnabled, t, col), typeOf) + "`",
 			})
 			// BelongsTo association: emitted alongside the FK column. The field is
 			// named after the FK column (minus _id) so multiple references to the
@@ -131,7 +134,7 @@ func packageView(db *schema.Database, s *schema.Schema, pkg string, typeOf types
 	sort.Strings(third)
 
 	return map[string]any{
-		"Header": header.Render("//", header.Info{
+		"Header": provenance.Render("//", header.Info{
 			PluginVersion: db.PluginVersion,
 			ProtocVersion: db.ProtocVersion,
 			Source:        strings.Join(s.SourceProtos(), ", "),

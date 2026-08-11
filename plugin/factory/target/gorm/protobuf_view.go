@@ -25,10 +25,11 @@ import (
 	"google.golang.org/protobuf/compiler/protogen"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
-	"github.com/the-protobuf-project/orm/plugin/factory/target/types"
 	"github.com/the-protobuf-project/protokit/header"
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
+	"github.com/the-protobuf-project/store/plugin/factory/provenance"
+	"github.com/the-protobuf-project/store/plugin/factory/target/types"
 )
 
 // pbIndex resolves proto descriptors to protogen types (Go idents) across every
@@ -501,7 +502,7 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 		return nil, nil
 	}
 	return map[string]any{
-		"Header": header.Render("//", header.Info{
+		"Header": provenance.Render("//", header.Info{
 			PluginVersion: db.PluginVersion,
 			ProtocVersion: db.ProtocVersion,
 			Source:        strings.Join(s.SourceProtos(), ", "),

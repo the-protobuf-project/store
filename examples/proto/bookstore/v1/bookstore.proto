@@ -1,13 +1,19 @@
 syntax = "proto3";
 
-// Package bookstore.v1 is the sample proto used to demonstrate orm output.
+// Package bookstore.v1 is the sample proto used to demonstrate store output.
 // Run `buf generate --template buf.gen.example.yaml` from the repo root.
+//
+// It is annotated in the two current vocabularies, which is the split a schema
+// author sees: protokit.v1 decides what things are *named* (and every plugin
+// built on protokit reads it, so they all agree), while store.v1 decides how
+// they are *stored*.
 package bookstore.v1;
 
 import "google/api/field_behavior.proto";
 import "google/api/resource.proto";
 import "google/protobuf/timestamp.proto";
-import "orm/v1/annotations.proto";
+import "protokit/v1/annotations.proto";
+import "store/v1/annotations.proto";
 import "telemetry/v1/annotations.proto";
 
 option java_multiple_files = true;
@@ -15,7 +21,7 @@ option java_outer_classname = "BookstoreProto";
 option java_package = "com.bookstore.v1";
 // Files in this package declare the same datasource name, so bookstore.proto
 // and inventory.proto merge into one bookstore_db schema tree.
-option (orm.v1.datasource) = {
+option (protokit.v1.datasource) = {
   database: "bookstore_db"
   provider: "postgres"
   url: "postgresql://user:pass@localhost:5432/bookstore_db"
@@ -31,7 +37,7 @@ message Author {
     singular: "author"
     plural: "authors"
   };
-  option (orm.v1.table) = {
+  option (protokit.v1.table) = {
     id: ID_STRATEGY_ULID
     timestamps: true
   };
@@ -43,7 +49,7 @@ message Author {
   string display_name = 2 [(google.api.field_behavior) = REQUIRED];
 
   // bio is free-form; override the VARCHAR(255) default to unbounded TEXT, nullable.
-  string bio = 3 [(orm.v1.column) = {type: "TEXT"}];
+  string bio = 3 [(store.v1.column) = {type: "TEXT"}];
 }
 
 // Book is a resource nested under Author. Inferred table: bookstore_v1.books.
@@ -56,7 +62,7 @@ message Book {
   };
 
   // Extra composite index: (author_id, published_year) for timeline queries.
-  option (orm.v1.table) = {
+  option (protokit.v1.table) = {
     indexes: [
       {
         columns: [
@@ -78,19 +84,19 @@ message Book {
   // title: REQUIRED NOT NULL; max_length caps the VARCHAR provider-neutrally.
   string title = 2 [
     (google.api.field_behavior) = REQUIRED,
-    (orm.v1.column) = {max_length: 500}
+    (store.v1.column) = {max_length: 500}
   ];
 
-  // author_id references Author; orm infers the FOREIGN KEY, aligns the
+  // author_id references Author; store infers the FOREIGN KEY, aligns the
   // column type with the referenced PK (CHAR(26) ULID), and applies CASCADE.
   string author_id = 3 [
     (google.api.field_behavior) = REQUIRED,
     (google.api.resource_reference) = {type: "bookstore.v1/Author"},
-    (orm.v1.column) = {on_delete: REFERENTIAL_ACTION_CASCADE}
+    (store.v1.column) = {on_delete: REFERENTIAL_ACTION_CASCADE}
   ];
 
   // isbn must be globally unique; custom fixed-width type.
-  string isbn = 4 [(orm.v1.column) = {
+  string isbn = 4 [(store.v1.column) = {
     type: "VARCHAR(13)"
     unique: true
   }];
@@ -99,7 +105,7 @@ message Book {
   int32 published_year = 5;
 
   // internal_notes exists only in the proto contract; excluded from the DB.
-  string internal_notes = 6 [(orm.v1.column) = {skip: true}];
+  string internal_notes = 6 [(protokit.v1.column) = {skip: true}];
 
   // genre demonstrates proto enum → database enum generation, and — with the
   // telemetry opt — labels every traced Create/Update span with its value
@@ -112,7 +118,7 @@ message Book {
   // create_time is set by the database on insert.
   google.protobuf.Timestamp create_time = 8 [
     (google.api.field_behavior) = OUTPUT_ONLY,
-    (orm.v1.column) = {default_value: "now()"}
+    (store.v1.column) = {default_value: "now()"}
   ];
 }
 

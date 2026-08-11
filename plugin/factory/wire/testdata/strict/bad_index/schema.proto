@@ -6,12 +6,12 @@ package strictidx.v1;
 
 import "google/api/field_behavior.proto";
 import "google/api/resource.proto";
-import "orm/v1/annotations.proto";
+import "protokit/v1/annotations.proto";
 
 option java_multiple_files = true;
 option java_outer_classname = "SchemaProto";
 option java_package = "com.strictidx.v1";
-option (orm.v1.datasource) = {
+option (protokit.v1.datasource) = {
   database: "strictidx_db"
   provider: "postgres"
   schema: "public"
@@ -25,7 +25,7 @@ message Gadget {
     singular: "gadget"
     plural: "gadgets"
   };
-  option (orm.v1.table) = {
+  option (protokit.v1.table) = {
     indexes: [
       {
         columns: ["nonexistent_column"]

@@ -13,11 +13,12 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/the-protobuf-project/orm/plugin/factory/target/graphql/golang/selection"
-	"github.com/the-protobuf-project/orm/plugin/factory/target/graphql/golang/typemap"
 	"github.com/the-protobuf-project/protokit/graphql/dialect"
 	"github.com/the-protobuf-project/protokit/graphql/ir"
 	"github.com/the-protobuf-project/protokit/header"
+	"github.com/the-protobuf-project/store/plugin/factory/provenance"
+	"github.com/the-protobuf-project/store/plugin/factory/target/graphql/golang/selection"
+	"github.com/the-protobuf-project/store/plugin/factory/target/graphql/golang/typemap"
 )
 
 //go:embed templates/file.go.tmpl
@@ -113,7 +114,7 @@ func Generate(opts Options) error {
 func (g *generator) writeFile(subdir, name, pkg string, imports []string, body string) error {
 	// The banner matches every other target's (protokit header.Render): same
 	// stamp format across gorm, prisma, sql, graphql, and repository output.
-	h := header.Render("//", header.Info{
+	h := provenance.Render("//", header.Info{
 		PluginVersion: g.opts.Version,
 		Database:      g.opts.Package,
 		SchemaLabel:   "package",

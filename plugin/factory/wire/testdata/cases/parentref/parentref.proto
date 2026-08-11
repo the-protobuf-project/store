@@ -27,7 +27,7 @@ message User {
 }
 
 // Note is owned by a User. Its pattern carries a {user} parent segment with no
-// corresponding field, so orm materializes a user_id FK → User from the
+// corresponding field, so store materializes a user_id FK → User from the
 // pattern alone.
 message Note {
   option (google.api.resource) = {

@@ -1,6 +1,6 @@
 version: v2
 
-# Generates orm's database targets from the bookstore example protos.
+# Generates store's database targets from the bookstore example protos.
 # Run: buf generate --template buf.gen.example.yaml
 #
 # Output layout mirrors the hand-written schema/ tree:
@@ -14,20 +14,20 @@ inputs:
   - directory: examples/proto
 
 plugins:
-  - local: protoc-gen-orm
+  - local: protoc-gen-store
     out: examples/generated/prisma
     opt:
       - target=prisma
-      - Mbookstore/v1/bookstore.proto=github.com/the-protobuf-project/orm/examples/gen/bookstore/v1
-      - Mbookstore/v1/inventory.proto=github.com/the-protobuf-project/orm/examples/gen/bookstore/v1
+      - Mbookstore/v1/bookstore.proto=github.com/the-protobuf-project/store/examples/gen/bookstore/v1
+      - Mbookstore/v1/inventory.proto=github.com/the-protobuf-project/store/examples/gen/bookstore/v1
 
-  - local: protoc-gen-orm
+  - local: protoc-gen-store
     out: examples/generated/gorm
     opt:
       - target=gorm
       # go_module is the import path of the gorm out: directory, so the generated
       # migration aggregator can import each per-schema models package.
-      - go_module=github.com/the-protobuf-project/orm/examples/generated/gorm
+      - go_module=github.com/the-protobuf-project/store/examples/generated/gorm
       # stores emits a typed CRUD store per resource (one <model>_store.go file);
       # it adds a gorm.io/gorm dependency to each generated models package.
       - stores=true
@@ -36,12 +36,12 @@ plugins:
       # it adds a github.com/the-protobuf-project/opentelementry/opentelementry-go
       # dependency.
       - telemetry=true
-      - Mbookstore/v1/bookstore.proto=github.com/the-protobuf-project/orm/examples/gen/bookstore/v1
-      - Mbookstore/v1/inventory.proto=github.com/the-protobuf-project/orm/examples/gen/bookstore/v1
+      - Mbookstore/v1/bookstore.proto=github.com/the-protobuf-project/store/examples/gen/bookstore/v1
+      - Mbookstore/v1/inventory.proto=github.com/the-protobuf-project/store/examples/gen/bookstore/v1
 
-  - local: protoc-gen-orm
+  - local: protoc-gen-store
     out: examples/generated/sql
     opt:
       - target=sql
-      - Mbookstore/v1/bookstore.proto=github.com/the-protobuf-project/orm/examples/gen/bookstore/v1
-      - Mbookstore/v1/inventory.proto=github.com/the-protobuf-project/orm/examples/gen/bookstore/v1
+      - Mbookstore/v1/bookstore.proto=github.com/the-protobuf-project/store/examples/gen/bookstore/v1
+      - Mbookstore/v1/inventory.proto=github.com/the-protobuf-project/store/examples/gen/bookstore/v1

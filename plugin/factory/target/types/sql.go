@@ -2,9 +2,9 @@ package types
 
 // sqlproject.go projects a canonical PostgreSQL type string (produced by
 // SQLForColumn) onto the Go, GORM, and Prisma type systems the database targets
-// render. These used to live in protokit/types, but they are orm-specific — the
+// render. These used to live in protokit/types, but they are store-specific — the
 // generic IR carries only the neutral schema.FieldType — so they live here with
-// the rest of orm's type projection.
+// the rest of store's type projection.
 
 import "strings"
 

@@ -1,4 +1,4 @@
-// Package sql generates PostgreSQL DDL from the orm IR.
+// Package sql generates PostgreSQL DDL from the store IR.
 //
 // Output layout — one file per schema, mirroring the prisma fragment tree:
 //
@@ -14,12 +14,12 @@ import (
 
 	"google.golang.org/protobuf/compiler/protogen"
 
-	"github.com/the-protobuf-project/orm/plugin/factory/facets"
-	"github.com/the-protobuf-project/orm/plugin/factory/target/types"
 	"github.com/the-protobuf-project/protokit"
 	"github.com/the-protobuf-project/protokit/docs"
 	"github.com/the-protobuf-project/protokit/schema"
 	"github.com/the-protobuf-project/protokit/templates"
+	"github.com/the-protobuf-project/store/plugin/factory/facets"
+	"github.com/the-protobuf-project/store/plugin/factory/target/types"
 )
 
 // Generator implements schema.IRTarget for PostgreSQL DDL output.
@@ -31,7 +31,7 @@ var _ schema.IRTarget = (*Generator)(nil)
 func (g *Generator) Name() string { return "sql" }
 
 // Generate renders from the databases alone, for callers that have no IR. Column
-// types then fall back to the neutral FieldType, since the orm.v1 overrides live
+// types then fall back to the neutral FieldType, since the store.v1 overrides live
 // in the facets this form does not carry.
 func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 	return g.GenerateIR(p, &schema.IR{Databases: dbs})

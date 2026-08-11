@@ -1,9 +1,0 @@
-# Layout config (P1.1): split two service packages into separate databases with
-# clean schema names, without any per-file (orm.v1.datasource) annotation.
-datasources:
-  - match: "fleet.**"
-    database: fleet
-    schema_depth: 3        # fleet_tracking_device (first 3 package segments)
-  - match: "store.apps.**"
-    database: users
-    schema: "{leaf}_app"   # calendar_app (leaf segment, version dropped)

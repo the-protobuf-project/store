@@ -7,10 +7,11 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/the-protobuf-project/orm/plugin/factory/target/types"
 	"github.com/the-protobuf-project/protokit/header"
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
+	"github.com/the-protobuf-project/store/plugin/factory/provenance"
+	"github.com/the-protobuf-project/store/plugin/factory/target/types"
 )
 
 type fieldLine struct{ Doc, Decl string }
@@ -40,7 +41,7 @@ func fragmentView(db *schema.Database, g fragmentGroup, provider types.Provider,
 		srcProto = g.fileBase + ".proto"
 	}
 	return map[string]any{
-		"Header": header.Render("//", header.Info{
+		"Header": provenance.Render("//", header.Info{
 			PluginVersion: db.PluginVersion,
 			ProtocVersion: db.ProtocVersion,
 			Source:        srcProto,

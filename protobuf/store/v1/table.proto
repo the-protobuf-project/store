@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package store.v1;
+
+option go_package = "github.com/the-protobuf-project/store/plugin/pb/storepbv1;storepbv1";
+option java_multiple_files = true;
+option java_outer_classname = "TableProto";
+option java_package = "com.store.v1";
+
+// TableOptions overrides how a message's table is *stored*.
+//
+// The table's name, whether it is emitted, its key strategy, its timestamps, and
+// its composite indexes are neutral structure and live in
+// (protokit.v1.table) — protokit reads those itself. What remains here is
+// storage a name cannot express.
+//
+// Applied via:
+//
+//	option (store.v1.table) = {outbox: true};
+message TableOptions {
+  // outbox emits a companion outbox table beside this resource: the durable
+  // hand-off point for change events, written in the same transaction as the
+  // row it describes.
+  //
+  // Only the table is generated — no publisher, no store, no dispatch loop.
+  // Owning the table is this plugin's job because an outbox *is* a table; who
+  // drains it is not. A streams generator emits the publisher against this
+  // schema, and does so without needing to edit anything in this tree.
+  //
+  // Off by default.
+  bool outbox = 1;
+}

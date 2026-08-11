@@ -10,8 +10,9 @@ import (
 	"strings"
 
 	"github.com/the-protobuf-project/protokit/header"
-	"github.com/the-protobuf-project/orm/plugin/factory/facets"
 	"github.com/the-protobuf-project/protokit/schema"
+	"github.com/the-protobuf-project/store/plugin/factory/facets"
+	"github.com/the-protobuf-project/store/plugin/factory/provenance"
 )
 
 // filterxPkg is the package name and output directory of the shared filter
@@ -36,7 +37,7 @@ func filtersView(db *schema.Database, s *schema.Schema, pkg string, fx facets.Se
 		return nil
 	}
 	return map[string]any{
-		"Header": header.Render("//", header.Info{
+		"Header": provenance.Render("//", header.Info{
 			PluginVersion: db.PluginVersion,
 			ProtocVersion: db.ProtocVersion,
 			Source:        strings.Join(s.SourceProtos(), ", "),
@@ -54,7 +55,7 @@ func filtersView(db *schema.Database, s *schema.Schema, pkg string, fx facets.Se
 // (core, gorm engine, hasura engine, opentelementry adapter — one package).
 func filterxView(db *schema.Database) map[string]any {
 	return map[string]any{
-		"Header": header.Render("//", header.Info{
+		"Header": provenance.Render("//", header.Info{
 			PluginVersion: db.PluginVersion,
 			ProtocVersion: db.ProtocVersion,
 			Database:      db.Name,

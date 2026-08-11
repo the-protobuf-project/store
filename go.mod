@@ -1,4 +1,4 @@
-module github.com/the-protobuf-project/orm
+module github.com/the-protobuf-project/store
 
 go 1.26.4
 

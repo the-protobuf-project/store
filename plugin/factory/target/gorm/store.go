@@ -17,11 +17,18 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/the-protobuf-project/orm/plugin/factory/target/types"
 	"github.com/the-protobuf-project/protokit/header"
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
+
+	"github.com/the-protobuf-project/store/plugin/factory/provenance"
+	"github.com/the-protobuf-project/store/plugin/factory/target/types"
+	"github.com/the-protobuf-project/store/telemetry"
 )
+
+// gormRuntimeModule is the module the generated stores import at run time. Its
+// version is the consumer's to resolve, so the banner names the module only.
+const gormRuntimeModule = "gorm.io/gorm"
 
 // gormxImportPath is the import path of the shared gormx runtime package, emitted
 // at <go_module>/gormx. Stores import its ListOptions and Store interface.
@@ -43,20 +50,20 @@ type finderView struct {
 // bodies are static.
 func gormxView(db *schema.Database) map[string]any {
 	return map[string]any{
-		"Header": header.Render("//", header.Info{
+		"Header": provenance.Render("//", header.Info{
 			PluginVersion: db.PluginVersion,
 			ProtocVersion: db.ProtocVersion,
 			Database:      db.Name,
 			SchemaLabel:   "package",
 			Schema:        gormxPkg,
 			Notes:         []string{"Shared GORM runtime: ListOptions, the generic Store interface, the GenericStore engine, and EnsureSchemas."},
-		}),
+		}, gormRuntimeModule),
 		"Package": gormxPkg,
 	}
 }
 
 // storeModelView assembles the data for one resource's <model>_store.go file.
-func storeModelView(db *schema.Database, s *schema.Schema, pkg string, t *schema.Table, typeOf types.TypeOf) map[string]any {
+func storeModelView(db *schema.Database, s *schema.Schema, pkg string, t *schema.Table, typeOf types.TypeOf, tel telemetry.Set) map[string]any {
 	var unique, fks []finderView
 	var pkArgType string
 	hasPK := false
@@ -88,7 +95,7 @@ func storeModelView(db *schema.Database, s *schema.Schema, pkg string, t *schema
 	}
 	// A column made unique via a single-column unique index gets a finder too —
 	// table-level uniqueness is as good a lookup key as column.unique (e.g. a
-	// `code` column declared in orm.v1.table.indexes). Deduped against the
+	// `code` column declared in protokit.v1.table.indexes). Deduped against the
 	// column.unique finders above; the PK is covered by GetByID.
 	for _, idx := range t.Indexes {
 		if !idx.Unique || len(idx.Columns) != 1 {
@@ -116,19 +123,22 @@ func storeModelView(db *schema.Database, s *schema.Schema, pkg string, t *schema
 	// method body is wrapped in a span and (with metrics) records a DB-scoped op
 	// metric (table/op/status only — no domain-value metrics), which needs
 	// "time" for the duration.
-	telEnabled, telMetrics, spanPrefix := tableTelemetry(db, s, t)
+	telEnabled, telMetrics, spanPrefix := tableTelemetry(tel, db, s, t)
 	std := []string{"context"}
 	if telEnabled && telMetrics {
 		std = append(std, "time")
 	}
 
 	return map[string]any{
-		"Header":    storeHeader(db, s),
-		"Package":   pkg,
-		"Imports":   importBlock(std, third),
-		"Comment":   commentOr(t.Comment, t.LocalName+" model."),
-		"Name":      t.LocalName,
-		"Store":     t.LocalName + "Store",
+		"Header":  storeHeader(db, s),
+		"Package": pkg,
+		"Imports": importBlock(std, third),
+		"Comment": commentOr(t.Comment, t.LocalName+" model."),
+		"Name":    t.LocalName,
+		"Store":   t.LocalName + "Store",
+		// The interface every decorator (cache, streams, a test double) is written
+		// against, so none of them needs to edit generated code in this tree.
+		"Iface":     t.LocalName + "StoreIface",
 		"TableName": s.Name + "." + t.Name,
 		"HasPK":     hasPK,
 		"PKColumn":  t.PKColumn,
@@ -159,11 +169,11 @@ func baseGoType(col *schema.Column, typeOf types.TypeOf) string {
 // storeHeader renders the generated-file banner shared by every store file in a
 // schema package, matching the models.go banner.
 func storeHeader(db *schema.Database, s *schema.Schema) string {
-	return header.Render("//", header.Info{
+	return provenance.Render("//", header.Info{
 		PluginVersion: db.PluginVersion,
 		ProtocVersion: db.ProtocVersion,
 		Source:        strings.Join(s.SourceProtos(), ", "),
 		Database:      db.Name,
 		Schema:        s.Name,
-	})
+	}, gormRuntimeModule)
 }

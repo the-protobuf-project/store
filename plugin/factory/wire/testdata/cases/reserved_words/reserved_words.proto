@@ -7,12 +7,13 @@ package reserved.v1;
 
 import "google/api/field_behavior.proto";
 import "google/api/resource.proto";
-import "orm/v1/annotations.proto";
+import "protokit/v1/annotations.proto";
+import "store/v1/annotations.proto";
 
 option java_multiple_files = true;
 option java_outer_classname = "ReservedWordsProto";
 option java_package = "com.reserved.v1";
-option (orm.v1.datasource) = {
+option (protokit.v1.datasource) = {
   database: "reserved_db"
   provider: "postgres"
   schema: "public"
@@ -27,7 +28,7 @@ message Account {
     singular: "account"
     plural: "accounts"
   };
-  option (orm.v1.table) = {
+  option (protokit.v1.table) = {
     table: "user"
     indexes: [
       {
@@ -44,7 +45,7 @@ message Account {
   string name = 1 [(google.api.field_behavior) = IDENTIFIER];
 
   // order is a reserved word; also carries a single-column index.
-  string order = 2 [(orm.v1.column) = {index: true}];
+  string order = 2 [(store.v1.column) = {index: true}];
 
   // select is a reserved word.
   string select = 3;

@@ -1,13 +1,13 @@
 package backend
 
-// config.go loads the optional orm.yaml layout config (passed via the
+// config.go loads the optional store.yaml layout config (passed via the
 // `config=<path>` plugin option) and resolves a proto package to its target
 // database and postgres schema. This is what lets a multi-service monorepo split
 // into several databases with clean schema names without annotating every file.
-// Precedence: a per-file (orm.v1.datasource) annotation wins over the config,
-// which in turn wins over the package-path defaults. The config is orm's alone —
-// protokit owns no configuration; the Backend resolves grouping from it before
-// handing protokit a fully-resolved Datasource.
+// Precedence: a per-file (protokit.v1.datasource) annotation wins over the config,
+// which in turn wins over the package-path defaults. The config is this plugin's
+// alone — protokit owns no configuration; [Layout] presents it as the
+// schema.LayoutResolver protokit consults after the annotations.
 
 import (
 	"bytes"
@@ -18,13 +18,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config is the parsed orm.yaml.
+// Config is the parsed store.yaml.
 type Config struct {
 	Datasources []matchRule `yaml:"datasources"`
 	// StripVersion, when true, flattens the API version out of every derived
 	// schema name ("bookstore.v1" → schema "bookstore" instead of "bookstore_v1").
 	// It applies to resource-type-derived and config-derived schema names, but
-	// never to an explicit (orm.v1.datasource).schema annotation. A per-rule
+	// never to an explicit (protokit.v1.datasource).schema annotation. A per-rule
 	// strip_version overrides this default for that rule.
 	StripVersion bool `yaml:"strip_version"`
 
@@ -44,7 +44,7 @@ type Config struct {
 	Telemetry *telemetryConfig `yaml:"telemetry"`
 }
 
-// telemetryConfig is the orm.yaml `telemetry:` block. Every field is a pointer
+// telemetryConfig is the store.yaml `telemetry:` block. Every field is a pointer
 // so an unset key inherits the plugin-opt default rather than the Go zero value.
 type telemetryConfig struct {
 	// Enabled overrides the telemetry plugin opt: true forces instrumentation on
@@ -78,7 +78,7 @@ type matchRule struct {
 	StripVersion *bool `yaml:"strip_version"`
 }
 
-// LoadConfig reads orm.yaml from path. A blank path yields nil (no config;
+// LoadConfig reads store.yaml from path. A blank path yields nil (no config;
 // defaults apply).
 func LoadConfig(path string) (*Config, error) {
 	if path == "" {

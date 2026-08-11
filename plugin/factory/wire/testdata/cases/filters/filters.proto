@@ -7,7 +7,8 @@ import "google/api/resource.proto";
 import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
 import "google/type/date.proto";
-import "orm/v1/annotations.proto";
+import "protokit/v1/annotations.proto";
+import "store/v1/annotations.proto";
 
 option go_package = "example.com/test/gen;venuev1";
 option java_multiple_files = true;
@@ -26,7 +27,7 @@ enum VenueKind {
 // filterable/sortable opt-outs, a resource reference (equality-only Ref kind),
 // and shapes that are always excluded (JSONB attributes, the synthesized key).
 message Venue {
-  option (orm.v1.table) = {id: ID_STRATEGY_ULID};
+  option (protokit.v1.table) = {id: ID_STRATEGY_ULID};
 
   option (google.api.resource) = {
     type: "venue.v1/Venue"
@@ -41,7 +42,7 @@ message Venue {
   // Human-friendly name; opted into the bareword free-text search.
   string display_name = 2 [
     (google.api.field_behavior) = REQUIRED,
-    (orm.v1.query) = {search: true}
+    (store.v1.query) = {search: true}
   ];
 
   // The owning operator: a resource reference filters as an identity match.
@@ -68,13 +69,13 @@ message Venue {
   // An internal code, deliberately unfilterable but still sortable.
   string internal_code = 9 [
     (google.api.field_behavior) = OPTIONAL,
-    (orm.v1.query) = {filterable: false}
+    (store.v1.query) = {filterable: false}
   ];
 
   // A per-row nonce, filterable but deliberately unsortable.
   string nonce = 10 [
     (google.api.field_behavior) = OPTIONAL,
-    (orm.v1.query) = {sortable: false}
+    (store.v1.query) = {sortable: false}
   ];
 
   // JSONB attributes are never filterable.
@@ -87,7 +88,7 @@ message Venue {
 // Operator is the referenced parent so the venue's reference resolves to a
 // real table (a hard FK) instead of degrading to a soft reference.
 message Operator {
-  option (orm.v1.table) = {id: ID_STRATEGY_ULID};
+  option (protokit.v1.table) = {id: ID_STRATEGY_ULID};
 
   option (google.api.resource) = {
     type: "venue.v1/Operator"
@@ -102,6 +103,6 @@ message Operator {
   // Display name, searchable.
   string display_name = 2 [
     (google.api.field_behavior) = REQUIRED,
-    (orm.v1.query) = {search: true}
+    (store.v1.query) = {search: true}
   ];
 }

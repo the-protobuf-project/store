@@ -23,7 +23,7 @@ type Model struct {
 	//
 	// The whole IR travels rather than DB.Databases alone because a target needs
 	// the facets to render anything physical — a column's SQL type lives in the
-	// orm.v1 facet, not on the neutral column.
+	// store.v1 facet, not on the neutral column.
 	DB *protokit.IR
 
 	// GraphQL holds the introspection-derived GraphQL IR (set by the graphql

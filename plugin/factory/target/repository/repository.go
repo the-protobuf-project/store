@@ -22,6 +22,7 @@ import (
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
 	"github.com/the-protobuf-project/protokit/templates"
+	"github.com/the-protobuf-project/store/plugin/factory/provenance"
 )
 
 //go:embed templates/*.tpl
@@ -38,7 +39,7 @@ type Generator struct{}
 // Name returns the target identifier used in buf.gen.yaml opt: [target=repository].
 func (g *Generator) Name() string { return "repository" }
 
-// opts accessors (stamped by the orm backend; see backend.WithRepositoryModules).
+// opts accessors (stamped by the store backend; see backend.WithRepositoryModules).
 func dbGoModule(db *schema.Database) string      { return db.Opt("go_module") }
 func dbGormModule(db *schema.Database) string    { return db.Opt("gorm_module") }
 func dbGraphQLModule(db *schema.Database) string { return db.Opt("graphql_module") }
@@ -124,7 +125,7 @@ func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 // only present when a client module is configured.
 func repoxView(db *schema.Database) map[string]any {
 	return map[string]any{
-		"Header": header.Render("//", header.Info{
+		"Header": provenance.Render("//", header.Info{
 			PluginVersion: db.PluginVersion,
 			ProtocVersion: db.ProtocVersion,
 			Database:      db.Name,

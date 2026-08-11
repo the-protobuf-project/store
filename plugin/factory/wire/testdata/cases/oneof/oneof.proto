@@ -11,7 +11,7 @@ option java_outer_classname = "OneofProto";
 option java_package = "com.oneof.v1";
 
 // Audio exercises oneof integrity: the `input` oneof flattens to independent
-// nullable columns, and orm adds a generated input_case discriminator enum
+// nullable columns, and store adds a generated input_case discriminator enum
 // recording which member is set so the lost exclusivity invariant is observable.
 message Audio {
   option (google.api.resource) = {

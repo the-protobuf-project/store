@@ -1,18 +1,16 @@
 // Package backend is this plugin's bridge to protokit: the reader that brings
-// the orm.v1 annotation package into protokit's IR, and the layout policy
-// resolved from orm.yaml.
+// store.v1 into protokit's IR, and the layout policy resolved from store.yaml.
 //
 // protokit v1.2.0 replaced the old schema.Backend — which conflated reading a
 // generator's annotations, deciding neutral names, and applying a config file —
-// with three separate seams, and this package supplies all three:
+// with separate seams, and this package supplies them:
 //
-//   - [Reader] is a schema.FacetReader: it attaches orm.v1 options to each node
-//     as a facet (see factory/facets), so any target can read them back and no
-//     other plugin can mutate them.
-//   - [Reader] is also a schema.StructureReader, for the narrow set of options
-//     protokit must act on *while* building rather than read afterward.
+//   - [Reader] is a schema.FacetReader over store.v1: it attaches the physical
+//     storage options to each node as a facet (see factory/facets). It is also a
+//     schema.StructureReader, for the narrow set of options protokit must act on
+//     *while* building, and the run's schema.Enricher.
 //   - [Layout] is a schema.LayoutResolver: the database/schema naming policy
-//     that comes from orm.yaml rather than from the protos.
+//     that comes from store.yaml rather than from the protos.
 //
 // Keeping the annotation and the config apart is the point of the split. The
 // annotation travels with the proto and must mean the same thing to every
@@ -20,23 +18,23 @@
 package backend
 
 import (
-	"github.com/the-protobuf-project/orm/plugin/factory/facets"
-	"github.com/the-protobuf-project/orm/plugin/pb/ormpbv1"
 	"github.com/the-protobuf-project/protokit"
 	"github.com/the-protobuf-project/protokit/schema"
+	"github.com/the-protobuf-project/store/plugin/factory/facets"
+	"github.com/the-protobuf-project/store/plugin/pb/storepbv1"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-// Reader brings orm.v1 into the build. It reads the vocabulary into facets,
-// supplies the structure protokit consumes mid-build, and folds this plugin's
-// render-time knobs onto each database in Enrich.
+// Reader brings store.v1 into the build. It reads the vocabulary into facets,
+// supplies the referential actions protokit consumes mid-build, and folds this
+// plugin's render-time knobs onto each database in Enrich.
 //
 // It carries the plugin opts (not the layout config — that is [Layout]'s) plus
-// orm.yaml's telemetry block, which tunes the gorm target rather than naming
+// store.yaml's telemetry block, which tunes the gorm target rather than naming
 // anything.
 type Reader struct {
-	cfg        *Config // orm.yaml; read here only for its telemetry block
+	cfg        *Config // store.yaml; read here only for its telemetry block
 	goModule   string  // Go import path of the output dir (gorm migration aggregator)
 	stores     bool    // gorm: also emit a typed CRUD store per resource
 	telemetry  bool    // gorm: fold first-party opentelementry instrumentation in
@@ -75,97 +73,64 @@ func (r Reader) WithRepositoryModules(gormModule, graphqlModule string) Reader {
 // --- schema.FacetReader ---
 
 // Key namespaces this reader's facets. It names the vocabulary, not the plugin.
-func (Reader) Key() string { return facets.Key }
+func (Reader) Key() string { return facets.KeyStore }
 
-// ReadFile attaches the file's orm.v1.datasource options, or nothing when the
-// file carries none.
-func (Reader) ReadFile(d protoreflect.FileDescriptor) (any, error) {
-	if d == nil || !proto.HasExtension(d.Options(), ormpbv1.E_Datasource) {
-		return nil, nil
-	}
-	return datasourceOpts(d), nil
-}
+// ReadFile contributes nothing: store.v1 has no file-level option. Grouping a
+// file into a database is neutral structure and lives in protokit.v1.datasource.
+func (Reader) ReadFile(protoreflect.FileDescriptor) (any, error) { return nil, nil }
 
-// ReadMessage attaches the message's orm.v1.table options, or nothing.
+// ReadMessage attaches the message's store.v1.table options, or nothing.
 func (Reader) ReadMessage(d protoreflect.MessageDescriptor) (any, error) {
-	if d == nil || !proto.HasExtension(d.Options(), ormpbv1.E_Table) {
+	if !hasStoreTable(d) {
 		return nil, nil
 	}
-	return tableOpts(d), nil
+	return storeTableOpts(d), nil
 }
 
-// ReadField attaches the field's orm.v1.column and orm.v1.query options as one
-// [facets.Field]. protokit stores one value per node, so a field carrying both
-// annotations needs them bundled. Returns nothing when the field carries
-// neither.
+// ReadField attaches the field's store.v1.column and store.v1.query options as
+// one [facets.Field]. protokit stores one value per node, so a field carrying
+// both annotations needs them bundled. Returns nothing when it carries neither.
 func (Reader) ReadField(d protoreflect.FieldDescriptor) (any, error) {
-	if d == nil {
-		return nil, nil
-	}
-	hasCol := proto.HasExtension(d.Options(), ormpbv1.E_Column)
-	hasQuery := proto.HasExtension(d.Options(), ormpbv1.E_Query)
+	hasCol := hasStoreColumn(d)
+	hasQuery := hasStoreQuery(d)
 	if !hasCol && !hasQuery {
 		return nil, nil
 	}
 	f := &facets.Field{}
 	if hasCol {
-		f.Column = columnOpts(d)
+		f.Column = storeColumnOpts(d)
 	}
 	if hasQuery {
-		f.Query = queryOpts(d)
+		f.Query = storeQueryOpts(d)
 	}
 	return f, nil
 }
 
 // --- schema.StructureReader ---
-//
-// These supply the structure protokit acts on while building. protokit consults
-// them only where its own protokit.v1 read produced nothing, so an author who
-// has migrated a file to protokit.v1 sees these ignored.
 
-// ReadDatasource maps orm.v1.datasource onto protokit's neutral Datasource.
-//
-// It returns the *annotation only*. Merging orm.yaml in here is what the old
-// Backend did, and it is why two plugins over one proto could disagree about a
-// schema name; the config now arrives separately through [Layout], which
-// protokit consults after every structure reader. SchemaStrip stays false
-// because an explicitly annotated schema is authoritative and never stripped.
-func (Reader) ReadDatasource(d protoreflect.FileDescriptor) schema.Datasource {
-	o := datasourceOpts(d)
-	return schema.Datasource{
-		Database: o.GetDatabase(),
-		Schema:   o.GetSchema(),
-		Provider: o.GetProvider(),
-		URL:      o.GetUrl(),
-	}
+// ReadDatasource contributes nothing: every field of the old datasource option
+// was neutral structure and now lives in protokit.v1.datasource, which protokit
+// reads itself.
+func (Reader) ReadDatasource(protoreflect.FileDescriptor) schema.Datasource {
+	return schema.Datasource{}
 }
 
-// ReadTable maps orm.v1.table onto protokit's TableStructure, composite indexes
-// included: protokit appends declared indexes before it synthesizes foreign-key
-// indexes, so an index that already covers an FK column suppresses the redundant
-// single-column one.
-func (Reader) ReadTable(d protoreflect.MessageDescriptor) schema.TableStructure {
-	o := tableOpts(d)
-	return schema.TableStructure{
-		Table:      o.GetTable(),
-		Skip:       o.GetSkip(),
-		ID:         idStrategy(o.GetId()),
-		Timestamps: o.GetTimestamps(),
-		Indexes:    indexes(o.GetIndexes()),
-	}
+// ReadTable contributes nothing: name, skip, id, timestamps, and indexes are all
+// neutral structure and live in protokit.v1.table.
+func (Reader) ReadTable(protoreflect.MessageDescriptor) schema.TableStructure {
+	return schema.TableStructure{}
 }
 
-// ReadColumn maps orm.v1.column's structural fields onto protokit's
-// ColumnStructure. The referential actions are the load-bearing half: the
-// foreign-key column of an embedded child relation is synthesized and carries no
-// descriptor of its own, so ON DELETE / ON UPDATE cannot be recovered after the
-// build and must arrive here. The rendering fields (type, unique, index, …) are
-// applied later in Enrich.
+// ReadColumn supplies only the referential actions — the one thing store.v1
+// expresses that protokit consumes while building rather than reads afterward.
+// The foreign-key column of an embedded child relation is synthesized and
+// carries no descriptor of its own, so ON DELETE / ON UPDATE cannot be recovered
+// from a facet after the fact and must arrive here.
+//
+// Name and skip are absent on purpose: they are protokit.v1's.
 func (Reader) ReadColumn(d protoreflect.FieldDescriptor) schema.ColumnStructure {
-	o := columnOpts(d)
+	o := storeColumnOpts(d)
 	return schema.ColumnStructure{
-		Column:   o.GetColumn(),
-		Skip:     o.GetSkip(),
 		OnDelete: refAction(o.GetOnDelete()),
 		OnUpdate: refAction(o.GetOnUpdate()),
 	}
@@ -173,21 +138,20 @@ func (Reader) ReadColumn(d protoreflect.FieldDescriptor) schema.ColumnStructure 
 
 // --- schema.Enricher ---
 
-// Enrich folds orm.v1's rendering options into the neutral IR: per-column
+// Enrich folds the physical rendering options into the neutral IR: per-column
 // unique/index constraints and default expressions, plus the per-database knobs
 // the gorm target reads back off db.Opts.
 //
-// It runs after facet collection, so it reads the facets it just contributed
-// rather than the descriptors — which is what lets it see options on nodes whose
-// descriptor protokit never had.
+// It runs after facet collection, so it reads through [facets.Set] rather than
+// off the descriptors — which is what lets a synthesized column, which has no
+// descriptor, resolve at all.
 //
-// A column's SQL type is deliberately not folded in: it is not part of the
-// neutral IR, and types.SQLForColumn resolves it from the same facet at render
-// time.
+// A column's SQL type is not folded in: it is not part of the neutral IR, and
+// types.SQLForColumn resolves it from the same facet at render time.
 func (r Reader) Enrich(ir *protokit.IR) error {
 	fx := facets.New(ir)
 
-	// Telemetry default: the telemetry plugin opt, then orm.yaml's telemetry:
+	// Telemetry default: the telemetry plugin opt, then store.yaml's telemetry:
 	// block overrides. Metrics and logs default on when telemetry itself is on.
 	telOn, telMetrics, telLogs := r.telemetry, true, true
 	if r.cfg != nil && r.cfg.Telemetry != nil {
@@ -201,6 +165,11 @@ func (r Reader) Enrich(ir *protokit.IR) error {
 			telLogs = *r.cfg.Telemetry.Logs
 		}
 	}
+
+	// Outbox companions are synthesized before the column pass so they are
+	// enriched like any other table, and before index finalization so their
+	// declared index is named and ordered alongside every other one.
+	appendOutboxTables(ir, fx)
 
 	for _, db := range ir.Databases {
 		for _, s := range db.Schemas {
@@ -229,10 +198,10 @@ func (r Reader) Enrich(ir *protokit.IR) error {
 	return nil
 }
 
-// enrichColumn folds orm.v1.column's constraint rendering onto one column:
+// enrichColumn folds store.v1.column's constraint rendering onto one column:
 // unique/index are additive, and a non-empty default_value overrides the AIP enum
 // default protokit may have set.
-func enrichColumn(c *schema.Column, o *ormpbv1.ColumnOptions) {
+func enrichColumn(c *schema.Column, o *storepbv1.ColumnOptions) {
 	if v := o.GetDefaultValue(); v != "" {
 		c.Default = v
 	}
@@ -252,45 +221,18 @@ func boolStr(v bool) string {
 	return "false"
 }
 
-// indexes converts orm.v1's composite index declarations to protokit's neutral
-// form.
-func indexes(defs []*ormpbv1.IndexDef) []*schema.Index {
-	if len(defs) == 0 {
-		return nil
-	}
-	out := make([]*schema.Index, 0, len(defs))
-	for _, d := range defs {
-		out = append(out, &schema.Index{
-			Name: d.GetIndex(), Columns: d.GetColumns(), Unique: d.GetUnique(),
-		})
-	}
-	return out
-}
-
-// idStrategy maps orm.v1.IdStrategy onto protokit's neutral schema.IDStrategy.
-func idStrategy(s ormpbv1.IdStrategy) schema.IDStrategy {
-	switch s {
-	case ormpbv1.IdStrategy_ID_STRATEGY_ULID:
-		return schema.IDULID
-	case ormpbv1.IdStrategy_ID_STRATEGY_UUID:
-		return schema.IDUUID
-	default:
-		return schema.IDUnspecified
-	}
-}
-
-// refAction converts an orm.v1.ReferentialAction to its SQL clause form.
-func refAction(a ormpbv1.ReferentialAction) string {
+// refAction converts a store.v1.ReferentialAction to its SQL clause form.
+func refAction(a storepbv1.ReferentialAction) string {
 	switch a {
-	case ormpbv1.ReferentialAction_REFERENTIAL_ACTION_CASCADE:
+	case storepbv1.ReferentialAction_REFERENTIAL_ACTION_CASCADE:
 		return "CASCADE"
-	case ormpbv1.ReferentialAction_REFERENTIAL_ACTION_RESTRICT:
+	case storepbv1.ReferentialAction_REFERENTIAL_ACTION_RESTRICT:
 		return "RESTRICT"
-	case ormpbv1.ReferentialAction_REFERENTIAL_ACTION_SET_NULL:
+	case storepbv1.ReferentialAction_REFERENTIAL_ACTION_SET_NULL:
 		return "SET NULL"
-	case ormpbv1.ReferentialAction_REFERENTIAL_ACTION_SET_DEFAULT:
+	case storepbv1.ReferentialAction_REFERENTIAL_ACTION_SET_DEFAULT:
 		return "SET DEFAULT"
-	case ormpbv1.ReferentialAction_REFERENTIAL_ACTION_NO_ACTION:
+	case storepbv1.ReferentialAction_REFERENTIAL_ACTION_NO_ACTION:
 		return "NO ACTION"
 	default:
 		return ""
@@ -299,30 +241,35 @@ func refAction(a ormpbv1.ReferentialAction) string {
 
 // --- option accessors (safe empty value when the extension or descriptor is absent) ---
 
-func datasourceOpts(d protoreflect.FileDescriptor) *ormpbv1.DatasourceOptions {
-	if d == nil || !proto.HasExtension(d.Options(), ormpbv1.E_Datasource) {
-		return &ormpbv1.DatasourceOptions{}
-	}
-	return proto.GetExtension(d.Options(), ormpbv1.E_Datasource).(*ormpbv1.DatasourceOptions)
+func hasStoreTable(d protoreflect.MessageDescriptor) bool {
+	return d != nil && proto.HasExtension(d.Options(), storepbv1.E_Table)
 }
 
-func tableOpts(d protoreflect.MessageDescriptor) *ormpbv1.TableOptions {
-	if d == nil || !proto.HasExtension(d.Options(), ormpbv1.E_Table) {
-		return &ormpbv1.TableOptions{}
-	}
-	return proto.GetExtension(d.Options(), ormpbv1.E_Table).(*ormpbv1.TableOptions)
+func hasStoreColumn(d protoreflect.FieldDescriptor) bool {
+	return d != nil && proto.HasExtension(d.Options(), storepbv1.E_Column)
 }
 
-func columnOpts(d protoreflect.FieldDescriptor) *ormpbv1.ColumnOptions {
-	if d == nil || !proto.HasExtension(d.Options(), ormpbv1.E_Column) {
-		return &ormpbv1.ColumnOptions{}
-	}
-	return proto.GetExtension(d.Options(), ormpbv1.E_Column).(*ormpbv1.ColumnOptions)
+func hasStoreQuery(d protoreflect.FieldDescriptor) bool {
+	return d != nil && proto.HasExtension(d.Options(), storepbv1.E_Query)
 }
 
-func queryOpts(d protoreflect.FieldDescriptor) *ormpbv1.QueryOptions {
-	if d == nil || !proto.HasExtension(d.Options(), ormpbv1.E_Query) {
-		return &ormpbv1.QueryOptions{}
+func storeTableOpts(d protoreflect.MessageDescriptor) *storepbv1.TableOptions {
+	if d == nil || !proto.HasExtension(d.Options(), storepbv1.E_Table) {
+		return &storepbv1.TableOptions{}
 	}
-	return proto.GetExtension(d.Options(), ormpbv1.E_Query).(*ormpbv1.QueryOptions)
+	return proto.GetExtension(d.Options(), storepbv1.E_Table).(*storepbv1.TableOptions)
+}
+
+func storeColumnOpts(d protoreflect.FieldDescriptor) *storepbv1.ColumnOptions {
+	if d == nil || !proto.HasExtension(d.Options(), storepbv1.E_Column) {
+		return &storepbv1.ColumnOptions{}
+	}
+	return proto.GetExtension(d.Options(), storepbv1.E_Column).(*storepbv1.ColumnOptions)
+}
+
+func storeQueryOpts(d protoreflect.FieldDescriptor) *storepbv1.QueryOptions {
+	if d == nil || !proto.HasExtension(d.Options(), storepbv1.E_Query) {
+		return &storepbv1.QueryOptions{}
+	}
+	return proto.GetExtension(d.Options(), storepbv1.E_Query).(*storepbv1.QueryOptions)
 }
