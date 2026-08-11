@@ -3,7 +3,7 @@
 -- 	protoc-gen-store (unknown)
 -- 	protoc (unknown)
 --
--- database: mixed_db
+-- database: vocab_db
 -- schemas:  store
 --
 -- Single-file migration: every schema in one transaction. Idempotent — safe to re-apply.
@@ -19,18 +19,16 @@ CREATE SCHEMA IF NOT EXISTS "store";
 -- Tables (foreign keys are added after every table exists, so creation order
 -- never matters — even across schemas or reference cycles).
 
--- Widget sets the table name and timestamps in both vocabularies.
+-- Widget takes its table name and timestamps from protokit.v1.
 CREATE TABLE IF NOT EXISTS "store"."widgets" (
     -- Unique identifier for the record.
     "id"  CHAR(26)  NOT NULL  PRIMARY KEY,
     -- name: IDENTIFIER → PRIMARY KEY.
     "name"  VARCHAR(255)  NOT NULL  UNIQUE,
-    -- label renames the column in both vocabularies; protokit.v1 wins ("label").
-    "label"  VARCHAR(255),
-    -- note carries only storage options, and only in store.v1 — the migrated spelling. Its orm.v1 twin below is on a different field so both paths are exercised in one case.
+    -- label is renamed by protokit.v1 and sized by store.v1 — the two modules annotating one field without either reaching into the other's half.
+    "display_label"  VARCHAR(120),
+    -- note carries storage options only; its column name is the proto field name.
     "note"  TEXT,
-    -- legacy_note is still on orm.v1 storage: the compat fallback must resolve it to the same TEXT column store.v1 would have produced.
-    "legacy_note"  TEXT,
     -- Timestamp when the record was created.
     "created_at"  TIMESTAMPTZ  NOT NULL  DEFAULT now(),
     -- Timestamp when the record was last updated.
@@ -38,12 +36,11 @@ CREATE TABLE IF NOT EXISTS "store"."widgets" (
 );
 
 -- Documentation
-COMMENT ON TABLE "store"."widgets" IS 'Widget sets the table name and timestamps in both vocabularies.';
+COMMENT ON TABLE "store"."widgets" IS 'Widget takes its table name and timestamps from protokit.v1.';
 COMMENT ON COLUMN "store"."widgets"."id" IS 'Unique identifier for the record.';
 COMMENT ON COLUMN "store"."widgets"."name" IS 'name: IDENTIFIER → PRIMARY KEY.';
-COMMENT ON COLUMN "store"."widgets"."label" IS 'label renames the column in both vocabularies; protokit.v1 wins ("label").';
-COMMENT ON COLUMN "store"."widgets"."note" IS 'note carries only storage options, and only in store.v1 — the migrated spelling. Its orm.v1 twin below is on a different field so both paths are exercised in one case.';
-COMMENT ON COLUMN "store"."widgets"."legacy_note" IS 'legacy_note is still on orm.v1 storage: the compat fallback must resolve it to the same TEXT column store.v1 would have produced.';
+COMMENT ON COLUMN "store"."widgets"."display_label" IS 'label is renamed by protokit.v1 and sized by store.v1 — the two modules annotating one field without either reaching into the other''s half.';
+COMMENT ON COLUMN "store"."widgets"."note" IS 'note carries storage options only; its column name is the proto field name.';
 COMMENT ON COLUMN "store"."widgets"."created_at" IS 'Timestamp when the record was created.';
 COMMENT ON COLUMN "store"."widgets"."updated_at" IS 'Timestamp when the record was last updated.';
 

@@ -148,11 +148,9 @@ func main() {
 		// buf selects exactly one target via opt: [target=...] and owns the output dir.
 		reader := backend.New(cfg, *goModule, *stores, *telemetry, *converters, *filters).
 			WithRepositoryModules(*gormModule, *graphqlModule)
-		// The compat reader keeps schemas written against orm.v1 generating for one
-		// major; protokit warns once per deprecated option per build.
 		reg := wire.Registry(
 			protokit.Options{Target: *target, Strict: *strict, Version: v},
-			[]protokit.FacetReader{reader, backend.NewCompat(), telemetrygen.NewReader()},
+			[]protokit.FacetReader{reader, telemetrygen.NewReader()},
 			backend.NewLayout(cfg))
 
 		tgt, ok := reg.Targets[*target]

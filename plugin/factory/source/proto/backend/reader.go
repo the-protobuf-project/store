@@ -1,17 +1,14 @@
-// Package backend is this plugin's bridge to protokit: the readers that bring
-// its annotation vocabularies into protokit's IR, and the layout policy resolved
-// from store.yaml.
+// Package backend is this plugin's bridge to protokit: the reader that brings
+// store.v1 into protokit's IR, and the layout policy resolved from store.yaml.
 //
 // protokit v1.2.0 replaced the old schema.Backend — which conflated reading a
 // generator's annotations, deciding neutral names, and applying a config file —
-// with three separate seams, and this package supplies all three:
+// with separate seams, and this package supplies them:
 //
 //   - [Reader] is a schema.FacetReader over store.v1: it attaches the physical
 //     storage options to each node as a facet (see factory/facets). It is also a
 //     schema.StructureReader, for the narrow set of options protokit must act on
 //     *while* building, and the run's schema.Enricher.
-//   - [Compat] is a schema.FacetReader over the deprecated orm.v1, and a
-//     schema.DeprecatedStructure so protokit warns once per option per build.
 //   - [Layout] is a schema.LayoutResolver: the database/schema naming policy
 //     that comes from store.yaml rather than from the protos.
 //
@@ -21,8 +18,6 @@
 package backend
 
 import (
-	"os"
-
 	"github.com/the-protobuf-project/protokit"
 	"github.com/the-protobuf-project/protokit/schema"
 	"github.com/the-protobuf-project/store/plugin/factory/facets"
@@ -147,23 +142,14 @@ func (Reader) ReadColumn(d protoreflect.FieldDescriptor) schema.ColumnStructure 
 // unique/index constraints and default expressions, plus the per-database knobs
 // the gorm target reads back off db.Opts.
 //
-// It runs after facet collection, so it reads through [facets.Set] — which
-// resolves store.v1 first and falls back to the deprecated orm.v1 — rather than
-// off the descriptors. That is what lets a schema written in either vocabulary
-// enrich identically, and lets a synthesized column resolve at all.
-//
-// This is the run's only Enricher: the compat reader deliberately is not one, so
-// the knobs are stamped once regardless of which vocabularies are in play.
+// It runs after facet collection, so it reads through [facets.Set] rather than
+// off the descriptors — which is what lets a synthesized column, which has no
+// descriptor, resolve at all.
 //
 // A column's SQL type is not folded in: it is not part of the neutral IR, and
 // types.SQLForColumn resolves it from the same facet at render time.
 func (r Reader) Enrich(ir *protokit.IR) error {
 	fx := facets.New(ir)
-
-	// The storage half of the orm.v1 deprecation. protokit raises the structural
-	// half itself; it cannot see inside a facet, so this is the only place that
-	// knows a column still spells its type the old way.
-	WarnDeprecatedStorage(ir, os.Stderr)
 
 	// Telemetry default: the telemetry plugin opt, then store.yaml's telemetry:
 	// block overrides. Metrics and logs default on when telemetry itself is on.

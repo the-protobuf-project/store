@@ -605,9 +605,9 @@ import another's options.
 `store.v1` is **this plugin's own**. It says how a column is physically stored
 and queried, which no other plugin needs to agree with.
 
-> **Migrating from `orm.v1`.** The old single vocabulary still generates and will
-> until v2, warning once per option per build. Field numbers and semantics are
-> unchanged — only the spelling moved:
+> **`orm.v1` was removed in v2.** The single pre-split vocabulary no longer
+> exists — not deprecated, gone: a proto that imports `orm/v1/annotations.proto`
+> will not compile. Move each option to the module that now owns it:
 >
 > | Was | Is now |
 > | --- | --- |
@@ -617,9 +617,8 @@ and queried, which no other plugin needs to agree with.
 > | `(orm.v1.column)` — `type`, `max_length`, `precision`, `scale`, `default_value`, `unique`, `index`, `on_delete`, `on_update` | `(store.v1.column)` |
 > | `(orm.v1.query)` | `(store.v1.query)` |
 >
-> A field may carry both during migration; `protokit.v1` wins and the ignored
-> `orm.v1` value is reported. Make the migration mandatory with
-> `--strict lint:error`.
+> Field semantics are unchanged, so the migration is a rename: pin
+> `protoc-gen-store` v1 while you do it, then upgrade.
 
 ### `(protokit.v1.datasource)` — file level
 

@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+// Package vocabularies.v1 pins the division of labour between the two
+// annotation modules on the same nodes.
+//
+// protokit.v1 decides what things are *named* — the database, the schema, the
+// table, the column. protokit reads it directly, so every plugin built on it
+// derives those same names. store.v1 decides how a column is *stored*, which is
+// this plugin's business alone.
+//
+// The golden output is the assertion: names come from protokit.v1, storage from
+// store.v1, and neither module silently answers for the other.
+package vocabularies.v1;
+
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "protokit/v1/annotations.proto";
+import "store/v1/annotations.proto";
+
+option java_multiple_files = true;
+option java_outer_classname = "VocabulariesProto";
+option java_package = "com.vocabularies.v1";
+// Naming is protokit.v1's: the output tree is vocab_db/store.
+option (protokit.v1.datasource) = {
+  database: "vocab_db"
+  provider: "postgres"
+  schema: "store"
+};
+
+// Widget takes its table name and timestamps from protokit.v1.
+message Widget {
+  option (google.api.resource) = {
+    type: "vocabularies.v1/Widget"
+    pattern: "widgets/{widget}"
+    singular: "widget"
+    plural: "widgets"
+  };
+  option (protokit.v1.table) = {
+    table: "widgets"
+    timestamps: true
+  };
+
+  // name: IDENTIFIER → PRIMARY KEY.
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  // label is renamed by protokit.v1 and sized by store.v1 — the two modules
+  // annotating one field without either reaching into the other's half.
+  string label = 2 [
+    (protokit.v1.column) = {column: "display_label"},
+    (store.v1.column) = {max_length: 120}
+  ];
+
+  // note carries storage options only; its column name is the proto field name.
+  string note = 3 [(store.v1.column) = {type: "TEXT"}];
+
+  // internal is excluded by protokit.v1: existence is structure, not storage.
+  string internal = 4 [(protokit.v1.column) = {skip: true}];
+}

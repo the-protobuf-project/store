@@ -26,10 +26,6 @@ func TestStrictMode(t *testing.T) {
 		{"unresolved_fk", "testdata/strict/unresolved_fk", "ref", "Ghost"},
 		{"bad_index", "testdata/strict/bad_index", "index", "nonexistent_column"},
 		{"lint", "testdata/strict/lint", "lint", "disagrees with package"},
-		// A deprecated vocabulary is a lint problem like any other: generation
-		// succeeds by default (that is the compatibility promise) but a team can
-		// make the migration mandatory with --strict lint:error.
-		{"deprecated", "testdata/strict/deprecated", "lint", "use protokit.v1.table.timestamps instead"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

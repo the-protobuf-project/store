@@ -93,47 +93,10 @@ homebrew_casks:
             system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/protoc-gen-store"]
           end
 
-  # The pre-rename cask token, kept for one major so `brew upgrade` keeps working
-  # for anyone who installed protoc-gen-orm. goreleaser's cask schema has no alias
-  # field, so this is a second cask over the *same* archives — the checksums are
-  # filled in from the same build, and there is nothing to keep in step by hand.
-  # It installs the renamed binary, because that is what the archive contains.
-  # Delete this entry when orm.v1 goes.
-  - name: protoc-gen-orm
-    repository:
-      owner: the-protobuf-project
-      name: homebrew-tap
-      token: '{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}'
-    directory: Casks
-    homepage: 'https://github.com/the-protobuf-project/store'
-    description: 'Deprecated alias for protoc-gen-store — install that instead'
-    ids:
-      - protoc-gen-store-archive
-    binaries:
-      - protoc-gen-store
-    url:
-      verified: 'github.com/the-protobuf-project/store/'
-    # Installing both would fight over the same binary in the same prefix.
-    conflicts:
-      - cask: protoc-gen-store
-    caveats: |
-      protoc-gen-orm has been renamed to protoc-gen-store. This cask is an alias
-      kept for one major release and installs the protoc-gen-store binary.
-
-      Switch with:
-        brew uninstall --cask protoc-gen-orm
-        brew install the-protobuf-project/tap/protoc-gen-store
-    hooks:
-      post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/protoc-gen-store"]
-          end
-
 release:
   github:
     owner: the-protobuf-project
-    name: orm
+    name: store
   draft: false
   prerelease: auto
   name_template: 'v{{.Version}}'

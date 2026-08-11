@@ -8,7 +8,7 @@ version: v2
 # it's published as part of buf.build/the-protobuf-project/opentelementry (see deps:
 # below) and resolved like any other BSR dependency. The temporary
 # .telemetry-v1-workspace symlink workaround this repo used before that module was
-# published is gone; orm/go.mod's `replace` for the Go-side opentelementry-go module
+# published is gone; store/go.mod's `replace` for the Go-side opentelementry-go module
 # is unrelated to this and still applies until that module is published too.
 #
 # Only protobuf/ has a BSR name, so publish with:
@@ -19,7 +19,7 @@ modules:
     name: buf.build/the-protobuf-project/store
 
   - path: examples/proto
-    # examples/proto can import orm options and googleapis because they
+    # examples/proto can import store options and googleapis because they
     # share this workspace; no separate buf dep update needed during development.
 
 deps:
@@ -31,7 +31,7 @@ lint:
   use:
     - STANDARD
   except:
-    - PACKAGE_VERSION_SUFFIX # orm.v1 is intentionally version-suffixed
+    - PACKAGE_VERSION_SUFFIX # store.v1 is intentionally version-suffixed
 
 breaking:
   use:

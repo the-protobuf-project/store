@@ -41,7 +41,7 @@ var defaultTargets = []string{"gorm", "prisma", "sql"}
 // They still need the reader — their fixtures declare provider and indexes
 // through orm.v1, and a run without it would not see them.
 func ormPlugin() protokit.Plugin {
-	return wire.Plugin([]protokit.FacetReader{backend.New(nil, "", false, false, false, false), backend.NewCompat(), telemetrygen.NewReader()}, nil)
+	return wire.Plugin([]protokit.FacetReader{backend.New(nil, "", false, false, false, false), telemetrygen.NewReader()}, nil)
 }
 
 // ormCasePlugin is ormPlugin for a golden case directory.
@@ -60,7 +60,7 @@ func ormCasePlugin(dir string) protokit.Plugin {
 	telemetry := fileExists(filepath.Join(dir, "telemetry"))
 	reader := backend.New(cfg, "example.com/test/gen", stores, telemetry, converters, filters).
 		WithRepositoryModules(optFile(dir, "gorm_module"), optFile(dir, "graphql_module"))
-	return wire.Plugin([]protokit.FacetReader{reader, backend.NewCompat(), telemetrygen.NewReader()}, backend.NewLayout(cfg))
+	return wire.Plugin([]protokit.FacetReader{reader, telemetrygen.NewReader()}, backend.NewLayout(cfg))
 }
 
 // optFile reads a valued marker file (e.g. gorm_module holding a module path),
