@@ -12,6 +12,7 @@ import (
 	"github.com/the-protobuf-project/protokit/header"
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
+	"github.com/the-protobuf-project/store/plugin/factory/provenance"
 )
 
 // importView is one per-schema models package the aggregator imports. Alias is
@@ -58,7 +59,7 @@ func aggregateView(db *schema.Database) map[string]any {
 	}
 
 	return map[string]any{
-		"Header": header.Render("//", header.Info{
+		"Header": provenance.Render("//", header.Info{
 			PluginVersion: db.PluginVersion,
 			ProtocVersion: db.ProtocVersion,
 			Database:      db.Name,

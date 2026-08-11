@@ -7,6 +7,8 @@
 // database: shop_db
 // schemas:  shop
 //
+// annotations: protokit.v1 (unknown), store.v1 (unknown)
+//
 // store — https://github.com/the-protobuf-project/store
 
 /// Order opts into an outbox. Its ULID primary key is what aggregate_id is typed against, so the companion's foreign reference matches the key strategy rather than assuming a string.

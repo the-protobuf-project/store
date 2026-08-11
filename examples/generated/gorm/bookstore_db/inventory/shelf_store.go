@@ -7,6 +7,9 @@
 // database: bookstore_db
 // schema:   inventory
 //
+// annotations: protokit.v1 v1.2.0, store.v1 dev
+// runtime:     gorm.io/gorm
+//
 // store — https://github.com/the-protobuf-project/store
 
 package inventory

@@ -19,6 +19,7 @@ import (
 	"github.com/the-protobuf-project/protokit/header"
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
+	"github.com/the-protobuf-project/store/plugin/factory/provenance"
 )
 
 // opentelementryModule is the import path of the first-party observability SDK
@@ -81,14 +82,14 @@ func telemetryAttrName(t *schema.Table, col *schema.Column, override string) str
 // package: the SDK adapter (with stores) and the gorm query plugin.
 func telemetryPkgView(db *schema.Database) map[string]any {
 	return map[string]any{
-		"Header": header.Render("//", header.Info{
+		"Header": provenance.Render("//", header.Info{
 			PluginVersion: db.PluginVersion,
 			ProtocVersion: db.ProtocVersion,
 			Database:      db.Name,
 			SchemaLabel:   "package",
 			Schema:        telemetryPkg,
 			Notes:         []string{"First-party opentelementry adapter: the stores' gormx.Telemetry and the SQL-level gorm plugin."},
-		}),
+		}, opentelementryModule),
 		"Package":              telemetryPkg,
 		"Stores":               dbStores(db),
 		"Metrics":              dbTelemetryMetrics(db),

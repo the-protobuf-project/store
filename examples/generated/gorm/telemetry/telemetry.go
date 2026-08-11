@@ -7,6 +7,8 @@
 // package:  telemetry
 //
 // First-party opentelementry adapter: the stores' gormx.Telemetry and the SQL-level gorm plugin.
+// annotations: protokit.v1 v1.2.0, store.v1 dev
+// runtime:     github.com/the-protobuf-project/opentelementry/opentelementry-go
 //
 // store — https://github.com/the-protobuf-project/store
 

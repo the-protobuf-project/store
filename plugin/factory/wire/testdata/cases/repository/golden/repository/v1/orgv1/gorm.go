@@ -8,6 +8,7 @@
 // schema:   org_v1
 //
 // GORM adapters composing the generated models, stores, converters, and filterx specs.
+// annotations: protokit.v1 (unknown), store.v1 (unknown)
 //
 // store — https://github.com/the-protobuf-project/store
 

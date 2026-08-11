@@ -7,6 +7,8 @@
 // database: wkt_db
 // schema:   kitchen
 //
+// annotations: protokit.v1 (unknown), store.v1 (unknown)
+//
 // store — https://github.com/the-protobuf-project/store
 
 package kitchen

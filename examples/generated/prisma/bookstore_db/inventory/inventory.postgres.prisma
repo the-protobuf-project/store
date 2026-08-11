@@ -7,6 +7,8 @@
 // database: bookstore_db
 // schemas:  inventory
 //
+// annotations: protokit.v1 v1.2.0, store.v1 dev
+//
 // store — https://github.com/the-protobuf-project/store
 
 /// Shelf groups books physically. The resource's `plural` fixes the irregular plural ("shelfs" → "shelves") — no table name override needed.

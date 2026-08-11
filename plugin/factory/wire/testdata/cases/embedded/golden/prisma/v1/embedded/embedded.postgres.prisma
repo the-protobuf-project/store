@@ -7,6 +7,8 @@
 // database: v1
 // schemas:  embedded_v1
 //
+// annotations: protokit.v1 (unknown), store.v1 (unknown)
+//
 // store — https://github.com/the-protobuf-project/store
 
 /// Event exercises nested-message normalization: a singular message field becomes a belongs-to relation, a repeated message field becomes a has-many, while well-known and map fields stay scalar / JSONB.

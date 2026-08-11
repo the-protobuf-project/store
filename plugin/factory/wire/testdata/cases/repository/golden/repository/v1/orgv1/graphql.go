@@ -8,6 +8,7 @@
 // schema:   org_v1
 //
 // GraphQL adapters over the generated client — same repository surface as the gorm adapters.
+// annotations: protokit.v1 (unknown), store.v1 (unknown)
 //
 // store — https://github.com/the-protobuf-project/store
 

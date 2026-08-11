@@ -7,6 +7,9 @@
 // database: v1
 // schema:   venue_v1
 //
+// annotations: protokit.v1 (unknown), store.v1 (unknown)
+// runtime:     gorm.io/gorm
+//
 // store — https://github.com/the-protobuf-project/store
 
 package venuev1

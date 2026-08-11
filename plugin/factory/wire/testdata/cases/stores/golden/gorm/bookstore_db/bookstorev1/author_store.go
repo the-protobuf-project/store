@@ -7,6 +7,9 @@
 // database: bookstore_db
 // schema:   bookstore_v1
 //
+// annotations: protokit.v1 (unknown), store.v1 (unknown)
+// runtime:     gorm.io/gorm
+//
 // store — https://github.com/the-protobuf-project/store
 
 package bookstorev1

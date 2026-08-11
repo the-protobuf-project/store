@@ -7,6 +7,7 @@
 // schemas:  shop_cart_v1, shop_order_v1
 //
 // Prisma 7 configuration; connection URLs are environment-driven.
+// annotations: protokit.v1 (unknown), store.v1 (unknown)
 //
 // store — https://github.com/the-protobuf-project/store
 

@@ -12,6 +12,7 @@ import (
 	"github.com/the-protobuf-project/protokit/header"
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
+	"github.com/the-protobuf-project/store/plugin/factory/provenance"
 )
 
 // resourceView is the template data for one resource's interface + hooks.
@@ -74,7 +75,7 @@ func schemaView(pb *pbIndex, db *schema.Database, s *schema.Schema, resources ma
 		})
 	}
 	return &schemaPkgView{
-		Header: header.Render("//", header.Info{
+		Header: provenance.Render("//", header.Info{
 			PluginVersion: db.PluginVersion,
 			ProtocVersion: db.ProtocVersion,
 			Source:        strings.Join(s.SourceProtos(), ", "),

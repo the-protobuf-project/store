@@ -8,6 +8,7 @@
 // schema:   org_v1
 //
 // Proto-facing repository interfaces; adapters compose the generated gorm and GraphQL outputs.
+// annotations: protokit.v1 (unknown), store.v1 (unknown)
 //
 // store — https://github.com/the-protobuf-project/store
 

@@ -7,6 +7,8 @@
 // database: reserved_db
 // schema:   public
 //
+// annotations: protokit.v1 (unknown), store.v1 (unknown)
+//
 // store — https://github.com/the-protobuf-project/store
 
 package public

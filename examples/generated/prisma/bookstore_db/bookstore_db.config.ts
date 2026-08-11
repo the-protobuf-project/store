@@ -7,6 +7,7 @@
 // schemas:  bookstore_v1, inventory
 //
 // Prisma 7 configuration; connection URLs are environment-driven.
+// annotations: protokit.v1 v1.2.0, store.v1 dev
 //
 // store — https://github.com/the-protobuf-project/store
 

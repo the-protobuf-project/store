@@ -8,6 +8,7 @@
 // schema:   org_v1
 //
 // Proto↔row/input converters for the GraphQL adapters, with the shared scalar codecs.
+// annotations: protokit.v1 (unknown), store.v1 (unknown)
 //
 // store — https://github.com/the-protobuf-project/store
 

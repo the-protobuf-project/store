@@ -7,6 +7,8 @@
 // database: fleet
 // schema:   fleet_tracking_device
 //
+// annotations: protokit.v1 (unknown), store.v1 (unknown)
+//
 // store — https://github.com/the-protobuf-project/store
 
 package fleettrackingdevice

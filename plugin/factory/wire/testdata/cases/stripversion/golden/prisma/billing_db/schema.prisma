@@ -7,6 +7,7 @@
 // schemas:  acme_billing
 //
 // Connection URLs live in billing_db.config.ts (Prisma 7 convention).
+// annotations: protokit.v1 (unknown), store.v1 (unknown)
 //
 // store — https://github.com/the-protobuf-project/store
 

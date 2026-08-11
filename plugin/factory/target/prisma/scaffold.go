@@ -15,6 +15,7 @@ import (
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
 	"github.com/the-protobuf-project/protokit/templates"
+	"github.com/the-protobuf-project/store/plugin/factory/provenance"
 	"github.com/the-protobuf-project/store/plugin/factory/target/types"
 )
 
@@ -27,7 +28,7 @@ func schemaFileView(db *schema.Database, provider types.Provider) map[string]any
 		quoted = append(quoted, `"`+s.Name+`"`)
 	}
 	return map[string]any{
-		"Header": header.Render("//", header.Info{
+		"Header": provenance.Render("//", header.Info{
 			PluginVersion: db.PluginVersion,
 			ProtocVersion: db.ProtocVersion,
 			Database:      db.Name,
@@ -53,7 +54,7 @@ func configView(db *schema.Database) map[string]any {
 		names = append(names, s.Name)
 	}
 	return map[string]any{
-		"Header": header.Render("//", header.Info{
+		"Header": provenance.Render("//", header.Info{
 			PluginVersion: db.PluginVersion,
 			ProtocVersion: db.ProtocVersion,
 			Database:      db.Name,

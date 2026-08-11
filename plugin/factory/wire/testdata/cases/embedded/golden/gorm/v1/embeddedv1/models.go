@@ -7,6 +7,8 @@
 // database: v1
 // schema:   embedded_v1
 //
+// annotations: protokit.v1 (unknown), store.v1 (unknown)
+//
 // store — https://github.com/the-protobuf-project/store
 
 package embeddedv1

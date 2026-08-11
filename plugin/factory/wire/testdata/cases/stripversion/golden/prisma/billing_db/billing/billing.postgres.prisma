@@ -7,6 +7,8 @@
 // database: billing_db
 // schemas:  acme_billing
 //
+// annotations: protokit.v1 (unknown), store.v1 (unknown)
+//
 // store — https://github.com/the-protobuf-project/store
 
 /// Invoice lands in schema "acme_billing", not "acme_billing_v1": the store.yaml strip_version option flattens the trailing API version out of the resource-type-derived schema name.

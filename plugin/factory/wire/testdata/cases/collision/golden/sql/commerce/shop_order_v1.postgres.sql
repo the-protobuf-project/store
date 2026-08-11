@@ -7,6 +7,8 @@
 -- database: commerce
 -- schema:   shop_order_v1
 --
+-- annotations: protokit.v1 (unknown), store.v1 (unknown)
+--
 -- store — https://github.com/the-protobuf-project/store
 
 CREATE SCHEMA IF NOT EXISTS "shop_order_v1";

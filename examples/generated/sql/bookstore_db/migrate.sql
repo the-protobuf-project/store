@@ -7,6 +7,7 @@
 -- schemas:  bookstore_v1, inventory
 --
 -- Single-file migration: every schema in one transaction. Idempotent — safe to re-apply.
+-- annotations: protokit.v1 v1.2.0, store.v1 dev
 --
 -- store — https://github.com/the-protobuf-project/store
 

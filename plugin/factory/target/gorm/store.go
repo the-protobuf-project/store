@@ -20,8 +20,13 @@ import (
 	"github.com/the-protobuf-project/protokit/header"
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
+	"github.com/the-protobuf-project/store/plugin/factory/provenance"
 	"github.com/the-protobuf-project/store/plugin/factory/target/types"
 )
+
+// gormRuntimeModule is the module the generated stores import at run time. Its
+// version is the consumer's to resolve, so the banner names the module only.
+const gormRuntimeModule = "gorm.io/gorm"
 
 // gormxImportPath is the import path of the shared gormx runtime package, emitted
 // at <go_module>/gormx. Stores import its ListOptions and Store interface.
@@ -43,14 +48,14 @@ type finderView struct {
 // bodies are static.
 func gormxView(db *schema.Database) map[string]any {
 	return map[string]any{
-		"Header": header.Render("//", header.Info{
+		"Header": provenance.Render("//", header.Info{
 			PluginVersion: db.PluginVersion,
 			ProtocVersion: db.ProtocVersion,
 			Database:      db.Name,
 			SchemaLabel:   "package",
 			Schema:        gormxPkg,
 			Notes:         []string{"Shared GORM runtime: ListOptions, the generic Store interface, the GenericStore engine, and EnsureSchemas."},
-		}),
+		}, gormRuntimeModule),
 		"Package": gormxPkg,
 	}
 }
@@ -162,11 +167,11 @@ func baseGoType(col *schema.Column, typeOf types.TypeOf) string {
 // storeHeader renders the generated-file banner shared by every store file in a
 // schema package, matching the models.go banner.
 func storeHeader(db *schema.Database, s *schema.Schema) string {
-	return header.Render("//", header.Info{
+	return provenance.Render("//", header.Info{
 		PluginVersion: db.PluginVersion,
 		ProtocVersion: db.ProtocVersion,
 		Source:        strings.Join(s.SourceProtos(), ", "),
 		Database:      db.Name,
 		Schema:        s.Name,
-	})
+	}, gormRuntimeModule)
 }

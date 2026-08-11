@@ -7,6 +7,8 @@
 // database: fleet
 // schemas:  fleet_tracking_device
 //
+// annotations: protokit.v1 (unknown), store.v1 (unknown)
+//
 // store — https://github.com/the-protobuf-project/store
 
 /// Tracker is a fleet device resource. The layout config routes it to the "fleet" database, schema "fleet_tracking_device".

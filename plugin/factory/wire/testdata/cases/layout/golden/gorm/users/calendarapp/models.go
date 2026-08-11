@@ -7,6 +7,8 @@
 // database: users
 // schema:   calendar_app
 //
+// annotations: protokit.v1 (unknown), store.v1 (unknown)
+//
 // store — https://github.com/the-protobuf-project/store
 
 package calendarapp
