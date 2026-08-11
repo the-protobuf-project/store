@@ -7,7 +7,7 @@
 // database: bookstore_db
 // schemas:  inventory
 //
-// orm — https://github.com/the-protobuf-project/store
+// store — https://github.com/the-protobuf-project/store
 
 /// Shelf groups books physically. The resource's `plural` fixes the irregular plural ("shelfs" → "shelves") — no table name override needed.
 model Shelf {

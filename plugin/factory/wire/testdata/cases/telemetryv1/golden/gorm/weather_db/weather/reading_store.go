@@ -19,6 +19,34 @@ import (
 	"gorm.io/gorm"
 )
 
+// ReadingStoreIface is the full data-access surface of Reading: everything
+// ReadingStore does, as an interface.
+//
+// It exists so a decorator — caching, tracing, retries, a test double — can be
+// written in its own package against this contract, without that package needing
+// to edit anything in this tree. Embed it, override the methods you care about,
+// and delegate the rest:
+//
+//	type cachedReadingStore struct {
+//		ReadingStoreIface
+//		cache Cache
+//	}
+//
+// Construction is deliberately absent. NewReadingStore returns the concrete
+// *ReadingStore, and WithTelemetry is a chainable setter that also returns it, so
+// a caller keeps the full type at the point of wiring and narrows to this
+// interface at the point of use — which is the direction that stays useful when
+// a decorator is added later.
+type ReadingStoreIface interface {
+	Create(ctx context.Context, m *Reading) error
+	List(ctx context.Context, opts gormx.ListOptions) ([]Reading, error)
+	Count(ctx context.Context, opts gormx.ListOptions) (int64, error)
+	Update(ctx context.Context, m *Reading) error
+	GetByID(ctx context.Context, id string) (*Reading, error)
+	DeleteByID(ctx context.Context, id string) error
+	GetByName(ctx context.Context, v string) (*Reading, error)
+}
+
 // ReadingStore provides typed CRUD access to Reading records.
 // Reading exercises the telemetry emitter's default path: instrumented store methods with a default span prefix, and labeled fields carrying span attribute struct tags (one default name, one explicit override). Annotated with telemetry.v1's own (telemetry.v1.telemetry) / (telemetry.v1.telemetry_field) options — orm.v1 carries no telemetry extensions of its own.
 type ReadingStore struct {
@@ -27,6 +55,11 @@ type ReadingStore struct {
 	// adapter: NewReadingStore(db).WithTelemetry(telemetry.New(o)).
 	Telemetry gormx.Telemetry
 }
+
+// Compile-time proof that ReadingStore implements its own interface. Without it a
+// signature could drift from ReadingStoreIface and only break in whichever downstream
+// package decorates it.
+var _ ReadingStoreIface = (*ReadingStore)(nil)
 
 // Compile-time proof that ReadingStore satisfies the generic gormx.Store, so the
 // generic engine can drive it alongside the typed finders below.

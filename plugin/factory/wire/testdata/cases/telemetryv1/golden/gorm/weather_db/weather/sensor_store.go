@@ -18,6 +18,34 @@ import (
 	"gorm.io/gorm"
 )
 
+// SensorStoreIface is the full data-access surface of Sensor: everything
+// SensorStore does, as an interface.
+//
+// It exists so a decorator — caching, tracing, retries, a test double — can be
+// written in its own package against this contract, without that package needing
+// to edit anything in this tree. Embed it, override the methods you care about,
+// and delegate the rest:
+//
+//	type cachedSensorStore struct {
+//		SensorStoreIface
+//		cache Cache
+//	}
+//
+// Construction is deliberately absent. NewSensorStore returns the concrete
+// *SensorStore, and WithTelemetry is a chainable setter that also returns it, so
+// a caller keeps the full type at the point of wiring and narrows to this
+// interface at the point of use — which is the direction that stays useful when
+// a decorator is added later.
+type SensorStoreIface interface {
+	Create(ctx context.Context, m *Sensor) error
+	List(ctx context.Context, opts gormx.ListOptions) ([]Sensor, error)
+	Count(ctx context.Context, opts gormx.ListOptions) (int64, error)
+	Update(ctx context.Context, m *Sensor) error
+	GetByID(ctx context.Context, id string) (*Sensor, error)
+	DeleteByID(ctx context.Context, id string) error
+	GetByName(ctx context.Context, v string) (*Sensor, error)
+}
+
 // SensorStore provides typed CRUD access to Sensor records.
 // Sensor overrides the span prefix and disables its op metrics, keeping spans only.
 type SensorStore struct {
@@ -26,6 +54,11 @@ type SensorStore struct {
 	// adapter: NewSensorStore(db).WithTelemetry(telemetry.New(o)).
 	Telemetry gormx.Telemetry
 }
+
+// Compile-time proof that SensorStore implements its own interface. Without it a
+// signature could drift from SensorStoreIface and only break in whichever downstream
+// package decorates it.
+var _ SensorStoreIface = (*SensorStore)(nil)
 
 // Compile-time proof that SensorStore satisfies the generic gormx.Store, so the
 // generic engine can drive it alongside the typed finders below.

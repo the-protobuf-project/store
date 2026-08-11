@@ -8,7 +8,7 @@
 --
 -- Single-file migration: every schema in one transaction. Idempotent — safe to re-apply.
 --
--- orm — https://github.com/the-protobuf-project/store
+-- store — https://github.com/the-protobuf-project/store
 
 BEGIN;
 

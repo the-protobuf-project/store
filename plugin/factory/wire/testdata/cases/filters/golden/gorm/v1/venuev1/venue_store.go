@@ -19,6 +19,35 @@ import (
 	"gorm.io/gorm"
 )
 
+// VenueStoreIface is the full data-access surface of Venue: everything
+// VenueStore does, as an interface.
+//
+// It exists so a decorator — caching, tracing, retries, a test double — can be
+// written in its own package against this contract, without that package needing
+// to edit anything in this tree. Embed it, override the methods you care about,
+// and delegate the rest:
+//
+//	type cachedVenueStore struct {
+//		VenueStoreIface
+//		cache Cache
+//	}
+//
+// Construction is deliberately absent. NewVenueStore returns the concrete
+// *VenueStore, and WithTelemetry is a chainable setter that also returns it, so
+// a caller keeps the full type at the point of wiring and narrows to this
+// interface at the point of use — which is the direction that stays useful when
+// a decorator is added later.
+type VenueStoreIface interface {
+	Create(ctx context.Context, m *Venue) error
+	List(ctx context.Context, opts gormx.ListOptions) ([]Venue, error)
+	Count(ctx context.Context, opts gormx.ListOptions) (int64, error)
+	Update(ctx context.Context, m *Venue) error
+	GetByID(ctx context.Context, id string) (*Venue, error)
+	DeleteByID(ctx context.Context, id string) error
+	GetByName(ctx context.Context, v string) (*Venue, error)
+	ListByOperatorID(ctx context.Context, id string, opts gormx.ListOptions) ([]Venue, error)
+}
+
 // VenueStore provides typed CRUD access to Venue records.
 // Venue exercises the filters emitter: type-derived kinds for every scalar shape (text, enum, date, timestamp, int, bool, tags), the search opt-in, the filterable/sortable opt-outs, a resource reference (equality-only Ref kind), and shapes that are always excluded (JSONB attributes, the synthesized key).
 type VenueStore struct {
@@ -27,6 +56,11 @@ type VenueStore struct {
 	// adapter: NewVenueStore(db).WithTelemetry(telemetry.New(o)).
 	Telemetry gormx.Telemetry
 }
+
+// Compile-time proof that VenueStore implements its own interface. Without it a
+// signature could drift from VenueStoreIface and only break in whichever downstream
+// package decorates it.
+var _ VenueStoreIface = (*VenueStore)(nil)
 
 // Compile-time proof that VenueStore satisfies the generic gormx.Store, so the
 // generic engine can drive it alongside the typed finders below.

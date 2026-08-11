@@ -7,7 +7,7 @@
 -- database: bookstore_db
 -- schema:   bookstore_v1
 --
--- orm — https://github.com/the-protobuf-project/store
+-- store — https://github.com/the-protobuf-project/store
 
 CREATE SCHEMA IF NOT EXISTS "bookstore_v1";
 

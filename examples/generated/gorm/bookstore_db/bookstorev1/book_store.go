@@ -7,7 +7,7 @@
 // database: bookstore_db
 // schema:   bookstore_v1
 //
-// orm — https://github.com/the-protobuf-project/store
+// store — https://github.com/the-protobuf-project/store
 
 package bookstorev1
 
@@ -19,6 +19,36 @@ import (
 	"gorm.io/gorm"
 )
 
+// BookStoreIface is the full data-access surface of Book: everything
+// BookStore does, as an interface.
+//
+// It exists so a decorator — caching, tracing, retries, a test double — can be
+// written in its own package against this contract, without that package needing
+// to edit anything in this tree. Embed it, override the methods you care about,
+// and delegate the rest:
+//
+//	type cachedBookStore struct {
+//		BookStoreIface
+//		cache Cache
+//	}
+//
+// Construction is deliberately absent. NewBookStore returns the concrete
+// *BookStore, and WithTelemetry is a chainable setter that also returns it, so
+// a caller keeps the full type at the point of wiring and narrows to this
+// interface at the point of use — which is the direction that stays useful when
+// a decorator is added later.
+type BookStoreIface interface {
+	Create(ctx context.Context, m *Book) error
+	List(ctx context.Context, opts gormx.ListOptions) ([]Book, error)
+	Count(ctx context.Context, opts gormx.ListOptions) (int64, error)
+	Update(ctx context.Context, m *Book) error
+	GetByID(ctx context.Context, id string) (*Book, error)
+	DeleteByID(ctx context.Context, id string) error
+	GetByName(ctx context.Context, v string) (*Book, error)
+	GetByISBN(ctx context.Context, v string) (*Book, error)
+	ListByAuthorID(ctx context.Context, id string, opts gormx.ListOptions) ([]Book, error)
+}
+
 // BookStore provides typed CRUD access to Book records.
 // Book is a resource nested under Author. Inferred table: bookstore_v1.books.
 type BookStore struct {
@@ -27,6 +57,11 @@ type BookStore struct {
 	// adapter: NewBookStore(db).WithTelemetry(telemetry.New(o)).
 	Telemetry gormx.Telemetry
 }
+
+// Compile-time proof that BookStore implements its own interface. Without it a
+// signature could drift from BookStoreIface and only break in whichever downstream
+// package decorates it.
+var _ BookStoreIface = (*BookStore)(nil)
 
 // Compile-time proof that BookStore satisfies the generic gormx.Store, so the
 // generic engine can drive it alongside the typed finders below.

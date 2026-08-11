@@ -18,6 +18,34 @@ import (
 	"gorm.io/gorm"
 )
 
+// ShelfStoreIface is the full data-access surface of Shelf: everything
+// ShelfStore does, as an interface.
+//
+// It exists so a decorator — caching, tracing, retries, a test double — can be
+// written in its own package against this contract, without that package needing
+// to edit anything in this tree. Embed it, override the methods you care about,
+// and delegate the rest:
+//
+//	type cachedShelfStore struct {
+//		ShelfStoreIface
+//		cache Cache
+//	}
+//
+// Construction is deliberately absent. NewShelfStore returns the concrete
+// *ShelfStore, and WithTelemetry is a chainable setter that also returns it, so
+// a caller keeps the full type at the point of wiring and narrows to this
+// interface at the point of use — which is the direction that stays useful when
+// a decorator is added later.
+type ShelfStoreIface interface {
+	Create(ctx context.Context, m *Shelf) error
+	List(ctx context.Context, opts gormx.ListOptions) ([]Shelf, error)
+	Count(ctx context.Context, opts gormx.ListOptions) (int64, error)
+	Update(ctx context.Context, m *Shelf) error
+	GetByID(ctx context.Context, id string) (*Shelf, error)
+	DeleteByID(ctx context.Context, id string) error
+	GetByName(ctx context.Context, v string) (*Shelf, error)
+}
+
 // ShelfStore provides typed CRUD access to Shelf records.
 // Shelf groups books physically. The resource's `plural` fixes the irregular plural ("shelfs" → "shelves") — no table name override needed.
 type ShelfStore struct {
@@ -26,6 +54,11 @@ type ShelfStore struct {
 	// adapter: NewShelfStore(db).WithTelemetry(telemetry.New(o)).
 	Telemetry gormx.Telemetry
 }
+
+// Compile-time proof that ShelfStore implements its own interface. Without it a
+// signature could drift from ShelfStoreIface and only break in whichever downstream
+// package decorates it.
+var _ ShelfStoreIface = (*ShelfStore)(nil)
 
 // Compile-time proof that ShelfStore satisfies the generic gormx.Store, so the
 // generic engine can drive it alongside the typed finders below.

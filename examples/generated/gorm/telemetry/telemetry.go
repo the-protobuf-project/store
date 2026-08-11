@@ -8,7 +8,7 @@
 //
 // First-party opentelementry adapter: the stores' gormx.Telemetry and the SQL-level gorm plugin.
 //
-// orm — https://github.com/the-protobuf-project/store
+// store — https://github.com/the-protobuf-project/store
 
 // Package telemetry is the only generated package that imports the
 // opentelementry SDK: it adapts an *opentelementry.Opentelementry handle into

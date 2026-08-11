@@ -7,7 +7,7 @@
 // database: bookstore_db
 // schema:   bookstore_v1
 //
-// orm — https://github.com/the-protobuf-project/store
+// store — https://github.com/the-protobuf-project/store
 
 package bookstorev1
 
@@ -19,6 +19,34 @@ import (
 	"gorm.io/gorm"
 )
 
+// AuthorStoreIface is the full data-access surface of Author: everything
+// AuthorStore does, as an interface.
+//
+// It exists so a decorator — caching, tracing, retries, a test double — can be
+// written in its own package against this contract, without that package needing
+// to edit anything in this tree. Embed it, override the methods you care about,
+// and delegate the rest:
+//
+//	type cachedAuthorStore struct {
+//		AuthorStoreIface
+//		cache Cache
+//	}
+//
+// Construction is deliberately absent. NewAuthorStore returns the concrete
+// *AuthorStore, and WithTelemetry is a chainable setter that also returns it, so
+// a caller keeps the full type at the point of wiring and narrows to this
+// interface at the point of use — which is the direction that stays useful when
+// a decorator is added later.
+type AuthorStoreIface interface {
+	Create(ctx context.Context, m *Author) error
+	List(ctx context.Context, opts gormx.ListOptions) ([]Author, error)
+	Count(ctx context.Context, opts gormx.ListOptions) (int64, error)
+	Update(ctx context.Context, m *Author) error
+	GetByID(ctx context.Context, id string) (*Author, error)
+	DeleteByID(ctx context.Context, id string) error
+	GetByName(ctx context.Context, v string) (*Author, error)
+}
+
 // AuthorStore provides typed CRUD access to Author records.
 // Author is a top-level resource. Inferred table: bookstore_v1.authors. id: ID_STRATEGY_ULID synthesizes a generated `id` PK and demotes the AIP resource name to a UNIQUE lookup column; timestamps adds created_at/updated_at.
 type AuthorStore struct {
@@ -27,6 +55,11 @@ type AuthorStore struct {
 	// adapter: NewAuthorStore(db).WithTelemetry(telemetry.New(o)).
 	Telemetry gormx.Telemetry
 }
+
+// Compile-time proof that AuthorStore implements its own interface. Without it a
+// signature could drift from AuthorStoreIface and only break in whichever downstream
+// package decorates it.
+var _ AuthorStoreIface = (*AuthorStore)(nil)
 
 // Compile-time proof that AuthorStore satisfies the generic gormx.Store, so the
 // generic engine can drive it alongside the typed finders below.

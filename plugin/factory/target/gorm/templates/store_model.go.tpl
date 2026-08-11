@@ -4,6 +4,41 @@ package {{.Package}}
 
 {{.Imports}}
 
+// {{.Iface}} is the full data-access surface of {{.Name}}: everything
+// {{.Store}} does, as an interface.
+//
+// It exists so a decorator — caching, tracing, retries, a test double — can be
+// written in its own package against this contract, without that package needing
+// to edit anything in this tree. Embed it, override the methods you care about,
+// and delegate the rest:
+//
+//	type cached{{.Name}}Store struct {
+//		{{.Iface}}
+//		cache Cache
+//	}
+//
+// Construction is deliberately absent. New{{.Store}} returns the concrete
+// *{{.Store}}, and WithTelemetry is a chainable setter that also returns it, so
+// a caller keeps the full type at the point of wiring and narrows to this
+// interface at the point of use — which is the direction that stays useful when
+// a decorator is added later.
+type {{.Iface}} interface {
+	Create(ctx context.Context, m *{{.Name}}) error
+	List(ctx context.Context, opts gormx.ListOptions) ([]{{.Name}}, error)
+	Count(ctx context.Context, opts gormx.ListOptions) (int64, error)
+	Update(ctx context.Context, m *{{.Name}}) error
+{{- if .HasPK}}
+	GetByID(ctx context.Context, id {{.PKArgType}}) (*{{.Name}}, error)
+	DeleteByID(ctx context.Context, id {{.PKArgType}}) error
+{{- end}}
+{{- range .UniqueFinders}}
+	{{.Method}}(ctx context.Context, v {{.ArgType}}) (*{{$.Name}}, error)
+{{- end}}
+{{- range .FKFinders}}
+	{{.Method}}(ctx context.Context, id {{.ArgType}}, opts gormx.ListOptions) ([]{{$.Name}}, error)
+{{- end}}
+}
+
 // {{.Store}} provides typed CRUD access to {{.Name}} records.
 // {{.Comment}}
 type {{.Store}} struct {
@@ -12,6 +47,11 @@ type {{.Store}} struct {
 	// adapter: New{{.Store}}(db).WithTelemetry(telemetry.New(o)).
 	Telemetry gormx.Telemetry
 }
+
+// Compile-time proof that {{.Store}} implements its own interface. Without it a
+// signature could drift from {{.Iface}} and only break in whichever downstream
+// package decorates it.
+var _ {{.Iface}} = (*{{.Store}})(nil)
 {{- if .AssertStore}}
 
 // Compile-time proof that {{.Store}} satisfies the generic gormx.Store, so the

@@ -8,7 +8,7 @@
 //
 // Shared GORM runtime: ListOptions, the generic Store interface, the GenericStore engine, and EnsureSchemas.
 //
-// orm — https://github.com/the-protobuf-project/store
+// store — https://github.com/the-protobuf-project/store
 
 // Package gormx is the shared runtime the generated GORM stores build on: the
 // ListOptions every List/Count call takes, a generic Store interface every

@@ -18,6 +18,35 @@ import (
 	"gorm.io/gorm"
 )
 
+// PromoCodeStoreIface is the full data-access surface of PromoCode: everything
+// PromoCodeStore does, as an interface.
+//
+// It exists so a decorator — caching, tracing, retries, a test double — can be
+// written in its own package against this contract, without that package needing
+// to edit anything in this tree. Embed it, override the methods you care about,
+// and delegate the rest:
+//
+//	type cachedPromoCodeStore struct {
+//		PromoCodeStoreIface
+//		cache Cache
+//	}
+//
+// Construction is deliberately absent. NewPromoCodeStore returns the concrete
+// *PromoCodeStore, and WithTelemetry is a chainable setter that also returns it, so
+// a caller keeps the full type at the point of wiring and narrows to this
+// interface at the point of use — which is the direction that stays useful when
+// a decorator is added later.
+type PromoCodeStoreIface interface {
+	Create(ctx context.Context, m *PromoCode) error
+	List(ctx context.Context, opts gormx.ListOptions) ([]PromoCode, error)
+	Count(ctx context.Context, opts gormx.ListOptions) (int64, error)
+	Update(ctx context.Context, m *PromoCode) error
+	GetByID(ctx context.Context, id string) (*PromoCode, error)
+	DeleteByID(ctx context.Context, id string) error
+	GetByName(ctx context.Context, v string) (*PromoCode, error)
+	GetByCode(ctx context.Context, v string) (*PromoCode, error)
+}
+
 // PromoCodeStore provides typed CRUD access to PromoCode records.
 // PromoCode is a redeemable promotion. The human-facing `code` is unique via a single-column unique index, so orm emits GetByCode alongside GetByID and the GetByName finder for the AIP resource name.
 type PromoCodeStore struct {
@@ -26,6 +55,11 @@ type PromoCodeStore struct {
 	// adapter: NewPromoCodeStore(db).WithTelemetry(telemetry.New(o)).
 	Telemetry gormx.Telemetry
 }
+
+// Compile-time proof that PromoCodeStore implements its own interface. Without it a
+// signature could drift from PromoCodeStoreIface and only break in whichever downstream
+// package decorates it.
+var _ PromoCodeStoreIface = (*PromoCodeStore)(nil)
 
 // Compile-time proof that PromoCodeStore satisfies the generic gormx.Store, so the
 // generic engine can drive it alongside the typed finders below.

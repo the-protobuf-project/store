@@ -1,0 +1,61 @@
+syntax = "proto3";
+
+// Package outbox.v1 exercises (store.v1.table).outbox: the companion table this
+// plugin emits so a change event can be written in the same transaction as the
+// row it describes.
+//
+// Order carries the annotation and Receipt does not, so the golden output shows
+// both that the companion appears and that it appears only where asked. Nothing
+// beyond the table is generated — no publisher, no dispatch loop — because
+// draining an outbox belongs to a streams generator, not to this one.
+package outbox.v1;
+
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "protokit/v1/annotations.proto";
+import "store/v1/annotations.proto";
+
+option java_multiple_files = true;
+option java_outer_classname = "OutboxProto";
+option java_package = "com.outbox.v1";
+option (protokit.v1.datasource) = {
+  database: "shop_db"
+  provider: "postgres"
+  schema: "shop"
+};
+
+// Order opts into an outbox. Its ULID primary key is what aggregate_id is typed
+// against, so the companion's foreign reference matches the key strategy rather
+// than assuming a string.
+message Order {
+  option (google.api.resource) = {
+    type: "outbox.v1/Order"
+    pattern: "orders/{order}"
+    singular: "order"
+    plural: "orders"
+  };
+  option (protokit.v1.table) = {
+    id: ID_STRATEGY_ULID
+    timestamps: true
+  };
+  option (store.v1.table) = {outbox: true};
+
+  // name is the AIP resource name; demoted to a UNIQUE lookup key by the ULID id.
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  // total is the order value.
+  int64 total = 2 [(google.api.field_behavior) = REQUIRED];
+}
+
+// Receipt does not opt in, so no receipts_outbox table is generated.
+message Receipt {
+  option (google.api.resource) = {
+    type: "outbox.v1/Receipt"
+    pattern: "receipts/{receipt}"
+    singular: "receipt"
+    plural: "receipts"
+  };
+
+  // name: IDENTIFIER → PRIMARY KEY, VARCHAR(255).
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+}

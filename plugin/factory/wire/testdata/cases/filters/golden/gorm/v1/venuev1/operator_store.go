@@ -19,6 +19,34 @@ import (
 	"gorm.io/gorm"
 )
 
+// OperatorStoreIface is the full data-access surface of Operator: everything
+// OperatorStore does, as an interface.
+//
+// It exists so a decorator — caching, tracing, retries, a test double — can be
+// written in its own package against this contract, without that package needing
+// to edit anything in this tree. Embed it, override the methods you care about,
+// and delegate the rest:
+//
+//	type cachedOperatorStore struct {
+//		OperatorStoreIface
+//		cache Cache
+//	}
+//
+// Construction is deliberately absent. NewOperatorStore returns the concrete
+// *OperatorStore, and WithTelemetry is a chainable setter that also returns it, so
+// a caller keeps the full type at the point of wiring and narrows to this
+// interface at the point of use — which is the direction that stays useful when
+// a decorator is added later.
+type OperatorStoreIface interface {
+	Create(ctx context.Context, m *Operator) error
+	List(ctx context.Context, opts gormx.ListOptions) ([]Operator, error)
+	Count(ctx context.Context, opts gormx.ListOptions) (int64, error)
+	Update(ctx context.Context, m *Operator) error
+	GetByID(ctx context.Context, id string) (*Operator, error)
+	DeleteByID(ctx context.Context, id string) error
+	GetByName(ctx context.Context, v string) (*Operator, error)
+}
+
 // OperatorStore provides typed CRUD access to Operator records.
 // Operator is the referenced parent so the venue's reference resolves to a real table (a hard FK) instead of degrading to a soft reference.
 type OperatorStore struct {
@@ -27,6 +55,11 @@ type OperatorStore struct {
 	// adapter: NewOperatorStore(db).WithTelemetry(telemetry.New(o)).
 	Telemetry gormx.Telemetry
 }
+
+// Compile-time proof that OperatorStore implements its own interface. Without it a
+// signature could drift from OperatorStoreIface and only break in whichever downstream
+// package decorates it.
+var _ OperatorStoreIface = (*OperatorStore)(nil)
 
 // Compile-time proof that OperatorStore satisfies the generic gormx.Store, so the
 // generic engine can drive it alongside the typed finders below.

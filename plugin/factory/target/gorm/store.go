@@ -123,12 +123,15 @@ func storeModelView(db *schema.Database, s *schema.Schema, pkg string, t *schema
 	}
 
 	return map[string]any{
-		"Header":    storeHeader(db, s),
-		"Package":   pkg,
-		"Imports":   importBlock(std, third),
-		"Comment":   commentOr(t.Comment, t.LocalName+" model."),
-		"Name":      t.LocalName,
-		"Store":     t.LocalName + "Store",
+		"Header":  storeHeader(db, s),
+		"Package": pkg,
+		"Imports": importBlock(std, third),
+		"Comment": commentOr(t.Comment, t.LocalName+" model."),
+		"Name":    t.LocalName,
+		"Store":   t.LocalName + "Store",
+		// The interface every decorator (cache, streams, a test double) is written
+		// against, so none of them needs to edit generated code in this tree.
+		"Iface":     t.LocalName + "StoreIface",
 		"TableName": s.Name + "." + t.Name,
 		"HasPK":     hasPK,
 		"PKColumn":  t.PKColumn,

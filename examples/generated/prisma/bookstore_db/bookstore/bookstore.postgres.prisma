@@ -7,7 +7,7 @@
 // database: bookstore_db
 // schemas:  bookstore_v1
 //
-// orm — https://github.com/the-protobuf-project/store
+// store — https://github.com/the-protobuf-project/store
 
 /// Genre classifies a book's literary category.
 enum Genre {

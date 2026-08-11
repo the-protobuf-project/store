@@ -180,6 +180,11 @@ func (r Reader) Enrich(ir *protokit.IR) error {
 		}
 	}
 
+	// Outbox companions are synthesized before the column pass so they are
+	// enriched like any other table, and before index finalization so their
+	// declared index is named and ordered alongside every other one.
+	appendOutboxTables(ir, fx)
+
 	for _, db := range ir.Databases {
 		for _, s := range db.Schemas {
 			for _, t := range s.Tables {
