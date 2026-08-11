@@ -4,14 +4,14 @@ package weather.v1;
 
 import "google/api/field_behavior.proto";
 import "google/api/resource.proto";
-import "orm/v1/annotations.proto";
+import "protokit/v1/annotations.proto";
 import "telemetry/v1/annotations.proto";
 
 option go_package = "example.com/test/gen;weatherv1";
 option java_multiple_files = true;
 option java_outer_classname = "TelemetryV1Proto";
 option java_package = "com.weather.v1";
-option (orm.v1.datasource) = {
+option (protokit.v1.datasource) = {
   database: "weather_db"
   schema: "weather"
 };
@@ -20,7 +20,7 @@ option (orm.v1.datasource) = {
 // methods with a default span prefix, and labeled fields carrying span
 // attribute struct tags (one default name, one explicit override). Annotated
 // with telemetry.v1's own (telemetry.v1.telemetry) / (telemetry.v1.telemetry_field)
-// options — orm.v1 carries no telemetry extensions of its own.
+// options — store.v1 carries no telemetry extensions of its own.
 message Reading {
   option (google.api.resource) = {
     type: "weather.v1/Reading"
@@ -28,7 +28,7 @@ message Reading {
     singular: "reading"
     plural: "readings"
   };
-  option (orm.v1.table) = {id: ID_STRATEGY_ULID};
+  option (protokit.v1.table) = {id: ID_STRATEGY_ULID};
 
   string name = 1 [(google.api.field_behavior) = IDENTIFIER];
 
@@ -59,7 +59,7 @@ message Sensor {
     singular: "sensor"
     plural: "sensors"
   };
-  option (orm.v1.table) = {id: ID_STRATEGY_ULID};
+  option (protokit.v1.table) = {id: ID_STRATEGY_ULID};
   option (telemetry.v1.telemetry) = {
     span_prefix: "weather.Sensor"
     metrics: false
@@ -80,7 +80,7 @@ message Calibration {
     singular: "calibration"
     plural: "calibrations"
   };
-  option (orm.v1.table) = {id: ID_STRATEGY_ULID};
+  option (protokit.v1.table) = {id: ID_STRATEGY_ULID};
   option (telemetry.v1.telemetry) = {enabled: false};
 
   string name = 1 [(google.api.field_behavior) = IDENTIFIER];

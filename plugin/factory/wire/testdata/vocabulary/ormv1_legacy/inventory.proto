@@ -1,18 +1,19 @@
 syntax = "proto3";
 
-// inventory.proto demonstrates the multi-file datasource merge: it declares
+// inventory.proto, frozen in the deprecated orm.v1 vocabulary alongside
+// bookstore.proto. It demonstrates the multi-file datasource merge: it declares
 // the same datasource name as bookstore.proto, so its tables land in the same
 // bookstore_db tree — under the "inventory" schema via the schema override.
 package bookstore.v1;
 
 import "google/api/field_behavior.proto";
 import "google/api/resource.proto";
-import "protokit/v1/annotations.proto";
+import "orm/v1/annotations.proto";
 
 option java_multiple_files = true;
 option java_outer_classname = "InventoryProto";
 option java_package = "com.bookstore.v1";
-option (protokit.v1.datasource) = {
+option (orm.v1.datasource) = {
   database: "bookstore_db"
   schema: "inventory" // override: tables here land in the inventory schema
 };
@@ -26,7 +27,7 @@ message Shelf {
     singular: "shelf"
     plural: "shelves"
   };
-  option (protokit.v1.table) = {timestamps: true};
+  option (orm.v1.table) = {timestamps: true};
 
   // name: IDENTIFIER → PRIMARY KEY, VARCHAR(255).
   string name = 1 [(google.api.field_behavior) = IDENTIFIER];

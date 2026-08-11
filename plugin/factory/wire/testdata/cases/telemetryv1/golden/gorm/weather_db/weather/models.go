@@ -13,7 +13,7 @@
 
 package weather
 
-// Reading exercises the telemetry emitter's default path: instrumented store methods with a default span prefix, and labeled fields carrying span attribute struct tags (one default name, one explicit override). Annotated with telemetry.v1's own (telemetry.v1.telemetry) / (telemetry.v1.telemetry_field) options — orm.v1 carries no telemetry extensions of its own.
+// Reading exercises the telemetry emitter's default path: instrumented store methods with a default span prefix, and labeled fields carrying span attribute struct tags (one default name, one explicit override). Annotated with telemetry.v1's own (telemetry.v1.telemetry) / (telemetry.v1.telemetry_field) options — store.v1 carries no telemetry extensions of its own.
 type Reading struct {
 	// Unique identifier for the record.
 	ID   string `gorm:"column:id;primaryKey;not null" json:"id"`

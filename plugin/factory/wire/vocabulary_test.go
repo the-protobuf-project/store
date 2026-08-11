@@ -4,18 +4,17 @@ package wire_test
 // (structure) and store.v1 (storage) changed nothing about what this plugin
 // generates.
 //
-// The golden files alone cannot prove it. They are all written in orm.v1, so
-// they only show that the *compatibility* path still works — which would stay
-// true even if the new vocabularies were wired up wrong, or not wired up at all.
-// The claim that matters is the other one: a schema migrated to protokit.v1 +
-// store.v1 produces exactly what its orm.v1 original did.
+// The golden files cannot prove it on their own: they are generated from the
+// current vocabulary, so they say nothing about whether a schema left on the old
+// one still works. And the compatibility promise is exactly that claim — an
+// orm.v1 schema keeps generating what it always did.
 //
-// testdata/vocabulary/protokitv1_only holds a line-for-line twin of the bookstore
-// example with every annotation moved to its new home. It lives outside
-// testdata/cases/ deliberately: TestGolden would otherwise demand a golden tree
-// for it, and that tree would be a byte-for-byte copy of the bookstore one —
-// duplicating the very thing this test asserts. Rendering both through the same
-// targets and comparing byte for byte is the assertion.
+// testdata/vocabulary/ormv1_legacy is the bookstore example frozen in orm.v1,
+// kept deliberately un-migrated. Rendering it and the migrated example through
+// the same targets and comparing byte for byte is the assertion. It lives
+// outside testdata/cases/ because TestGolden would otherwise demand a golden
+// tree for it, and that tree would be a byte-for-byte copy of the bookstore
+// one — duplicating the very thing this test asserts.
 
 import (
 	"path/filepath"
@@ -39,11 +38,11 @@ import (
 func TestVocabularyEquivalence(t *testing.T) {
 	for _, target := range defaultTargets {
 		t.Run(target, func(t *testing.T) {
-			legacy := renderCase(t, filepath.Join("testdata", "cases", "bookstore"), target)
-			migrated := renderCase(t, filepath.Join("testdata", "vocabulary", "protokitv1_only"), target)
+			legacy := renderCase(t, filepath.Join("testdata", "vocabulary", "ormv1_legacy"), target)
+			migrated := renderCase(t, filepath.Join("testdata", "cases", "bookstore"), target)
 
 			if len(legacy) == 0 {
-				t.Fatalf("%s: the orm.v1 case produced no files", target)
+				t.Fatalf("%s: the orm.v1 fixture produced no files", target)
 			}
 			for _, path := range sortedPaths(legacy, migrated) {
 				want, inLegacy := legacy[path]

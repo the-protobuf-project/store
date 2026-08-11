@@ -43,10 +43,7 @@ func TestIRAgreement(t *testing.T) {
 			continue
 		}
 		t.Run(name, func(t *testing.T) {
-			// Both sides get the same layout. Layout decides naming policy, so a
-			// difference there would show up as a disagreement about names and
-			// mask the thing actually under test.
-			golden.IRAgreement(t, dir, ormCasePlugin(dir), bareProtokitPlugin())
+			golden.IRAgreement(t, dir, ormCasePlugin(dir), bareProtokitPlugin(dir))
 		})
 	}
 }
@@ -95,10 +92,18 @@ func determinismPlugin(dir string) protokit.Plugin {
 }
 
 // bareProtokitPlugin is a run with this plugin's targets but none of its
-// vocabulary: no facet readers, no layout policy. What it derives is what any
-// other protokit plugin would derive from the same protos.
-func bareProtokitPlugin() protokit.Plugin {
-	return wire.Plugin(nil, nil)
+// vocabulary: no facet readers at all. What it derives is what any other
+// protokit plugin would derive from the same protos.
+//
+// It does get the case's layout, and that is not a loophole — it is the
+// distinction the LayoutResolver split exists to draw. The same protos generated
+// under two different layouts *should* produce different database and schema
+// names, because a layout is a deployment's choice; the same protos read by two
+// different plugins should not, because an annotation is the schema's. Handing
+// both sides the same layout is what leaves only the second difference visible,
+// which is the one this test is about.
+func bareProtokitPlugin(dir string) protokit.Plugin {
+	return wire.Plugin(nil, ormCasePlugin(dir).Layout)
 }
 
 // protokitV1Cases lists the golden cases whose protos import protokit.v1, which
@@ -110,11 +115,7 @@ func protokitV1Cases(t *testing.T) []string {
 	if err != nil {
 		t.Fatalf("read cases: %v", err)
 	}
-	// The migrated bookstore twin is the case that makes this test worth having:
-	// a full schema — surrogate keys, timestamps, foreign keys, enums, a skipped
-	// field, composite indexes — written entirely in protokit.v1. It lives outside
-	// cases/ because TestGolden would demand a redundant golden tree for it.
-	out := []string{filepath.Join("testdata", "vocabulary", "protokitv1_only")}
+	var out []string
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -130,11 +131,14 @@ func protokitV1Cases(t *testing.T) []string {
 	return out
 }
 
-// usesProtokitV1 reports whether any .proto directly in dir imports protokit.v1.
-// Cases that indirect through a "source" file are skipped: those point at the
-// shared examples tree, which is still on orm.v1.
+// usesProtokitV1 reports whether any .proto the case compiles imports
+// protokit.v1, following the "source" indirection a case may use to point at the
+// shared examples tree.
 func usesProtokitV1(t *testing.T, dir string) bool {
 	t.Helper()
+	if b, err := os.ReadFile(filepath.Join(dir, "source")); err == nil {
+		dir = filepath.Join(dir, strings.TrimSpace(string(b)))
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return false
