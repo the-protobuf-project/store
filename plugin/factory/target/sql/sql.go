@@ -14,29 +14,42 @@ import (
 
 	"google.golang.org/protobuf/compiler/protogen"
 
+	"github.com/the-protobuf-project/orm/plugin/factory/facets"
 	"github.com/the-protobuf-project/orm/plugin/factory/target/types"
+	"github.com/the-protobuf-project/protokit"
 	"github.com/the-protobuf-project/protokit/docs"
 	"github.com/the-protobuf-project/protokit/schema"
 	"github.com/the-protobuf-project/protokit/templates"
 )
 
-// Generator implements schema.Target for PostgreSQL DDL output.
+// Generator implements schema.IRTarget for PostgreSQL DDL output.
 type Generator struct{}
+
+var _ schema.IRTarget = (*Generator)(nil)
 
 // Name returns the target identifier used in buf.gen.yaml opt: [target=sql].
 func (g *Generator) Name() string { return "sql" }
 
-// Generate writes one .postgres.sql file per schema plus a consolidated
-// migrate.sql into the plugin response.
+// Generate renders from the databases alone, for callers that have no IR. Column
+// types then fall back to the neutral FieldType, since the orm.v1 overrides live
+// in the facets this form does not carry.
 func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
-	for _, db := range dbs {
+	return g.GenerateIR(p, &schema.IR{Databases: dbs})
+}
+
+// GenerateIR writes one .postgres.sql file per schema plus a consolidated
+// migrate.sql into the plugin response.
+func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
+	fx := facets.New(ir)
+	typeOf := func(c *schema.Column) string { return types.SQLForColumn(c, fx.Column(c)) }
+	for _, db := range ir.Databases {
 		if types.Provider(db.Provider) != types.Postgres {
 			return fmt.Errorf("sql: database %q uses provider %q — the sql target only supports postgres", db.Name, db.Provider)
 		}
 		for _, s := range db.Schemas {
 			path := fmt.Sprintf("%s/%s.postgres.sql", db.Name, s.Name)
 			f := p.NewGeneratedFile(path, "")
-			if err := templates.Render(tmpl, f, "schema.sql.tpl", schemaView(db, s)); err != nil {
+			if err := templates.Render(tmpl, f, "schema.sql.tpl", schemaView(db, s, typeOf)); err != nil {
 				return fmt.Errorf("sql: %s: %w", path, err)
 			}
 		}
@@ -44,7 +57,7 @@ func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 		// in one transaction (foreign keys deferred to ALTER statements).
 		migratePath := db.Name + "/migrate.sql"
 		mf := p.NewGeneratedFile(migratePath, "")
-		if err := templates.Render(tmpl, mf, "migrate.sql.tpl", migrateView(db)); err != nil {
+		if err := templates.Render(tmpl, mf, "migrate.sql.tpl", migrateView(db, typeOf)); err != nil {
 			return fmt.Errorf("sql: %s: %w", migratePath, err)
 		}
 		rf := p.NewGeneratedFile(db.Name+"/README.md", "")
@@ -57,7 +70,7 @@ func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 				"Auto-update triggers keep updated-at columns current; COMMENT ON persists field docs to the catalog.",
 			},
 			Naming: docs.Local(db),
-			TypeOf: types.SQLForColumn,
+			TypeOf: typeOf,
 		})
 		if _, err := rf.Write([]byte(md)); err != nil {
 			return fmt.Errorf("sql: %s/README.md: %w", db.Name, err)

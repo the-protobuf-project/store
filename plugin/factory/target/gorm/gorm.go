@@ -14,14 +14,18 @@ import (
 
 	"google.golang.org/protobuf/compiler/protogen"
 
+	"github.com/the-protobuf-project/orm/plugin/factory/facets"
 	"github.com/the-protobuf-project/orm/plugin/factory/target/types"
+	"github.com/the-protobuf-project/protokit"
 	"github.com/the-protobuf-project/protokit/docs"
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
 )
 
-// Generator implements schema.Target for GORM Go struct output.
+// Generator implements schema.IRTarget for GORM Go struct output.
 type Generator struct{}
+
+var _ schema.IRTarget = (*Generator)(nil)
 
 // Name returns the target identifier used in buf.gen.yaml opt: [target=gorm].
 func (g *Generator) Name() string { return "gorm" }
@@ -30,8 +34,19 @@ func (g *Generator) Name() string { return "gorm" }
 // generated stores import; it lives at <go_module>/gormx.
 const gormxPkg = "gormx"
 
-// Generate writes one Go package per schema into the plugin response.
+// Generate renders from the databases alone, for callers that have no IR. Column
+// types then fall back to the neutral FieldType and every field's query surface to
+// its type-derived default, since the orm.v1 overrides live in the facets this
+// form does not carry.
 func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
+	return g.GenerateIR(p, &schema.IR{Databases: dbs})
+}
+
+// GenerateIR writes one Go package per schema into the plugin response.
+func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
+	fx := facets.New(ir)
+	typeOf := func(c *schema.Column) string { return types.SQLForColumn(c, fx.Column(c)) }
+	dbs := ir.Databases
 	gormxEmitted := false     // the shared runtime is emitted once for the whole tree
 	filterxEmitted := false   // likewise the shared filter engine packages
 	telemetryEmitted := false // likewise the SDK adapter package
@@ -60,7 +75,7 @@ func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 		for _, s := range db.Schemas {
 			pkg := naming.GoPackage(s.Name)
 			f := p.NewGeneratedFile(fmt.Sprintf("%s/%s/models.go", db.Name, pkg), "")
-			if err := renderGo(f, "models.go.tpl", packageView(db, s, pkg)); err != nil {
+			if err := renderGo(f, "models.go.tpl", packageView(db, s, pkg, typeOf)); err != nil {
 				return fmt.Errorf("gorm: %s/%s: %w", db.Name, pkg, err)
 			}
 			// Opt-in: proto↔model converters, one protobuf.go per schema package.
@@ -69,7 +84,7 @@ func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 				if pbIdx == nil {
 					pbIdx = newPbIndex(p)
 				}
-				view, err := convertView(pbIdx, db, s, pkg)
+				view, err := convertView(pbIdx, db, s, pkg, typeOf)
 				if err != nil {
 					return fmt.Errorf("gorm: %s/%s/protobuf.go: %w", db.Name, pkg, err)
 				}
@@ -85,7 +100,7 @@ func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 			// core with the chainable Gorm and Hasura engines, and — with the
 			// telemetry opt — an opentelementry Observer adapter).
 			if dbFilters(db) && len(s.Tables) > 0 {
-				if view := filtersView(db, s, pkg); view != nil {
+				if view := filtersView(db, s, pkg, fx); view != nil {
 					ff := p.NewGeneratedFile(fmt.Sprintf("%s/%s/filters.go", db.Name, pkg), "")
 					if err := renderGo(ff, "filters.go.tpl", view); err != nil {
 						return fmt.Errorf("gorm: %s/%s/filters.go: %w", db.Name, pkg, err)
@@ -125,7 +140,7 @@ func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 				}
 				for _, t := range s.Tables {
 					sf := p.NewGeneratedFile(fmt.Sprintf("%s/%s/%s", db.Name, pkg, storeFileName(t)), "")
-					if err := renderGo(sf, "store_model.go.tpl", storeModelView(db, s, pkg, t)); err != nil {
+					if err := renderGo(sf, "store_model.go.tpl", storeModelView(db, s, pkg, t, typeOf)); err != nil {
 						return fmt.Errorf("gorm: %s/%s/%s: %w", db.Name, pkg, storeFileName(t), err)
 					}
 				}
@@ -150,7 +165,7 @@ func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 				return fmt.Errorf("gorm: %s/migrate.go: %w", db.Name, err)
 			}
 		}
-		if err := writeReadme(p, db); err != nil {
+		if err := writeReadme(p, db, typeOf); err != nil {
 			return err
 		}
 	}
@@ -159,7 +174,7 @@ func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 
 // writeReadme documents the generated package tree: an ER diagram and per-model
 // reference under the bare, schema-local names the Go packages use.
-func writeReadme(p *protogen.Plugin, db *schema.Database) error {
+func writeReadme(p *protogen.Plugin, db *schema.Database, typeOf types.TypeOf) error {
 	rf := p.NewGeneratedFile(db.Name+"/README.md", "")
 	outputs := []string{
 		"`<schema>/models.go` — one Go package per schema, one struct per table.",
@@ -184,7 +199,7 @@ func writeReadme(p *protogen.Plugin, db *schema.Database) error {
 		Tagline: "Go structs with GORM struct tags — one package per schema.",
 		Outputs: outputs,
 		Naming:  docs.Local(db),
-		TypeOf:  types.SQLForColumn,
+		TypeOf:  typeOf,
 	})
 	if _, err := rf.Write([]byte(md)); err != nil {
 		return fmt.Errorf("gorm: %s/README.md: %w", db.Name, err)

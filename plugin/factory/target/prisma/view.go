@@ -25,7 +25,7 @@ type modelView struct {
 // <file>.<provider>.prisma fragment. A fragment may span several @@schemas, so
 // every model and enum carries its own schema (rendered per block in the
 // template) rather than a single fragment-wide schema.
-func fragmentView(db *schema.Database, g fragmentGroup, provider types.Provider) map[string]any {
+func fragmentView(db *schema.Database, g fragmentGroup, provider types.Provider, typeOf types.TypeOf) map[string]any {
 	var enums []*schema.Enum
 	for _, e := range g.enums {
 		enums = append(enums, withFallbackComments(e))
@@ -33,7 +33,7 @@ func fragmentView(db *schema.Database, g fragmentGroup, provider types.Provider)
 	dsName := naming.DatasourceName(db.Name)
 	models := make([]modelView, 0, len(g.tables))
 	for _, t := range g.tables {
-		models = append(models, modelViewOf(t, provider, dsName))
+		models = append(models, modelViewOf(t, provider, dsName, typeOf))
 	}
 	srcProto := g.sourceProto
 	if srcProto == "" {
@@ -77,7 +77,7 @@ func fragmentSchemas(g fragmentGroup) []string {
 
 // modelViewOf renders one table into template-ready field and index lines.
 // dsName is the Prisma datasource block name, used to prefix native-type attributes.
-func modelViewOf(t *schema.Table, provider types.Provider, dsName string) modelView {
+func modelViewOf(t *schema.Table, provider types.Provider, dsName string, typeOf types.TypeOf) modelView {
 	fkByCol := map[string]*schema.ForeignKey{}
 	for _, fk := range t.ForeignKeys {
 		fkByCol[fk.Column] = fk
@@ -95,7 +95,7 @@ func modelViewOf(t *schema.Table, provider types.Provider, dsName string) modelV
 	}
 
 	for _, col := range t.Columns {
-		m.Fields = append(m.Fields, fieldLine{Doc: fieldDoc(col), Decl: fieldDecl(col, provider, dsName)})
+		m.Fields = append(m.Fields, fieldLine{Doc: fieldDoc(col), Decl: fieldDecl(col, provider, dsName, typeOf)})
 
 		// BelongsTo relation — emitted immediately after the FK column. The field
 		// name is derived from the FK column (minus _id) so two FKs to the same

@@ -22,7 +22,7 @@ func scalarFieldName(col *schema.Column) string {
 // fieldDecl renders one column declaration: name, type, and attributes. dsName is
 // the Prisma datasource block name, used to prefix native-type attributes
 // (@<dsName>.Timestamptz(6)).
-func fieldDecl(col *schema.Column, provider types.Provider, dsName string) string {
+func fieldDecl(col *schema.Column, provider types.Provider, dsName string, typeOf types.TypeOf) string {
 	var b strings.Builder
 	b.WriteString(scalarFieldName(col))
 	b.WriteByte(' ')
@@ -30,7 +30,7 @@ func fieldDecl(col *schema.Column, provider types.Provider, dsName string) strin
 	if col.Enum != nil {
 		typeName = col.Enum.Name
 	} else {
-		typeName = types.PrismaTypeFor(provider, types.SQLForColumn(col))
+		typeName = types.PrismaTypeFor(provider, typeOf(col))
 	}
 	b.WriteString(typeName)
 	// A Prisma list is implicitly empty-not-null: an optional list (`Type[]?`)
@@ -60,7 +60,7 @@ func fieldDecl(col *schema.Column, provider types.Provider, dsName string) strin
 	// GORM/SQL column (DateTime → timestamp(3) without zone). The attribute is
 	// namespaced by the datasource block name. Mongo has no native-type attributes.
 	if provider == types.Postgres {
-		if nt := types.PrismaNativeType(types.SQLForColumn(col)); nt != "" {
+		if nt := types.PrismaNativeType(typeOf(col)); nt != "" {
 			b.WriteString(" @" + dsName + "." + nt)
 		}
 	}

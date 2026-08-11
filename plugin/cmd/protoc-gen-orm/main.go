@@ -134,8 +134,10 @@ func main() {
 			return runGraphQL(p, *config, *goModule, v)
 		}
 
-		// orm owns its layout config (protokit has none): load it here and hand the
-		// backend a fully-resolved view of grouping + the gorm render knobs.
+		// orm owns its layout config (protokit has none): load it here and split it
+		// across the two seams it feeds — the reader (which needs the telemetry
+		// block and the render knobs) and the layout resolver (which owns the
+		// database/schema naming policy).
 		cfg, err := backend.LoadConfig(*config)
 		if err != nil {
 			return err
@@ -143,10 +145,11 @@ func main() {
 
 		// Drive the proto build + render through the factory registry. In plugin mode
 		// buf selects exactly one target via opt: [target=...] and owns the output dir.
+		reader := backend.New(cfg, *goModule, *stores, *telemetry, *converters, *filters).
+			WithRepositoryModules(*gormModule, *graphqlModule)
 		reg := wire.Registry(
 			protokit.Options{Target: *target, Strict: *strict, Version: v},
-			backend.New(cfg, *goModule, *stores, *telemetry, *converters, *filters).
-				WithRepositoryModules(*gormModule, *graphqlModule))
+			[]protokit.FacetReader{reader}, backend.NewLayout(cfg))
 
 		tgt, ok := reg.Targets[*target]
 		if !ok {
@@ -177,7 +180,9 @@ func runGraphQL(p *protogen.Plugin, configPath, goModuleOpt, version string) err
 	if cfg == nil || cfg.GraphQL == nil {
 		return fmt.Errorf("target=graphql needs a `graphql:` block in orm.yaml (set the config=<path> opt)")
 	}
-	validationReg := wire.Registry(protokit.Options{}, backend.New(nil, "", false, false, false, false))
+	// Validation only needs the registry's shape (which sources and targets exist),
+	// so it is built with no readers and no layout policy.
+	validationReg := wire.Registry(protokit.Options{}, nil, nil)
 	if err := cfg.Validate(validationReg); err != nil {
 		return err
 	}

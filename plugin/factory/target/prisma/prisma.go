@@ -15,19 +15,34 @@ import (
 
 	"google.golang.org/protobuf/compiler/protogen"
 
+	"github.com/the-protobuf-project/orm/plugin/factory/facets"
 	"github.com/the-protobuf-project/orm/plugin/factory/target/types"
+	"github.com/the-protobuf-project/protokit"
 	"github.com/the-protobuf-project/protokit/schema"
 	"github.com/the-protobuf-project/protokit/templates"
 )
 
-// Generator implements schema.Target for Prisma schema output.
+// Generator implements schema.IRTarget for Prisma schema output.
 type Generator struct{}
+
+var _ schema.IRTarget = (*Generator)(nil)
 
 // Name returns the target identifier used in buf.gen.yaml opt: [target=prisma].
 func (g *Generator) Name() string { return "prisma" }
 
 // Generate writes the datasource file and every per-domain fragment for each database.
+// Generate renders from the databases alone, for callers that have no IR. Column
+// types then fall back to the neutral FieldType, since the orm.v1 overrides live
+// in the facets this form does not carry.
 func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
+	return g.GenerateIR(p, &schema.IR{Databases: dbs})
+}
+
+// GenerateIR writes the Prisma project files for every database in ir.
+func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
+	fx := facets.New(ir)
+	typeOf := func(c *schema.Column) string { return types.SQLForColumn(c, fx.Column(c)) }
+	dbs := ir.Databases
 	for _, db := range dbs {
 		provider := types.Provider(db.Provider)
 		if provider == types.EVM {
@@ -59,13 +74,13 @@ func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 			dir := fragmentDir(db.Name, g.sourceDir, g.fileBase)
 			path := fmt.Sprintf("%s/%s.%s.prisma", dir, g.fileBase, provider.FragmentExt())
 			ff := p.NewGeneratedFile(path, "")
-			if err := templates.Render(tmpl, ff, "fragment.prisma.tpl", fragmentView(db, g, provider)); err != nil {
+			if err := templates.Render(tmpl, ff, "fragment.prisma.tpl", fragmentView(db, g, provider, typeOf)); err != nil {
 				return fmt.Errorf("prisma: %s: %w", path, err)
 			}
 		}
 
 		// A README.md with a Mermaid ER diagram in every folder of the tree.
-		if err := writeReadmes(p, db, groups, provider); err != nil {
+		if err := writeReadmes(p, db, groups, provider, typeOf); err != nil {
 			return err
 		}
 	}

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/the-protobuf-project/orm/plugin/factory/target/types"
 	"github.com/the-protobuf-project/protokit/header"
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
@@ -27,7 +28,7 @@ type enumView struct {
 }
 
 // packageView assembles the template data for one schema package.
-func packageView(db *schema.Database, s *schema.Schema, pkg string) map[string]any {
+func packageView(db *schema.Database, s *schema.Schema, pkg string, typeOf types.TypeOf) map[string]any {
 	var models []modelView
 	needTime, needJSON, needPQ := false, false, false
 
@@ -57,7 +58,7 @@ func packageView(db *schema.Database, s *schema.Schema, pkg string) map[string]a
 		}
 		idxTags := indexTagsByColumn(t)
 		for _, col := range t.Columns {
-			gt := goType(col)
+			gt := goType(col, typeOf)
 			needTime = needTime || strings.Contains(gt, "time.Time")
 			needJSON = needJSON || strings.Contains(gt, "json.RawMessage")
 			needPQ = needPQ || strings.HasPrefix(gt, "pq.")
@@ -71,7 +72,7 @@ func packageView(db *schema.Database, s *schema.Schema, pkg string) map[string]a
 			}
 			m.Fields = append(m.Fields, fieldView{
 				Comment: col.Comment,
-				Decl:    goField + " " + gt + " `" + structTag(col, extra, telemetryTag(telEnabled, t, col)) + "`",
+				Decl:    goField + " " + gt + " `" + structTag(col, extra, telemetryTag(telEnabled, t, col), typeOf) + "`",
 			})
 			// BelongsTo association: emitted alongside the FK column. The field is
 			// named after the FK column (minus _id) so multiple references to the

@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/the-protobuf-project/orm/plugin/factory/target/types"
 	"github.com/the-protobuf-project/protokit/header"
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
@@ -55,7 +56,7 @@ func gormxView(db *schema.Database) map[string]any {
 }
 
 // storeModelView assembles the data for one resource's <model>_store.go file.
-func storeModelView(db *schema.Database, s *schema.Schema, pkg string, t *schema.Table) map[string]any {
+func storeModelView(db *schema.Database, s *schema.Schema, pkg string, t *schema.Table, typeOf types.TypeOf) map[string]any {
 	var unique, fks []finderView
 	var pkArgType string
 	hasPK := false
@@ -65,13 +66,13 @@ func storeModelView(db *schema.Database, s *schema.Schema, pkg string, t *schema
 		colByName[col.Name] = col
 		if col.Name == t.PKColumn {
 			hasPK = true
-			pkArgType = baseGoType(col)
+			pkArgType = baseGoType(col, typeOf)
 		}
 		if col.Unique && !col.PrimaryKey {
 			unique = append(unique, finderView{
 				Method:  "GetBy" + gormFieldName(col),
 				Column:  col.Name,
-				ArgType: baseGoType(col),
+				ArgType: baseGoType(col, typeOf),
 				Op:      "get_by_" + col.Name,
 			})
 			uniqueCols[col.Name] = true
@@ -80,7 +81,7 @@ func storeModelView(db *schema.Database, s *schema.Schema, pkg string, t *schema
 			fks = append(fks, finderView{
 				Method:  "ListBy" + gormFieldName(col),
 				Column:  col.Name,
-				ArgType: baseGoType(col),
+				ArgType: baseGoType(col, typeOf),
 				Op:      "list_by_" + col.Name,
 			})
 		}
@@ -101,7 +102,7 @@ func storeModelView(db *schema.Database, s *schema.Schema, pkg string, t *schema
 		unique = append(unique, finderView{
 			Method:  "GetBy" + gormFieldName(col),
 			Column:  col.Name,
-			ArgType: baseGoType(col),
+			ArgType: baseGoType(col, typeOf),
 			Op:      "get_by_" + col.Name,
 		})
 		uniqueCols[name] = true
@@ -151,8 +152,8 @@ func storeFileName(t *schema.Table) string {
 
 // baseGoType is the column's Go type with any nullable pointer stripped — lookup
 // arguments take the plain value (a *string FK column is still queried by string).
-func baseGoType(col *schema.Column) string {
-	return strings.TrimPrefix(goType(col), "*")
+func baseGoType(col *schema.Column, typeOf types.TypeOf) string {
+	return strings.TrimPrefix(goType(col, typeOf), "*")
 }
 
 // storeHeader renders the generated-file banner shared by every store file in a

@@ -18,23 +18,33 @@ import (
 
 	"github.com/the-protobuf-project/orm/plugin/factory/source/proto/backend"
 	"github.com/the-protobuf-project/orm/plugin/factory/wire"
+	"github.com/the-protobuf-project/protokit"
 	"github.com/the-protobuf-project/protokit/golden"
 	"github.com/the-protobuf-project/protokit/header"
-	"github.com/the-protobuf-project/protokit/schema"
 )
 
 // defaultTargets are the database backends every golden case runs unless it
 // ships a "targets" file.
 var defaultTargets = []string{"gorm", "prisma", "sql"}
 
-// ormBackend builds the orm Backend for one golden case: it reads any orm.yaml
+// ormPlugin builds the protokit.Plugin for one golden case: it reads any orm.yaml
 // the case ships (grouping/telemetry config) and its optional "stores"/
 // "converters"/"filters"/"telemetry" markers, and mirrors the binary's opt
 // defaults (go_module set so the gorm aggregator is emitted; telemetry off, as
 // in the binary, unless the case ships the marker). protokit's harness stays
 // generator-neutral — all of this generator-specific knowledge lives here, not
-// in RunCase.
-func ormBackend(dir string) schema.Backend {
+// in the harness.
+//
+// ormPlugin is the plugin for a run with no fixture config, which is what the
+// non-golden tests (targets, strict) want: the orm.v1 reader, no layout policy.
+// They still need the reader — their fixtures declare provider and indexes
+// through orm.v1, and a run without it would not see them.
+func ormPlugin() protokit.Plugin {
+	return wire.Plugin([]protokit.FacetReader{backend.New(nil, "", false, false, false, false)}, nil)
+}
+
+// ormCasePlugin is ormPlugin for a golden case directory.
+func ormCasePlugin(dir string) protokit.Plugin {
 	var cfg *backend.Config
 	if path := filepath.Join(dir, "orm.yaml"); fileExists(path) {
 		c, err := backend.LoadConfig(path)
@@ -47,8 +57,9 @@ func ormBackend(dir string) schema.Backend {
 	converters := fileExists(filepath.Join(dir, "converters"))
 	filters := fileExists(filepath.Join(dir, "filters"))
 	telemetry := fileExists(filepath.Join(dir, "telemetry"))
-	return backend.New(cfg, "example.com/test/gen", stores, telemetry, converters, filters).
+	reader := backend.New(cfg, "example.com/test/gen", stores, telemetry, converters, filters).
 		WithRepositoryModules(optFile(dir, "gorm_module"), optFile(dir, "graphql_module"))
+	return wire.Plugin([]protokit.FacetReader{reader}, backend.NewLayout(cfg))
 }
 
 // optFile reads a valued marker file (e.g. gorm_module holding a module path),
@@ -84,7 +95,7 @@ func TestGolden(t *testing.T) {
 			continue
 		}
 		t.Run(c.Name(), func(t *testing.T) {
-			golden.RunCase(t, filepath.Join("testdata", "cases", c.Name()), wire.ProtoTargets(), defaultTargets, ormBackend)
+			golden.RunPluginCase(t, filepath.Join("testdata", "cases", c.Name()), defaultTargets, ormCasePlugin)
 		})
 	}
 }
