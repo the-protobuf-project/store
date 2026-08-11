@@ -5,17 +5,16 @@ package gorm
 // maps plus the free-text search and sort allowlists); the behavior lives in the
 // once-per-tree filterx engine package, so the same spec drives both the gorm
 // and the hasura engine. Field selection is type-driven with per-field
-// orm.v1.query overrides (filterable / sortable / search).
+// orm.v1.query overrides (filterable / sortable / search), read from the
+// column's facet.
 
 import (
 	"fmt"
 	"sort"
 
-	"github.com/the-protobuf-project/orm/plugin/pb/ormpbv1"
+	"github.com/the-protobuf-project/orm/plugin/factory/facets"
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 // filterFieldView is one filterable field in a table spec.
@@ -44,7 +43,7 @@ type filterTableView struct {
 
 // buildFilterTable plans one table's spec. Returns ok=false when nothing on the
 // table is filterable or sortable (the spec would be empty).
-func buildFilterTable(s *schema.Schema, t *schema.Table) (filterTableView, bool) {
+func buildFilterTable(s *schema.Schema, t *schema.Table, fx facets.Set) (filterTableView, bool) {
 	v := filterTableView{
 		SpecVar: t.LocalName + "FilterSpec",
 		Model:   t.LocalName,
@@ -58,7 +57,7 @@ func buildFilterTable(s *schema.Schema, t *schema.Table) (filterTableView, bool)
 		if !ok {
 			continue
 		}
-		opts := queryOpts(c.Source)
+		opts := fx.Query(c)
 		field := string(c.Source.Name())
 
 		filterable := true
@@ -126,15 +125,4 @@ func classifyFilterColumn(c *schema.Column) (kind string, sortable, ok bool) {
 	default:
 		return "", false, false
 	}
-}
-
-// queryOpts reads the orm.v1.query extension off a field descriptor,
-// returning an empty options message when absent (same accessor shape as the
-// backend and types packages — each package that interprets options at render
-// time reads them off the Source descriptor itself).
-func queryOpts(d protoreflect.FieldDescriptor) *ormpbv1.QueryOptions {
-	if d == nil || !proto.HasExtension(d.Options(), ormpbv1.E_Query) {
-		return &ormpbv1.QueryOptions{}
-	}
-	return proto.GetExtension(d.Options(), ormpbv1.E_Query).(*ormpbv1.QueryOptions)
 }

@@ -25,6 +25,7 @@ import (
 	"google.golang.org/protobuf/compiler/protogen"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
+	"github.com/the-protobuf-project/orm/plugin/factory/target/types"
 	"github.com/the-protobuf-project/protokit/header"
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
@@ -149,7 +150,7 @@ type helperNeeds struct {
 
 // convertView assembles the template data for one schema's convert.go, or nil
 // when no table in the schema maps to a proto message.
-func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string) (map[string]any, error) {
+func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string, typeOf types.TypeOf) (map[string]any, error) {
 	imports := newConvImports()
 	var needs helperNeeds
 	emittedEnums := map[string]string{} // enum ProtoName -> model LocalName
@@ -230,7 +231,7 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 			// names in a nullable text column. Detected off the proto field —
 			// the IR may have already flattened the column to a plain string.
 			if f.Desc.IsList() && f.Enum != nil {
-				if goType(col) != "*string" {
+				if goType(col, typeOf) != "*string" {
 					toSkips, fromSkips = skipBoth(toSkips, fromSkips, col)
 					continue
 				}
@@ -354,7 +355,7 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 			// pointer column preserves explicit absence; the value is copied so
 			// the row never aliases proto memory.
 			if wrapGo, wrapCtor := wrapperScalar(fullNameOf(f)); wrapGo != "" {
-				if goType(col) != "*"+wrapGo {
+				if goType(col, typeOf) != "*"+wrapGo {
 					toSkips, fromSkips = skipBoth(toSkips, fromSkips, col)
 					continue
 				}
@@ -377,7 +378,7 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 				toSkips, fromSkips = skipBoth(toSkips, fromSkips, col)
 				continue
 			}
-			modelType := goType(col)
+			modelType := goType(col, typeOf)
 			if f.Desc.HasOptionalKeyword() && f.Desc.Kind() != protoreflect.MessageKind {
 				// A proto3 `optional` scalar is a pointer on both sides: copy it
 				// through so explicit absence survives (toPtr would erase an

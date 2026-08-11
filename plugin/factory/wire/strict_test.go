@@ -12,8 +12,6 @@ import (
 
 	"google.golang.org/protobuf/compiler/protogen"
 
-	"github.com/the-protobuf-project/orm/plugin/factory/source/proto/backend"
-	"github.com/the-protobuf-project/orm/plugin/factory/wire"
 	"github.com/the-protobuf-project/protokit"
 	"github.com/the-protobuf-project/protokit/golden"
 )
@@ -64,5 +62,5 @@ func generateStrict(t *testing.T, dir, strict string) error {
 	if err != nil {
 		t.Fatalf("protogen: %v", err)
 	}
-	return protokit.Run(p, protokit.Options{Target: "sql", Strict: strict}, wire.ProtoTargets(), backend.Backend{})
+	return protokit.RunPlugin(p, protokit.Options{Target: "sql", Strict: strict}, ormPlugin())
 }

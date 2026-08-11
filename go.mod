@@ -3,7 +3,7 @@ module github.com/the-protobuf-project/orm
 go 1.26.4
 
 require (
-	github.com/the-protobuf-project/protokit v1.1.0
+	github.com/the-protobuf-project/protokit v1.2.0
 	google.golang.org/genproto/googleapis/api v0.0.0-20260720211330-0afa2a65878a
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1

@@ -7,8 +7,6 @@ import (
 
 	"google.golang.org/protobuf/compiler/protogen"
 
-	"github.com/the-protobuf-project/orm/plugin/factory/source/proto/backend"
-	"github.com/the-protobuf-project/orm/plugin/factory/wire"
 	"github.com/the-protobuf-project/protokit"
 	"github.com/the-protobuf-project/protokit/golden"
 )
@@ -24,7 +22,7 @@ func TestRelationalTargetsRejectMongo(t *testing.T) {
 		if err != nil {
 			t.Fatalf("protogen: %v", err)
 		}
-		err = protokit.Run(p, protokit.Options{Target: target}, wire.ProtoTargets(), backend.Backend{})
+		err = protokit.RunPlugin(p, protokit.Options{Target: target}, ormPlugin())
 		if err == nil || !strings.Contains(err.Error(), "mongodb") {
 			t.Errorf("%s on mongodb provider: want provider error, got %v", target, err)
 		}
@@ -40,7 +38,7 @@ func TestUnknownTarget(t *testing.T) {
 		if err != nil {
 			t.Fatalf("protogen: %v", err)
 		}
-		if err := protokit.Run(p, protokit.Options{Target: target}, wire.ProtoTargets(), backend.Backend{}); err == nil {
+		if err := protokit.RunPlugin(p, protokit.Options{Target: target}, ormPlugin()); err == nil {
 			t.Errorf("target %q: want error, got nil", target)
 		}
 	}

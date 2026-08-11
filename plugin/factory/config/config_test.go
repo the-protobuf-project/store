@@ -8,14 +8,14 @@ import (
 
 	"github.com/the-protobuf-project/orm/plugin/factory/config"
 	"github.com/the-protobuf-project/orm/plugin/factory/coreir"
-	"github.com/the-protobuf-project/orm/plugin/factory/source/proto/backend"
 	"github.com/the-protobuf-project/orm/plugin/factory/wire"
 	"github.com/the-protobuf-project/protokit"
 	"github.com/the-protobuf-project/protokit/factory"
 )
 
 func testRegistry() *factory.Registry[*coreir.Model] {
-	return wire.Registry(protokit.Options{}, backend.New(nil, "", false, false, false, false))
+	// Validation only inspects the registry's shape, so no readers or layout.
+	return wire.Registry(protokit.Options{}, nil, nil)
 }
 
 // loadFrom writes yaml to a temp file and loads it (exercising strict decode).

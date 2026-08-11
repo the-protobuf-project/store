@@ -26,14 +26,22 @@ func (t *Target) Name() string { return t.inner.Name() }
 // Languages: the DB targets emit Go (structs/DDL/Prisma project files) today.
 func (t *Target) Languages() []string { return []string{"go"} }
 
-// Generate renders the DBSchema facet through the wrapped protokit target. It
-// needs the protoc plugin context, so it is only usable in plugin mode.
+// Generate renders the DB facet through the wrapped protokit target. It needs the
+// protoc plugin context, so it is only usable in plugin mode.
+//
+// A target that implements schema.IRTarget receives the whole IR and can read the
+// facets this plugin's readers attached; one implementing only schema.Target gets
+// the databases alone. protokit's own dispatch makes the same choice, and mirroring
+// it here is what lets a target be migrated one at a time.
 func (t *Target) Generate(ctx factory.Ctx, m *coreir.Model, _ string) error {
 	if ctx.Plugin == nil {
 		return fmt.Errorf("target %q requires a protoc plugin context (proto sources run under buf/protoc, not the CLI)", t.inner.Name())
 	}
-	if m == nil || m.DBSchema == nil {
+	if m == nil || m.DB == nil {
 		return fmt.Errorf("target %q: model has no proto/DB schema (wrong source?)", t.inner.Name())
 	}
-	return t.inner.Generate(ctx.Plugin, m.DBSchema)
+	if irt, ok := t.inner.(schema.IRTarget); ok {
+		return irt.GenerateIR(ctx.Plugin, m.DB)
+	}
+	return t.inner.Generate(ctx.Plugin, m.DB.Databases)
 }

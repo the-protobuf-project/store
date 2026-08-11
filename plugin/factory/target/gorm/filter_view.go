@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/the-protobuf-project/protokit/header"
+	"github.com/the-protobuf-project/orm/plugin/factory/facets"
 	"github.com/the-protobuf-project/protokit/schema"
 )
 
@@ -24,10 +25,10 @@ const graphqlRuntimeModule = "github.com/the-protobuf-project/runtime-go/network
 
 // filtersView assembles the data for one schema's filters.go: one Spec var per
 // table. Returns nil when no table in the schema yields a spec.
-func filtersView(db *schema.Database, s *schema.Schema, pkg string) map[string]any {
+func filtersView(db *schema.Database, s *schema.Schema, pkg string, fx facets.Set) map[string]any {
 	var tables []filterTableView
 	for _, t := range s.Tables {
-		if v, ok := buildFilterTable(s, t); ok {
+		if v, ok := buildFilterTable(s, t, fx); ok {
 			tables = append(tables, v)
 		}
 	}

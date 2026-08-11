@@ -38,15 +38,26 @@ func ProtoTargets() map[string]schema.Target {
 	}
 }
 
+// Plugin assembles what this binary contributes to one protokit run: the proto
+// targets it ships, the readers that bring its annotation package into the IR as
+// facets, and the naming policy it resolved from its own config.
+//
+// It exists so plugin dispatch, the golden harness, and the agreement tests all
+// construct the same run — a test that built its readers by hand would be testing
+// a plugin the binary never assembles.
+func Plugin(readers []protokit.FacetReader, layout protokit.LayoutResolver) protokit.Plugin {
+	return protokit.Plugin{Registry: ProtoTargets(), Readers: readers, Layout: layout}
+}
+
 // Registry builds the full factory registry: the proto and graphql sources plus
-// every target. protoOpts/protoBackend configure the proto source; the graphql
-// source and target are added with zero config, which is enough to validate and
-// list them (a graphql run configures its own instances from orm.yaml, via
-// NewGraphQLSource/NewGraphQLTarget). This one constructor is used by plugin
-// dispatch, config validation, and the tests.
-func Registry(protoOpts protokit.Options, protoBackend schema.Backend) *factory.Registry[*coreir.Model] {
+// every target. protoOpts, readers, and layout configure the proto source; the
+// graphql source and target are added with zero config, which is enough to
+// validate and list them (a graphql run configures its own instances from
+// orm.yaml, via NewGraphQLSource/NewGraphQLTarget). This one constructor is used
+// by plugin dispatch, config validation, and the tests.
+func Registry(protoOpts protokit.Options, readers []protokit.FacetReader, layout protokit.LayoutResolver) *factory.Registry[*coreir.Model] {
 	reg := factory.NewRegistry[*coreir.Model]()
-	reg.AddSource(proto.New(protoOpts, protoBackend))
+	reg.AddSource(proto.New(protoOpts, readers, layout))
 	addGraphQLSource(reg)
 	for _, t := range ProtoTargets() {
 		reg.AddTarget(database.Wrap(t))

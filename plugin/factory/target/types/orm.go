@@ -2,8 +2,8 @@
 // canonical PostgreSQL type the gorm/sql/prisma targets render from. It is the
 // db-specific half of the type system that used to live in protokit; protokit now
 // carries only the neutral FieldType, and orm's own type override
-// (orm.v1.column.type/max_length/precision) is read here off the column's Source
-// descriptor rather than being stored back on the shared IR.
+// (orm.v1.column.type/max_length/precision) arrives from the column's orm.v1
+// facet rather than being stored back on the shared IR.
 package types
 
 import (
@@ -11,8 +11,6 @@ import (
 
 	"github.com/the-protobuf-project/orm/plugin/pb/ormpbv1"
 	"github.com/the-protobuf-project/protokit/schema"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 // sqlForType maps a neutral FieldType to its canonical PostgreSQL type, matching
@@ -53,22 +51,30 @@ func SQL(t schema.FieldType, list bool) string {
 	return base
 }
 
+// TypeOf resolves a column's effective PostgreSQL type. Targets build one from
+// their facet set and thread it into the view builders, which is why the deep
+// renderers never need the IR itself.
+type TypeOf func(*schema.Column) string
+
 // SQLForColumn returns the effective PostgreSQL type of a column: an explicit
-// orm.v1.column type/max_length/precision override (read off the column's Source
-// descriptor) wins; otherwise the neutral FieldType — proto-classified, or set by
-// protokit's synthesis and foreign-key alignment — projects to a PostgreSQL type.
-func SQLForColumn(col *schema.Column) string {
-	if t := overrideType(col.Source); t != "" {
+// orm.v1.column type/max_length/precision override wins; otherwise the neutral
+// FieldType — proto-classified, or set by protokit's synthesis and foreign-key
+// alignment — projects to a PostgreSQL type.
+//
+// o comes from the column's orm.v1 facet rather than its Source descriptor, so a
+// synthesized column (a surrogate key, an embedded child's foreign key) resolves
+// correctly instead of silently falling back to the neutral type. Callers pass
+// the never-nil value facets.Set.Column returns.
+func SQLForColumn(col *schema.Column, o *ormpbv1.ColumnOptions) string {
+	if t := overrideType(o); t != "" {
 		return t
 	}
 	return SQL(col.Type, col.List)
 }
 
 // overrideType returns the SQL type an orm.v1.column type/max_length/precision
-// override pins on a field, or "" when the field has no such override (or is a
-// synthesized column with no descriptor).
-func overrideType(d protoreflect.FieldDescriptor) string {
-	o := columnOpts(d)
+// override pins on a column, or "" when it carries no such override.
+func overrideType(o *ormpbv1.ColumnOptions) string {
 	switch {
 	case o.GetType() != "":
 		return o.GetType()
@@ -78,13 +84,4 @@ func overrideType(d protoreflect.FieldDescriptor) string {
 		return fmt.Sprintf("NUMERIC(%d,%d)", o.GetPrecision(), o.GetScale())
 	}
 	return ""
-}
-
-// columnOpts reads the orm.v1.column extension off a field descriptor, returning a
-// safe empty value when the descriptor is nil or carries no annotation.
-func columnOpts(d protoreflect.FieldDescriptor) *ormpbv1.ColumnOptions {
-	if d == nil || !proto.HasExtension(d.Options(), ormpbv1.E_Column) {
-		return &ormpbv1.ColumnOptions{}
-	}
-	return proto.GetExtension(d.Options(), ormpbv1.E_Column).(*ormpbv1.ColumnOptions)
 }

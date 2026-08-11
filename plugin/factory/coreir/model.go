@@ -8,17 +8,23 @@
 package coreir
 
 import (
+	"github.com/the-protobuf-project/protokit"
 	"github.com/the-protobuf-project/protokit/graphql/introspect"
 	"github.com/the-protobuf-project/protokit/graphql/ir"
-	"github.com/the-protobuf-project/protokit/schema"
 )
 
 // Model is the unit of work handed from a Source to a Target. Exactly one facet
 // is populated, matching the Source that built it.
 type Model struct {
-	// DBSchema is the proto-derived database IR (set by the proto Source; read by
-	// the prisma / gorm / sql targets). Nil for non-proto sources.
-	DBSchema []*schema.Database
+	// DB is the proto-derived IR: the neutral database tree plus the facet
+	// side-tables each registered reader contributed (set by the proto Source;
+	// read by the prisma / gorm / sql / repository targets). Nil for non-proto
+	// sources.
+	//
+	// The whole IR travels rather than DB.Databases alone because a target needs
+	// the facets to render anything physical — a column's SQL type lives in the
+	// orm.v1 facet, not on the neutral column.
+	DB *protokit.IR
 
 	// GraphQL holds the introspection-derived GraphQL IR (set by the graphql
 	// Source; read by the graphql-client target). Nil for non-graphql sources.

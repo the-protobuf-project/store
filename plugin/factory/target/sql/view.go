@@ -57,12 +57,12 @@ type schemaDDL struct {
 }
 
 // schemaView assembles the template data for one schema's DDL file.
-func schemaView(db *schema.Database, s *schema.Schema) map[string]any {
+func schemaView(db *schema.Database, s *schema.Schema, typeOf types.TypeOf) map[string]any {
 	enums := enumDDLViews(s)
 
 	var tables []tableView
 	for _, t := range s.Tables {
-		tables = append(tables, tableViewOf(s, t))
+		tables = append(tables, tableViewOf(s, t, typeOf))
 	}
 
 	ddl := schemaDDLOf(s, false) // per-schema files use plain, readable CREATE TRIGGER
@@ -185,7 +185,7 @@ type migrateTableView struct {
 // dependency order: all schemas, then enums, then tables (no inline FKs), then
 // FK constraints as ALTER TABLE, then indexes, trigger functions, triggers, and
 // COMMENT ON. The whole file is wrapped in a transaction by the template.
-func migrateView(db *schema.Database) map[string]any {
+func migrateView(db *schema.Database, typeOf types.TypeOf) map[string]any {
 	var schemaNames []string
 	var enumStmts []string
 	var tables []migrateTableView
@@ -201,7 +201,7 @@ func migrateView(db *schema.Database) map[string]any {
 			ref := qualified(s.Name, t.Name)
 			mt := migrateTableView{Comment: t.Comment, Ref: ref}
 			for _, col := range t.Columns {
-				mt.Cols = append(mt.Cols, itemView{Comment: col.Comment, Def: colDef(s, col)})
+				mt.Cols = append(mt.Cols, itemView{Comment: col.Comment, Def: colDef(s, col, typeOf)})
 			}
 			if n := len(mt.Cols); n > 0 {
 				mt.Cols[n-1].Last = true
@@ -266,11 +266,11 @@ func schemaLabels(db *schema.Database) []string {
 }
 
 // tableViewOf renders one table's column defs, FK constraints, and indexes.
-func tableViewOf(s *schema.Schema, t *schema.Table) tableView {
+func tableViewOf(s *schema.Schema, t *schema.Table, typeOf types.TypeOf) tableView {
 	tv := tableView{Comment: t.Comment, Ref: qualified(s.Name, t.Name)}
 
 	for _, col := range t.Columns {
-		tv.Items = append(tv.Items, itemView{Comment: col.Comment, Def: colDef(s, col)})
+		tv.Items = append(tv.Items, itemView{Comment: col.Comment, Def: colDef(s, col, typeOf)})
 	}
 	for _, fk := range t.ForeignKeys {
 		tv.Items = append(tv.Items, itemView{Def: fkDef(t.Name, fk)})
@@ -312,8 +312,8 @@ func indexStmts(s *schema.Schema, t *schema.Table, ifNotExists bool) []string {
 
 // colDef renders a single column definition fragment.
 // Enum columns use the schema-qualified type created by CREATE TYPE.
-func colDef(s *schema.Schema, col *schema.Column) string {
-	sqlType := types.SQLForColumn(col)
+func colDef(s *schema.Schema, col *schema.Column, typeOf types.TypeOf) string {
+	sqlType := typeOf(col)
 	if col.Enum != nil {
 		sqlType = qualified(s.Name, col.Enum.LocalSQLName)
 	}

@@ -24,12 +24,12 @@ func gormFieldName(col *schema.Column) string {
 // nullable scalars become pointers. Slice-backed types ([]byte, json.RawMessage,
 // and the pq.*Array types repeated scalars map to) are not re-wrapped — their nil
 // zero value already encodes SQL NULL.
-func goType(col *schema.Column) string {
+func goType(col *schema.Column, typeOf types.TypeOf) string {
 	var base string
 	if col.Enum != nil {
 		base = col.Enum.LocalName // package-namespaced: bare enum type name
 	} else {
-		base = types.GormGoType(types.SQLForColumn(col))
+		base = types.GormGoType(typeOf(col))
 	}
 	if col.Optional && !strings.HasPrefix(base, "[]") && base != "json.RawMessage" && !strings.HasPrefix(base, "pq.") {
 		return "*" + base
@@ -44,12 +44,12 @@ func goType(col *schema.Column) string {
 // reproduces the same indexes and enum value integrity the SQL target emits.
 // telemetryTag, when non-empty, is the pre-rendered opentelementry tag the SDK
 // reflects over (span attributes and value metrics).
-func structTag(col *schema.Column, extra []string, telemetryTag string) string {
+func structTag(col *schema.Column, extra []string, telemetryTag string, typeOf types.TypeOf) string {
 	gormParts := []string{"column:" + col.Name}
 	// Pin the DB type when GORM's Go-type default disagrees with the canonical
 	// column type (timestamptz, jsonb, native arrays) so AutoMigrate produces the
 	// same column the Prisma/SQL targets do.
-	if ct := types.GormColumnType(types.SQLForColumn(col)); ct != "" {
+	if ct := types.GormColumnType(typeOf(col)); ct != "" {
 		gormParts = append(gormParts, "type:"+ct)
 	}
 	if col.PrimaryKey {
