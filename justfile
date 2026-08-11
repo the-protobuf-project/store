@@ -1,4 +1,4 @@
-# orm dev tasks — run `just` (or `just --list`) to see recipes.
+# store dev tasks — run `just` (or `just --list`) to see recipes.
 #
 # Common flows:
 #   just dev        # build+install the dev plugin, test, regen examples with it

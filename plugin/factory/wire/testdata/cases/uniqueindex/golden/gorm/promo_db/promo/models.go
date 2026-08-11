@@ -13,7 +13,7 @@
 
 package promo
 
-// PromoCode is a redeemable promotion. The human-facing `code` is unique via a single-column unique index, so orm emits GetByCode alongside GetByID and the GetByName finder for the AIP resource name.
+// PromoCode is a redeemable promotion. The human-facing `code` is unique via a single-column unique index, so store emits GetByCode alongside GetByID and the GetByName finder for the AIP resource name.
 type PromoCode struct {
 	// Unique identifier for the record.
 	ID string `gorm:"column:id;primaryKey;not null" json:"id"`

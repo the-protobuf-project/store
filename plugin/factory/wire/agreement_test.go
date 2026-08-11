@@ -31,11 +31,8 @@ import (
 // identical neutral facts for every case whose protos are written in
 // protokit.v1.
 //
-// Cases still written in orm.v1 are skipped, and the skip is the point rather
-// than an evasion: their structure arrives through the compat reader, so a bare
-// protokit build genuinely sees different tables. That is a statement about the
-// deprecated vocabulary — it is *not* neutral, which is why it is being retired —
-// not a disagreement between plugins about protokit.v1.
+// Every case is written in protokit.v1, so a bare protokit build reads the same
+// structure this plugin does — which is exactly the property under test.
 func TestIRAgreement(t *testing.T) {
 	for _, dir := range protokitV1Cases(t) {
 		name := filepath.Base(dir)

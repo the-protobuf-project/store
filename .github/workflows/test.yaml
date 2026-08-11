@@ -14,16 +14,16 @@ jobs:
     name: Test (Go)
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout orm
+      - name: Checkout store
         uses: actions/checkout@v7
         with:
-          path: orm
+          path: store
 
-      # orm/go.mod has local `replace` directives for
+      # store/go.mod has local `replace` directives for
       # opentelementry-go (telemetry.v1's Go stubs, pending a BSR/module
       # publish) and runtime-go/telemetry (the Meter contract generated code
       # binds to, not published yet either) — both point at ../<repo>
-      # relative to orm, so CI checks them out as true siblings, matching
+      # relative to store, so CI checks them out as true siblings, matching
       # local development. Drop these two checkouts (and go.mod's replaces)
       # once both are published for real.
       - name: Checkout opentelementry (for the opentelementry-go replace)
@@ -41,14 +41,14 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version-file: orm/go.mod
+          go-version-file: store/go.mod
 
       - name: Download dependencies
-        working-directory: orm
+        working-directory: store
         run: go mod download
 
       - name: Test
-        working-directory: orm
+        working-directory: store
         run: go test -race ./...
 
   build:
@@ -59,10 +59,10 @@ jobs:
         goos: [linux, darwin, windows]
         goarch: [amd64, arm64]
     steps:
-      - name: Checkout orm
+      - name: Checkout store
         uses: actions/checkout@v7
         with:
-          path: orm
+          path: store
 
       - name: Checkout opentelementry (for the opentelementry-go replace)
         uses: actions/checkout@v7
@@ -79,10 +79,10 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version-file: orm/go.mod
+          go-version-file: store/go.mod
 
       - name: Build plugin binary
-        working-directory: orm
+        working-directory: store
         env:
           CGO_ENABLED: 0
           GOOS: ${{ matrix.goos }}

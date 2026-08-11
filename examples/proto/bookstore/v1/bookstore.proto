@@ -87,7 +87,7 @@ message Book {
     (store.v1.column) = {max_length: 500}
   ];
 
-  // author_id references Author; orm infers the FOREIGN KEY, aligns the
+  // author_id references Author; store infers the FOREIGN KEY, aligns the
   // column type with the referenced PK (CHAR(26) ULID), and applies CASCADE.
   string author_id = 3 [
     (google.api.field_behavior) = REQUIRED,

@@ -51,7 +51,7 @@ var version = "dev"
 // resolveVersion returns the build version to stamp into generated files.
 // A release sets `version` via ldflags and wins outright. Otherwise we recover
 // it from the build info the Go toolchain embeds: `go install …@v0.1.2` records
-// the tag as the main module version, and when orm is consumed as a
+// the tag as the main module version, and when store is consumed as a
 // dependency its module entry carries the version. Only genuine local builds
 // (`go build`/`go run`, which report "(devel)") fall back to "dev".
 func resolveVersion() string {
@@ -135,7 +135,7 @@ func main() {
 			return runGraphQL(p, *config, *goModule, v)
 		}
 
-		// orm owns its layout config (protokit has none): load it here and split it
+		// store owns its layout config (protokit has none): load it here and split it
 		// across the two seams it feeds — the reader (which needs the telemetry
 		// block and the render knobs) and the layout resolver (which owns the
 		// database/schema naming policy).

@@ -33,7 +33,7 @@ erDiagram
 
 ### `PromoCode` → `promo_codes`
 
-PromoCode is a redeemable promotion. The human-facing `code` is unique via a single-column unique index, so orm emits GetByCode alongside GetByID and the GetByName finder for the AIP resource name.
+PromoCode is a redeemable promotion. The human-facing `code` is unique via a single-column unique index, so store emits GetByCode alongside GetByID and the GetByName finder for the AIP resource name.
 
 | Column | Type | Null |
 | --- | --- | --- |

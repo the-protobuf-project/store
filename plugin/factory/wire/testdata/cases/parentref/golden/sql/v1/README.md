@@ -45,7 +45,7 @@ User is the parent resource.
 
 ### `Note` → `notes`
 
-Note is owned by a User. Its pattern carries a {user} parent segment with no corresponding field, so orm materializes a user_id FK → User from the pattern alone.
+Note is owned by a User. Its pattern carries a {user} parent segment with no corresponding field, so store materializes a user_id FK → User from the pattern alone.
 
 | Column | Type | Null |
 | --- | --- | --- |

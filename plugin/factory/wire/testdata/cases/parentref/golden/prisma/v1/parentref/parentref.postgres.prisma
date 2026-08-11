@@ -31,7 +31,7 @@ model User {
   @@schema("parentref_v1")
 }
 
-/// Note is owned by a User. Its pattern carries a {user} parent segment with no corresponding field, so orm materializes a user_id FK → User from the pattern alone.
+/// Note is owned by a User. Its pattern carries a {user} parent segment with no corresponding field, so store materializes a user_id FK → User from the pattern alone.
 model Note {
   /// Unique identifier for the record.
   id String @id @default(ulid()) @map("id")

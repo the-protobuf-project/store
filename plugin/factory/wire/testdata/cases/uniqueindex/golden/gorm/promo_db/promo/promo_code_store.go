@@ -51,7 +51,7 @@ type PromoCodeStoreIface interface {
 }
 
 // PromoCodeStore provides typed CRUD access to PromoCode records.
-// PromoCode is a redeemable promotion. The human-facing `code` is unique via a single-column unique index, so orm emits GetByCode alongside GetByID and the GetByName finder for the AIP resource name.
+// PromoCode is a redeemable promotion. The human-facing `code` is unique via a single-column unique index, so store emits GetByCode alongside GetByID and the GetByName finder for the AIP resource name.
 type PromoCodeStore struct {
 	DB *gorm.DB
 	// Telemetry observes every operation; nil is a no-op. Wire the generated

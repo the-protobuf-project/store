@@ -60,7 +60,7 @@ type Book struct {
 	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
 	// title: REQUIRED NOT NULL; max_length caps the VARCHAR provider-neutrally.
 	Title string `gorm:"column:title;not null" json:"title" validate:"required"`
-	// author_id references Author; orm infers the FOREIGN KEY, aligns the column type with the referenced PK (CHAR(26) ULID), and applies CASCADE.
+	// author_id references Author; store infers the FOREIGN KEY, aligns the column type with the referenced PK (CHAR(26) ULID), and applies CASCADE.
 	AuthorID string  `gorm:"column:author_id;not null;index:idx_books_author_year,priority:1" json:"author_id" validate:"required"`
 	Author   *Author `gorm:"foreignKey:AuthorID;constraint:OnDelete:CASCADE" json:"author,omitempty"`
 	// isbn must be globally unique; custom fixed-width type.

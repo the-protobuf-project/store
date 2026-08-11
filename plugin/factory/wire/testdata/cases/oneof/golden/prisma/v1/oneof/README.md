@@ -22,7 +22,7 @@ Schema file: [`oneof.postgres.prisma`](./oneof.postgres.prisma)
 
 ### `Audio` → `audios`
 
-Audio exercises oneof integrity: the `input` oneof flattens to independent nullable columns, and orm adds a generated input_case discriminator enum recording which member is set so the lost exclusivity invariant is observable.
+Audio exercises oneof integrity: the `input` oneof flattens to independent nullable columns, and store adds a generated input_case discriminator enum recording which member is set so the lost exclusivity invariant is observable.
 
 | Column | Type | Null |
 | --- | --- | --- |

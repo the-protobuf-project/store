@@ -10,7 +10,7 @@ version: v2
 # separately over there (see telemetrypbv1). store only regenerates its own store.v1
 # stubs, which reference telemetry.v1 types via the Go import path, not codegen.
 #
-# The module= opt strips the orm module prefix from each go_package so the output
+# The module= opt strips the store module prefix from each go_package so the output
 # lands under plugin/pb/ (go_package .../store/plugin/pb/storepbv1 -> plugin/pb/storepbv1).
 # (buf.gen.example.yaml is the separate template that renders the bookstore example
 # schemas with the protoc-gen-store plugin.)

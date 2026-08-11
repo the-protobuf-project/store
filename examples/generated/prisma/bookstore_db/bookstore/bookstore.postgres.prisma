@@ -71,7 +71,7 @@ model Book {
   /// title: REQUIRED NOT NULL; max_length caps the VARCHAR provider-neutrally.
   title String @map("title")
 
-  /// author_id references Author; orm infers the FOREIGN KEY, aligns the column type with the referenced PK (CHAR(26) ULID), and applies CASCADE.
+  /// author_id references Author; store infers the FOREIGN KEY, aligns the column type with the referenced PK (CHAR(26) ULID), and applies CASCADE.
   authorID String @map("author_id")
 
   /// Relation to Author via author_id.

@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-The latest stable release of orm receives security fixes. We encourage all users to stay on the most recent version.
+The latest stable release of store receives security fixes. We encourage all users to stay on the most recent version.
 
 | Version | Supported |
 | ------- | --------- |
@@ -13,7 +13,7 @@ The latest stable release of orm receives security fixes. We encourage all users
 
 **Please do not report security vulnerabilities through public GitHub Issues.**
 
-If you believe you have found a security vulnerability in orm, report it privately via GitHub's built-in vulnerability reporting:
+If you believe you have found a security vulnerability in store, report it privately via GitHub's built-in vulnerability reporting:
 
 1. Navigate to the [Security tab](https://github.com/the-protobuf-project/store/security) of this repository.
 2. Click **"Report a vulnerability"**.
@@ -26,7 +26,7 @@ Alternatively, you may email the maintainers directly. Check the repository's co
 A useful report covers:
 
 - A clear description of the vulnerability and the potential impact.
-- The orm version(s) affected.
+- The store version(s) affected.
 - A minimal reproducer: the `.proto` file, `buf.gen.yaml`, and the `opt:` flags needed to trigger the issue.
 - The generated output that demonstrates the problem (e.g. malformed SQL DDL, an unsafe default, or unexpected file written outside the output directory).
 - Your environment: OS, Go version, `buf` version, and which target (`prisma` / `gorm` / `sql` / `csv`) is involved.
@@ -44,23 +44,23 @@ We will keep you updated throughout the process and credit you in the release no
 
 ## Scope
 
-orm is a **code-generation tool** — it runs at development or CI time and produces static files. The attack surface is therefore different from a running service. Areas we consider in scope include:
+store is a **code-generation tool** — it runs at development or CI time and produces static files. The attack surface is therefore different from a running service. Areas we consider in scope include:
 
 ### In scope
 
-- **Malicious or crafted `.proto` inputs** that cause orm to:
+- **Malicious or crafted `.proto` inputs** that cause store to:
   - Write files outside the declared output directory (path traversal).
   - Generate SQL or code that contains injected statements or expressions exploitable at migration or runtime (e.g. unsanitised `default_value`, `type`, or `column` option values written verbatim into DDL or Go source).
   - Consume unbounded memory or CPU (denial of service against the build pipeline).
   - Panic or crash in a way that could be triggered by a shared CI environment processing untrusted protos.
-- **Supply-chain concerns**: vulnerabilities in orm's Go dependencies that affect the plugin binary or the generated output.
+- **Supply-chain concerns**: vulnerabilities in store's Go dependencies that affect the plugin binary or the generated output.
 - **Generated output safety**: defaults or patterns in the generated schema that predictably introduce SQL injection, privilege escalation, or data-exposure risks in downstream applications.
 - **`store.yaml` config parsing**: path-glob injection or directory traversal via the `match`, `database`, or `schema` fields.
 
 ### Out of scope
 
 - Vulnerabilities in the **databases** that orm targets (PostgreSQL, MongoDB, Prisma, GORM). Report those to the respective upstream projects.
-- Security of **applications built on top of** orm-generated schemas. orm gives you the schema; securing the application is the application owner's responsibility.
+- Security of **applications built on top of** store-generated schemas. store gives you the schema; securing the application is the application owner's responsibility.
 - Issues that require an already-compromised developer machine or build system.
 - Theoretical concerns with no demonstrated impact (e.g. "SHA-1 is weak" without a concrete exploit path).
 
@@ -68,7 +68,7 @@ orm is a **code-generation tool** — it runs at development or CI time and prod
 
 ### Treat generated output as code
 
-orm writes SQL DDL, Go source files, and Prisma schemas. Apply the same review discipline you would to hand-written code:
+store writes SQL DDL, Go source files, and Prisma schemas. Apply the same review discipline you would to hand-written code:
 
 - Review generated diffs before running `prisma migrate dev` or executing DDL against a production database.
 - Do not pipe generated SQL directly to a database without inspection, especially when the source protos come from an external or untrusted party.
@@ -95,7 +95,7 @@ This surfaces schema problems as hard errors rather than silent warnings, reduci
 
 ### Dependency pinning
 
-orm generates a `package.json` for the Prisma target. Pin dependency versions and run `npm audit` as part of your workflow to catch vulnerabilities in the generated Node.js project before deploying it.
+store generates a `package.json` for the Prisma target. Pin dependency versions and run `npm audit` as part of your workflow to catch vulnerabilities in the generated Node.js project before deploying it.
 
 ## Acknowledgements
 

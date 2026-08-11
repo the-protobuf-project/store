@@ -31,7 +31,7 @@ erDiagram
 
 ### `Document` → `documents`
 
-Document exercises the AIP-148/164 system fields: create_time/update_time become auto-managed audit timestamps, delete_time a nullable indexed soft-delete marker, and uid a UNIQUE server-assigned id — all with no orm annotation.
+Document exercises the AIP-148/164 system fields: create_time/update_time become auto-managed audit timestamps, delete_time a nullable indexed soft-delete marker, and uid a UNIQUE server-assigned id — all with no store annotation.
 
 | Column | Type | Null |
 | --- | --- | --- |

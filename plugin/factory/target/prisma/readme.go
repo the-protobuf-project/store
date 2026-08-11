@@ -6,7 +6,7 @@ package prisma
 // the models in (or under) that folder, plus model/enum detail for leaves.
 //
 // Unlike the standalone schema_readme generator this replaces, the diagram is
-// built directly from the orm IR (tables, foreign keys, resolved PK
+// built directly from the store IR (tables, foreign keys, resolved PK
 // columns) rather than by re-parsing .prisma text.
 
 import (

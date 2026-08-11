@@ -39,7 +39,7 @@ type Generator struct{}
 // Name returns the target identifier used in buf.gen.yaml opt: [target=repository].
 func (g *Generator) Name() string { return "repository" }
 
-// opts accessors (stamped by the orm backend; see backend.WithRepositoryModules).
+// opts accessors (stamped by the store backend; see backend.WithRepositoryModules).
 func dbGoModule(db *schema.Database) string      { return db.Opt("go_module") }
 func dbGormModule(db *schema.Database) string    { return db.Opt("gorm_module") }
 func dbGraphQLModule(db *schema.Database) string { return db.Opt("graphql_module") }

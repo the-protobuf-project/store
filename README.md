@@ -1,4 +1,4 @@
-# ORM
+# store
 
 > **One contract, many targets.** `protoc-gen-store` is a co-generation factory:
 > feed it **Protobuf** (annotated with [Google AIP](https://google.aip.dev/)) and it
@@ -6,9 +6,9 @@
 > **GraphQL** endpoint or `.graphql` SDL and it emits a typed **Go client**. One
 > binary, one `store.yaml`, outputs that always agree.
 
-[![Release](https://img.shields.io/github/v/release/the-protobuf-project/orm?sort=semver&logo=github)](https://github.com/the-protobuf-project/store/releases)
+[![Release](https://img.shields.io/github/v/release/the-protobuf-project/store?sort=semver&logo=github)](https://github.com/the-protobuf-project/store/releases)
 [![Go Reference](https://pkg.go.dev/badge/github.com/the-protobuf-project/store.svg)](https://pkg.go.dev/github.com/the-protobuf-project/store)
-[![Go Version](https://img.shields.io/github/go-mod/go-version/the-protobuf-project/orm?logo=go)](go.mod)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/the-protobuf-project/store?logo=go)](go.mod)
 [![Buf BSR](https://img.shields.io/badge/BSR-the--protobuf--project%2Form-0B7FFF?logo=buffer)](https://buf.build/the-protobuf-project/store)
 [![CI](https://github.com/the-protobuf-project/store/actions/workflows/test.yaml/badge.svg)](https://github.com/the-protobuf-project/store/actions/workflows/test.yaml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
@@ -36,13 +36,13 @@
 
 ## Overview
 
-**orm** is a single binary, `protoc-gen-store`, built as a **co-generation factory** —
+**store** is a single binary, `protoc-gen-store`, built as a **co-generation factory** —
 a `source → target × language` pipeline. A *source* turns a contract into a neutral
 model; a *target* renders that model into code. Two sources ship today:
 
 - **proto** — a [protoc](https://protobuf.dev/) plugin. Annotate messages with the
   [Google AIP](https://google.aip.dev/) standards you already use
-  (`google.api.resource`, `field_behavior`, `resource_reference`) and orm infers
+  (`google.api.resource`, `field_behavior`, `resource_reference`) and store infers
   tables, columns, primary keys, foreign keys, and relations.
 - **graphql** — point it at a live GraphQL endpoint (or a cached `.graphql` SDL file)
   and it introspects the schema.
@@ -141,7 +141,7 @@ blockchain backend.
 
 ## How it works
 
-Every annotation maps to a concrete piece of schema. orm collects them all
+Every annotation maps to a concrete piece of schema. store collects them all
 into the IR, applies its [production defaults](#defaults-applied-automatically),
 then hands the IR to the selected renderer.
 
@@ -250,7 +250,7 @@ buf generate
 ```
 
 > [!NOTE]
-> orm doesn't generate Go message stubs, so protoc/buf needs a Go import
+> store doesn't generate Go message stubs, so protoc/buf needs a Go import
 > path for each file. If your protos don't set `option go_package`, supply it
 > per file in `opt:` with an `M` mapping, e.g.
 > `Mbookstore/v1/bookstore.proto=example.com/gen/bookstore/v1`.
@@ -482,7 +482,7 @@ your generated GraphQL client connects with, and every query issued through a
 context carrying an active span (e.g. inside `tel.Span(ctx, ...)` from
 [Telemetry](#gorm-stores-and-tracing), or any `go.opentelemetry.io/otel` span)
 has Hasura's engine spans nest as children of yours in the same trace —
-verified against a live `ddn-engine` + Tempo. No orm codegen involved: this is
+verified against a live `ddn-engine` + Tempo. No store codegen involved: this is
 a `runtime-go/network` capability the generated `queryHandler` already threads
 `ctx` through to, the same way `Headers` carries auth tokens today.
 
@@ -833,7 +833,7 @@ datasources:
 ```
 
 **Merge two packages into one database** (their same-named models then collide,
-which orm resolves per-target — see [Determinism & migrations](#determinism--migrations)):
+which store resolves per-target — see [Determinism & migrations](#determinism--migrations)):
 
 ```yaml
 datasources:
@@ -870,7 +870,7 @@ Passed via `opt:` in `buf.gen.yaml`.
 
 ## Defaults applied automatically
 
-orm bakes in the conventions a hand-written production schema uses, so the
+store bakes in the conventions a hand-written production schema uses, so the
 common case needs **no annotations**. Each is overridable.
 
 | Default | Behavior | Override |
@@ -898,7 +898,7 @@ flow: regenerate, review the diff, then `migrate diff` / `migrate dev`.
 
 ## Type mapping
 
-The IR stores a **neutral, target-agnostic** type per column; orm projects it onto
+The IR stores a **neutral, target-agnostic** type per column; store projects it onto
 a canonical PostgreSQL type, then onto each backend's own type system. Highlights:
 
 | Proto | PostgreSQL | Prisma | Go |
@@ -927,7 +927,7 @@ Nullable columns become pointer (`*T`) / optional (`T?`) types.
 ## Examples
 
 The [`examples/`](examples/) directory is a complete, generated demo — a
-`bookstore` domain rendered to orm's three database targets:
+`bookstore` domain rendered to store's three database targets:
 
 ```text
 examples/proto/bookstore/v1/   # annotated source protos
@@ -946,7 +946,7 @@ buf generate --template buf.gen.example.yaml
 
 ```bash
 git clone https://github.com/the-protobuf-project/store
-cd orm
+cd store
 go build ./plugin/cmd/protoc-gen-store   # the plugin binary
 go test ./...                              # golden + unit tests
 buf lint                                   # proto linting

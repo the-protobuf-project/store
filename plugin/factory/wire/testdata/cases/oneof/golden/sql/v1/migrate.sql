@@ -26,7 +26,7 @@ END $$;
 -- Tables (foreign keys are added after every table exists, so creation order
 -- never matters — even across schemas or reference cycles).
 
--- Audio exercises oneof integrity: the `input` oneof flattens to independent nullable columns, and orm adds a generated input_case discriminator enum recording which member is set so the lost exclusivity invariant is observable.
+-- Audio exercises oneof integrity: the `input` oneof flattens to independent nullable columns, and store adds a generated input_case discriminator enum recording which member is set so the lost exclusivity invariant is observable.
 CREATE TABLE IF NOT EXISTS "oneof_v1"."audios" (
     -- Unique identifier for the record.
     "id"  CHAR(26)  NOT NULL  PRIMARY KEY,
@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS "oneof_v1"."audios" (
 );
 
 -- Documentation
-COMMENT ON TABLE "oneof_v1"."audios" IS 'Audio exercises oneof integrity: the `input` oneof flattens to independent nullable columns, and orm adds a generated input_case discriminator enum recording which member is set so the lost exclusivity invariant is observable.';
+COMMENT ON TABLE "oneof_v1"."audios" IS 'Audio exercises oneof integrity: the `input` oneof flattens to independent nullable columns, and store adds a generated input_case discriminator enum recording which member is set so the lost exclusivity invariant is observable.';
 COMMENT ON COLUMN "oneof_v1"."audios"."id" IS 'Unique identifier for the record.';
 COMMENT ON COLUMN "oneof_v1"."audios"."name" IS 'Resource name; the AIP identifier.';
 COMMENT ON COLUMN "oneof_v1"."audios"."audio_data" IS 'Inline audio bytes.';

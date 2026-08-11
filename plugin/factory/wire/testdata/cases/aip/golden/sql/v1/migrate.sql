@@ -19,7 +19,7 @@ CREATE SCHEMA IF NOT EXISTS "aip_v1";
 -- Tables (foreign keys are added after every table exists, so creation order
 -- never matters — even across schemas or reference cycles).
 
--- Document exercises the AIP-148/164 system fields: create_time/update_time become auto-managed audit timestamps, delete_time a nullable indexed soft-delete marker, and uid a UNIQUE server-assigned id — all with no orm annotation.
+-- Document exercises the AIP-148/164 system fields: create_time/update_time become auto-managed audit timestamps, delete_time a nullable indexed soft-delete marker, and uid a UNIQUE server-assigned id — all with no store annotation.
 CREATE TABLE IF NOT EXISTS "aip_v1"."documents" (
     -- Unique identifier for the record.
     "id"  CHAR(26)  NOT NULL  PRIMARY KEY,
@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS "aip_v1"."documents" (
 CREATE INDEX IF NOT EXISTS "idx_documents_delete_time" ON "aip_v1"."documents" ("delete_time");
 
 -- Documentation
-COMMENT ON TABLE "aip_v1"."documents" IS 'Document exercises the AIP-148/164 system fields: create_time/update_time become auto-managed audit timestamps, delete_time a nullable indexed soft-delete marker, and uid a UNIQUE server-assigned id — all with no orm annotation.';
+COMMENT ON TABLE "aip_v1"."documents" IS 'Document exercises the AIP-148/164 system fields: create_time/update_time become auto-managed audit timestamps, delete_time a nullable indexed soft-delete marker, and uid a UNIQUE server-assigned id — all with no store annotation.';
 COMMENT ON COLUMN "aip_v1"."documents"."id" IS 'Unique identifier for the record.';
 COMMENT ON COLUMN "aip_v1"."documents"."name" IS 'Resource name; the AIP identifier.';
 COMMENT ON COLUMN "aip_v1"."documents"."uid" IS 'uid is the server-assigned unique id (AIP-148).';

@@ -12,16 +12,16 @@ jobs:
   goreleaser:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout orm
+      - name: Checkout store
         uses: actions/checkout@v7
         with:
-          path: orm
+          path: store
           fetch-depth: 0
 
       # go.mod has local `replace` directives for opentelementry-go
       # (telemetry.v1's Go stubs) and runtime-go/telemetry (the Meter
       # contract generated code binds to) — neither published yet, both
-      # resolved via ../<repo> relative to orm. goreleaser's before-hooks run
+      # resolved via ../<repo> relative to store. goreleaser's before-hooks run
       # `go mod tidy`/`go test ./...`, so these need to be true siblings here
       # too, matching local development. Drop both checkouts (and the two
       # go.mod replaces) once each is published for real.
@@ -40,14 +40,14 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version-file: orm/go.mod
+          go-version-file: store/go.mod
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
           version: '~> v2'
-          workdir: orm
+          workdir: store
           args: release --clean --config .github/release/goreleaser.yaml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

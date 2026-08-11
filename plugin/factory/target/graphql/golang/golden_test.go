@@ -26,7 +26,7 @@ import (
 
 var update = flag.Bool("update", false, "rewrite golden files from current output")
 
-// TestMain stamps the orm tool name into generated banners so goldens match
+// TestMain stamps the store tool name into generated banners so goldens match
 // what the protoc-gen-store binary produces (every target shares the exact same
 // header format and tool stamp).
 func TestMain(m *testing.M) {

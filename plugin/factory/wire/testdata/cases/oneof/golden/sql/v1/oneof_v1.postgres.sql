@@ -16,7 +16,7 @@ CREATE SCHEMA IF NOT EXISTS "oneof_v1";
 -- Discriminator for the input oneof of Audio.
 CREATE TYPE "oneof_v1"."audio_input_case" AS ENUM ('AUDIO_DATA', 'UPLOAD_PATH', 'LIVE_PIPELINE_FILE_PATH');
 
--- Audio exercises oneof integrity: the `input` oneof flattens to independent nullable columns, and orm adds a generated input_case discriminator enum recording which member is set so the lost exclusivity invariant is observable.
+-- Audio exercises oneof integrity: the `input` oneof flattens to independent nullable columns, and store adds a generated input_case discriminator enum recording which member is set so the lost exclusivity invariant is observable.
 CREATE TABLE "oneof_v1"."audios" (
     -- Unique identifier for the record.
     "id"  CHAR(26)  NOT NULL  PRIMARY KEY,
@@ -36,7 +36,7 @@ CREATE TABLE "oneof_v1"."audios" (
 
 
 -- Column and table documentation, persisted to the catalog.
-COMMENT ON TABLE "oneof_v1"."audios" IS 'Audio exercises oneof integrity: the `input` oneof flattens to independent nullable columns, and orm adds a generated input_case discriminator enum recording which member is set so the lost exclusivity invariant is observable.';
+COMMENT ON TABLE "oneof_v1"."audios" IS 'Audio exercises oneof integrity: the `input` oneof flattens to independent nullable columns, and store adds a generated input_case discriminator enum recording which member is set so the lost exclusivity invariant is observable.';
 COMMENT ON COLUMN "oneof_v1"."audios"."id" IS 'Unique identifier for the record.';
 COMMENT ON COLUMN "oneof_v1"."audios"."name" IS 'Resource name; the AIP identifier.';
 COMMENT ON COLUMN "oneof_v1"."audios"."audio_data" IS 'Inline audio bytes.';

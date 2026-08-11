@@ -1,4 +1,4 @@
-// Package prisma generates a multi-file Prisma schema tree from the orm IR,
+// Package prisma generates a multi-file Prisma schema tree from the store IR,
 // replicating the hand-written layout this repository uses:
 //
 //	<db>/schema.prisma                       — datasource + generator blocks

@@ -1,4 +1,4 @@
-// Package sql generates PostgreSQL DDL from the orm IR.
+// Package sql generates PostgreSQL DDL from the store IR.
 //
 // Output layout — one file per schema, mirroring the prisma fragment tree:
 //

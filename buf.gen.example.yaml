@@ -1,6 +1,6 @@
 version: v2
 
-# Generates orm's database targets from the bookstore example protos.
+# Generates store's database targets from the bookstore example protos.
 # Run: buf generate --template buf.gen.example.yaml
 #
 # Output layout mirrors the hand-written schema/ tree:

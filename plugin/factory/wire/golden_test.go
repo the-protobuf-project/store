@@ -37,9 +37,9 @@ var defaultTargets = []string{"gorm", "prisma", "sql"}
 // in the harness.
 //
 // ormPlugin is the plugin for a run with no fixture config, which is what the
-// non-golden tests (targets, strict) want: the orm.v1 reader, no layout policy.
-// They still need the reader — their fixtures declare provider and indexes
-// through orm.v1, and a run without it would not see them.
+// non-golden tests (targets, strict) want: the store.v1 reader, no layout
+// policy. They still need the reader — their fixtures declare storage options
+// through store.v1, and a run without it would not see them.
 func ormPlugin() protokit.Plugin {
 	return wire.Plugin([]protokit.FacetReader{backend.New(nil, "", false, false, false, false), telemetrygen.NewReader()}, nil)
 }
@@ -78,7 +78,7 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-// TestMain stamps the orm tool name into generated banners so goldens match what
+// TestMain stamps the store tool name into generated banners so goldens match what
 // the protoc-gen-store binary produces (protokit's generator-neutral default names
 // the framework instead).
 func TestMain(m *testing.M) {

@@ -27,7 +27,7 @@ type User struct {
 
 func (*User) TableName() string { return "parentref_v1.users" }
 
-// Note is owned by a User. Its pattern carries a {user} parent segment with no corresponding field, so orm materializes a user_id FK → User from the pattern alone.
+// Note is owned by a User. Its pattern carries a {user} parent segment with no corresponding field, so store materializes a user_id FK → User from the pattern alone.
 type Note struct {
 	// Unique identifier for the record.
 	ID string `gorm:"column:id;primaryKey;not null" json:"id"`

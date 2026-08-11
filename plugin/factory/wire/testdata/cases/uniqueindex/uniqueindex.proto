@@ -2,7 +2,7 @@ syntax = "proto3";
 
 // Package promo.v1 exercises store finder generation for a column made unique
 // via a single-column unique index (protokit.v1.table.indexes), rather than
-// column.unique — orm must still emit a GetBy<Field> finder for it.
+// column.unique — store must still emit a GetBy<Field> finder for it.
 package promo.v1;
 
 import "google/api/field_behavior.proto";
@@ -15,7 +15,7 @@ option (protokit.v1.datasource) = {
 };
 
 // PromoCode is a redeemable promotion. The human-facing `code` is unique via a
-// single-column unique index, so orm emits GetByCode alongside GetByID and
+// single-column unique index, so store emits GetByCode alongside GetByID and
 // the GetByName finder for the AIP resource name.
 message PromoCode {
   option (google.api.resource) = {
