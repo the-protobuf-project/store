@@ -14,16 +14,20 @@ The source of truth is the `.proto` files — regenerate rather than editing the
 ├── <schema>/<domain>.{{.ProviderExt}}.prisma   models & enums, one file per source proto
 ├── package.json
 ├── tsconfig.json
-├── .env                      pre-populated {{.EnvVar}} (git-ignored)
-└── .env.example
+└── .env.example              template for {{.EnvVar}} (committed)
 ```
 
 ## Setup
 
 ```bash
-npm install                 # .env ships pre-populated; edit {{.EnvVar}} if needed
+cp .env.example .env        # then set {{.EnvVar}} to your real credentials
+npm install
 npm run prisma:generate     # generate the typed client
 npm run prisma:migrate      # create & apply a dev migration
 ```
+
+`.env` is git-ignored and is never generated, so your credentials survive the
+next `buf generate`. `.env.example` is regenerated every time — keep real
+credentials out of it.
 
 All scripts target `{{.Database}}.config.ts` via `--config`.

@@ -19,10 +19,11 @@ version: v2
 # "entity/v1/table.proto", which is what every importing proto writes. The two
 # modules are still independently named, versioned, and pushed.
 #
-# The Go side is split differently and deliberately: entity's reader and its
-# generated stubs live in the nested module under plugin/entity/, so a plugin that
-# wants only the shared names does not inherit this one's dependency graph. Protos
-# group by vocabulary; Go code groups by module boundary.
+# On the Go side both vocabularies ship in this repository's single module:
+# entity's reader and generated stubs live under plugin/entity/, store.v1's under
+# plugin/pb/. The BSR modules stay independently named, versioned, and pushed —
+# a plugin that wants only the neutral names depends on the entity BSR module and
+# generates its own stubs, rather than importing this repository's Go packages.
 #
 # telemetry.v1 (import "telemetry/v1/*.proto") is no longer a local workspace path —
 # it's published as part of buf.build/the-protobuf-project/opentelementry (see deps:
@@ -36,12 +37,8 @@ version: v2
 # A bare `buf push` errors on the unnamed modules.
 modules:
   - path: protobuf
-    includes: [protobuf/store]
+    includes: [protobuf/store, protobuf/entity]
     name: buf.build/the-protobuf-project/store
-
-  - path: protobuf
-    includes: [protobuf/entity]
-    name: buf.build/the-protobuf-project/entity
 
   - path: examples/proto
     # examples/proto can import entity options, store options, and googleapis

@@ -7,7 +7,7 @@
 // schemas:  bookstore_v1, inventory
 //
 // Prisma 7 configuration; connection URLs are environment-driven.
-// annotations: entity.v1 (devel), store.v1 dev
+// annotations: entity.v1 dev, store.v1 dev
 // engine:      protokit v1.2.1
 //
 // store — https://github.com/the-protobuf-project/store
@@ -28,7 +28,7 @@ export default defineConfig({
 	},
 	datasource: {
 		// Single database URL for all schemas.
-		// Declared in proto: postgresql://user:pass@localhost:5432/bookstore_db
+		// Declared in proto: postgresql://localhost:5432/bookstore_db
 		url: env("BOOKSTORE_DB_DATABASE_URL"),
 	},
 });

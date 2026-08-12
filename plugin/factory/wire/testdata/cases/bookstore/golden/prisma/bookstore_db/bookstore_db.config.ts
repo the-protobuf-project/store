@@ -28,7 +28,7 @@ export default defineConfig({
 	},
 	datasource: {
 		// Single database URL for all schemas.
-		// Declared in proto: postgresql://user:pass@localhost:5432/bookstore_db
+		// Declared in proto: postgresql://localhost:5432/bookstore_db
 		url: env("BOOKSTORE_DB_DATABASE_URL"),
 	},
 });

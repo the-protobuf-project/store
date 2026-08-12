@@ -1,0 +1,23 @@
+# store.yaml for the graphql target of the bookstore example.
+#
+# The graphql target is not a database backend: it renders a typed Go client from
+# a GraphQL schema, so it takes its input from this file rather than from the
+# .proto files the prisma/gorm/sql targets read. That is why it needs a
+# `config=` opt in buf.gen.example.yaml while the others do not.
+#
+# `schema:` and `endpoint:` are mutually exclusive. This uses the committed SDL
+# so `just examples` is reproducible and offline; point `endpoint:` at a live
+# Hasura URL instead to introspect a running instance.
+#
+# Paths are resolved from the directory buf generate runs in — the repo root.
+version: 1
+
+graphql:
+  schema: examples/graphql/bookstore.graphql
+  dialect: hasura
+
+generate:
+  - target: graphql
+    source: graphql
+    package: bookstoreql
+    go_module: github.com/the-protobuf-project/store/examples/generated/graphql/bookstoreql

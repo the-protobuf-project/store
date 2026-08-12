@@ -30,11 +30,6 @@ import (
 	"github.com/the-protobuf-project/protokit/header"
 )
 
-// entityModule is the Go module carrying the entity.v1 annotations and the reader
-// every protokit plugin shares. It is nested inside this repository but versions
-// on its own tag, so its version is looked up like any other dependency's.
-const entityModule = "github.com/the-protobuf-project/store/plugin/entity"
-
 // protokitModule is the engine. It carries no annotations any more, but it still
 // builds the IR, so it stays in the banner on its own line.
 const protokitModule = "github.com/the-protobuf-project/protokit"
@@ -60,12 +55,9 @@ func moduleVersion(path string) string {
 	return unknown
 }
 
-// Both are resolved once per process: build info does not change under a running
-// binary, and every generated file in a run carries the same banner.
-var (
-	entityVersion   = sync.OnceValue(func() string { return moduleVersion(entityModule) })
-	protokitVersion = sync.OnceValue(func() string { return moduleVersion(protokitModule) })
-)
+// Resolved once per process: build info does not change under a running binary,
+// and every generated file in a run carries the same banner.
+var protokitVersion = sync.OnceValue(func() string { return moduleVersion(protokitModule) })
 
 // Render renders in's banner with the provenance lines appended, prefixed by
 // prefix ("//" for Go, Prisma and TypeScript; "--" for SQL).
@@ -81,18 +73,17 @@ func Render(prefix string, in header.Info, runtimeModules ...string) string {
 	return header.Render(prefix, in)
 }
 
-// notes builds the provenance lines. store.v1 ships in this repository's root
-// module, so it carries the plugin's own version by construction — there is no
-// separate number to look up, and pretending otherwise would invite the two to
-// drift. entity.v1 does not get that treatment: it is a separate module on a
-// separate tag, and a consumer may well be running a plugin built against an older
-// one than this repository's checkout contains.
+// notes builds the provenance lines. Both vocabularies ship in this repository's
+// root module, so each carries the plugin's own version by construction — there is
+// no separate number to look up, and pretending otherwise would invite them to
+// drift. Reading entity.v1's version out of build info would report "(unknown)"
+// forever now that it is part of the main module rather than a dependency.
 func notes(pluginVersion string, runtimeModules []string) []string {
 	if pluginVersion == "" {
 		pluginVersion = unknown
 	}
 	out := []string{
-		"annotations: entity.v1 " + entityVersion() + ", store.v1 " + pluginVersion,
+		"annotations: entity.v1 " + pluginVersion + ", store.v1 " + pluginVersion,
 		"engine:      protokit " + protokitVersion(),
 	}
 	if len(runtimeModules) > 0 {

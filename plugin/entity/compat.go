@@ -9,13 +9,12 @@ package entity
 // # Why this reads descriptors instead of importing stubs
 //
 // The obvious implementation imports ormpbv1 and storepbv1 and calls
-// proto.GetExtension. This package cannot do that, and the constraint is
-// load-bearing rather than fussy: entity ships as a nested module that a cache,
-// streams, or documentation generator consumes for the neutral names alone. An
-// import of storepbv1 would put this module inside github.com/the-protobuf-project/store,
-// and every consumer of the neutral vocabulary would inherit a database plugin's
-// dependency graph. orm.v1 is worse still — it was removed from the repository
-// entirely, so there are no stubs to import.
+// proto.GetExtension. This package cannot do that. orm.v1 settles it outright: the
+// vocabulary was removed from the repository entirely, so there are no stubs to
+// import at any version. storepbv1 is a softer case now that both live in the same
+// module, but the import stays out anyway — this package is the neutral half, and
+// keeping it free of the physical vocabulary is what lets it move back into a
+// module of its own without an untangling job first.
 //
 // So the deprecated extensions are resolved from the descriptor set protoc already
 // shipped. A proto that sets (orm.v1.table) must import orm/v1/annotations.proto,

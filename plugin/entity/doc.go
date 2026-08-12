@@ -34,14 +34,16 @@
 //
 // # What it costs to depend on
 //
-// Nothing but protokit. This is a nested module —
-// github.com/the-protobuf-project/store/plugin/entity — that imports protokit and its own
-// generated stubs and nothing else from store. A cache generator, a streams
-// generator, or a documentation generator can consume the neutral names without
-// pulling in gorm, prisma, graphql, or a line of SQL. That constraint is the whole
-// reason the module is nested rather than living beside the plugin, and it is
-// worth keeping: the moment this package imports store proper, every consumer
-// inherits a database generator.
+// This package imports protokit and its own generated stubs, and nothing else from
+// store. It ships in the store root module rather than a module of its own, so a
+// Go consumer that imports this path does take store's dependency graph with it.
+//
+// The vocabulary itself is shared the way it is meant to be shared: through the BSR
+// module (buf.build/the-protobuf-project/entity). A cache generator, a streams
+// generator, or a documentation generator depends on that, generates its own stubs,
+// and never sees gorm, prisma, graphql, or a line of SQL. The upward-import rule
+// below is still worth keeping — it is what makes lifting this package back out
+// into its own module a mechanical change rather than an untangling job.
 //
 // # Using it
 //

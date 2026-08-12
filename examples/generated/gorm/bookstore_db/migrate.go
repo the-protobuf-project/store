@@ -7,7 +7,7 @@
 // schemas:  bookstore_v1, inventory
 //
 // Migration aggregator: every model in one factory Registry.
-// annotations: entity.v1 (devel), store.v1 dev
+// annotations: entity.v1 dev, store.v1 dev
 // engine:      protokit v1.2.1
 //
 // store — https://github.com/the-protobuf-project/store
