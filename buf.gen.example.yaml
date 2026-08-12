@@ -36,6 +36,12 @@ plugins:
       # it adds a github.com/the-protobuf-project/opentelementry/opentelementry-go
       # dependency.
       - telemetry=true
+      # filters emits AIP-160 filter / AIP-132 order_by specs per schema
+      # (filters.go) plus the shared filterx engine package serving both SQL
+      # (GORM) and Hasura DDN GraphQL. The Hasura engine adds a
+      # github.com/the-protobuf-project/runtime-go dependency; with telemetry
+      # above it also emits filterx.OpentelementryObserver.
+      - filters=true
       - Mbookstore/v1/bookstore.proto=github.com/the-protobuf-project/store/examples/gen/bookstore/v1
       - Mbookstore/v1/inventory.proto=github.com/the-protobuf-project/store/examples/gen/bookstore/v1
 
@@ -43,5 +49,20 @@ plugins:
     out: examples/generated/sql
     opt:
       - target=sql
+      - Mbookstore/v1/bookstore.proto=github.com/the-protobuf-project/store/examples/gen/bookstore/v1
+      - Mbookstore/v1/inventory.proto=github.com/the-protobuf-project/store/examples/gen/bookstore/v1
+
+  # The graphql target renders a typed Go client from a GraphQL schema, not from
+  # the .proto input above — it reads examples/graphql/store.yaml (the config=
+  # opt) for its schema, dialect, package and go_module. The committed SDL keeps
+  # this offline and reproducible; see that file for the endpoint alternative.
+  - local: protoc-gen-store
+    out: examples/generated/graphql
+    opt:
+      - target=graphql
+      - config=examples/graphql/store.yaml
+      # buf hands the .proto input to every plugin entry, and protogen refuses to
+      # start without an import path for each file — even though this target
+      # renders from the GraphQL schema and reads none of them.
       - Mbookstore/v1/bookstore.proto=github.com/the-protobuf-project/store/examples/gen/bookstore/v1
       - Mbookstore/v1/inventory.proto=github.com/the-protobuf-project/store/examples/gen/bookstore/v1

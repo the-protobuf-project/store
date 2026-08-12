@@ -37,12 +37,8 @@ version: v2
 # A bare `buf push` errors on the unnamed modules.
 modules:
   - path: protobuf
-    includes: [protobuf/store]
+    includes: [protobuf/store, protobuf/entity]
     name: buf.build/the-protobuf-project/store
-
-  - path: protobuf
-    includes: [protobuf/entity]
-    name: buf.build/the-protobuf-project/entity
 
   - path: examples/proto
     # examples/proto can import entity options, store options, and googleapis

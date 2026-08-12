@@ -1,0 +1,214 @@
+"""
+Bookstore GraphQL schema (Hasura DDN conventions).
+
+This is a committed SDL rather than a live endpoint on purpose: the graphql
+target reads `schema:` before it ever considers `endpoint:`, so regenerating the
+examples never touches the network and produces the same bytes on any machine.
+
+It mirrors the same domain as examples/proto/bookstore/v1 — Author, Book, Shelf
+— so the generated GraphQL client and the generated GORM stores describe one
+bookstore, not two unrelated ones.
+"""
+
+enum OrderBy {
+  ASC
+  DESC
+}
+
+enum Genre {
+  GENRE_UNSPECIFIED
+  GENRE_FICTION
+  GENRE_NON_FICTION
+  GENRE_SCI_FI
+  GENRE_FANTASY
+}
+
+type Author {
+  id: ID!
+  "Display name shown on the book jacket."
+  displayName: String!
+  """
+  Long-form biography.
+  Stored as TEXT; may be empty.
+  """
+  bio: String
+}
+
+type Book {
+  id: ID!
+  "Full title, as printed."
+  title: String!
+  authorId: String!
+  "ISBN-13, unique across the catalogue."
+  isbn: String
+  genre: Genre
+}
+
+type Shelf {
+  id: ID!
+  "Shelf theme, e.g. \"staff picks\"."
+  theme: String!
+}
+
+type AuthorMutationResponse {
+  affectedRows: Int!
+  returning: [Author!]!
+}
+
+type BookMutationResponse {
+  affectedRows: Int!
+  returning: [Book!]!
+}
+
+type ShelfMutationResponse {
+  affectedRows: Int!
+  returning: [Shelf!]!
+}
+
+type AuthorAggregate {
+  count: Int!
+}
+
+type BookAggregate {
+  count: Int!
+}
+
+input StringComparisonExp {
+  _eq: String
+  _neq: String
+  _in: [String!]
+  _gt: String
+  _lt: String
+  _gte: String
+  _lte: String
+  _like: String
+}
+
+input IntComparisonExp {
+  _eq: Int
+  _neq: Int
+  _in: [Int!]
+  _gt: Int
+  _lt: Int
+  _gte: Int
+  _lte: Int
+  _like: Int
+}
+
+input GenreComparisonExp {
+  _eq: Genre
+  _neq: Genre
+  _in: [Genre!]
+  _gt: Genre
+  _lt: Genre
+  _gte: Genre
+  _lte: Genre
+  _like: Genre
+}
+
+input AuthorBoolExp {
+  _and: [AuthorBoolExp!]
+  _or: [AuthorBoolExp!]
+  _not: AuthorBoolExp
+  id: StringComparisonExp
+  displayName: StringComparisonExp
+  bio: StringComparisonExp
+}
+
+input BookBoolExp {
+  _and: [BookBoolExp!]
+  _or: [BookBoolExp!]
+  _not: BookBoolExp
+  id: StringComparisonExp
+  title: StringComparisonExp
+  authorId: StringComparisonExp
+  isbn: StringComparisonExp
+  genre: GenreComparisonExp
+}
+
+input ShelfBoolExp {
+  _and: [ShelfBoolExp!]
+  _or: [ShelfBoolExp!]
+  _not: ShelfBoolExp
+  id: StringComparisonExp
+  theme: StringComparisonExp
+}
+
+input AuthorOrderByExp {
+  displayName: OrderBy
+}
+
+input BookOrderByExp {
+  title: OrderBy
+  genre: OrderBy
+}
+
+input ShelfOrderByExp {
+  theme: OrderBy
+}
+
+input AuthorInsertInput {
+  "Display name shown on the book jacket."
+  displayName: String!
+  bio: String
+}
+
+input BookInsertInput {
+  title: String!
+  authorId: String!
+  isbn: String
+  genre: Genre
+}
+
+input ShelfInsertInput {
+  theme: String!
+}
+
+input AuthorSetInput {
+  displayName: String
+  bio: String
+}
+
+input BookSetInput {
+  title: String
+  isbn: String
+  genre: Genre
+}
+
+input ShelfSetInput {
+  theme: String
+}
+
+type Query {
+  authors(where: AuthorBoolExp, orderBy: [AuthorOrderByExp!], limit: Int, offset: Int): [Author!]!
+  authorsById(id: ID!): Author
+  authorsAggregate(where: AuthorBoolExp): AuthorAggregate!
+  books(where: BookBoolExp, orderBy: [BookOrderByExp!], limit: Int, offset: Int): [Book!]!
+  booksById(id: ID!): Book
+  booksAggregate(where: BookBoolExp): BookAggregate!
+  shelves(where: ShelfBoolExp, orderBy: [ShelfOrderByExp!], limit: Int, offset: Int): [Shelf!]!
+  shelvesById(id: ID!): Shelf
+}
+
+type Mutation {
+  insertAuthors(objects: [AuthorInsertInput!]!): AuthorMutationResponse!
+  updateAuthorsById(id: ID!, _set: AuthorSetInput, preCheck: AuthorBoolExp): AuthorMutationResponse
+  deleteAuthorsById(id: ID!): AuthorMutationResponse
+  insertBooks(objects: [BookInsertInput!]!): BookMutationResponse!
+  updateBooksById(id: ID!, _set: BookSetInput, preCheck: BookBoolExp): BookMutationResponse
+  deleteBooksById(id: ID!): BookMutationResponse
+  insertShelves(objects: [ShelfInsertInput!]!): ShelfMutationResponse!
+  updateShelvesById(id: ID!, _set: ShelfSetInput, preCheck: ShelfBoolExp): ShelfMutationResponse
+  deleteShelvesById(id: ID!): ShelfMutationResponse
+}
+
+type Subscription {
+  authors(where: AuthorBoolExp): [Author!]!
+  books(where: BookBoolExp): [Book!]!
+}
+
+schema {
+  query: Query
+  mutation: Mutation
+  subscription: Subscription
+}
