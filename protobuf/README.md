@@ -19,11 +19,12 @@ not an accident of history:
 - **`entity.v1`** — *structure*: what a thing is **named**, and whether it
   exists at all. It ships from this repository as
   [`buf.build/the-protobuf-project/entity`](https://buf.build/the-protobuf-project/entity),
-  alongside the Go reader every generator imports
-  (`github.com/the-protobuf-project/store/plugin/entity`). A store generator, a cache
+  the module any generator can depend on without taking this plugin with it. The Go
+  reader over it lives here, at
+  `github.com/the-protobuf-project/store/plugin/entity`. A store generator, a cache
   generator, and a docs generator all derive the *same* databases, schemas,
-  tables, and columns from the same protos, because they all run that same
-  reader. That agreement is what lets them compose.
+  tables, and columns from the same protos, because they agree on that same
+  vocabulary. That agreement is what lets them compose.
 - **`store.v1`** — *storage*: how a column is physically stored and queried. That
   is this plugin's business, and no other generator needs to agree with it.
 

@@ -8,12 +8,12 @@ version: v2
 # Out:  plugin/pb/storepbv1/*.pb.go
 #       plugin/entity/pb/entitypbv1/*.pb.go
 #
-# entity's stubs land inside the nested plugin/entity/ Go module, which is the
-# point: it ships as github.com/the-protobuf-project/store/plugin/entity and
-# depends on protokit and these stubs alone, so a plugin that wants the neutral
-# names does not take a dependency on gorm, prisma, or graphql to get them. The
-# two vocabularies' protos sit side by side under protobuf/; only their Go output
-# is separated, because that is where the dependency graph is decided.
+# Both vocabularies' stubs ship in this repository's single Go module: entity's
+# under plugin/entity/pb/, store.v1's under plugin/pb/. The two vocabularies' protos
+# sit side by side under protobuf/, and their Go output is separated by directory
+# only. A plugin that wants the neutral names alone consumes the entity BSR module
+# (buf.build/the-protobuf-project/entity) and generates its own stubs, which is
+# what keeps it clear of gorm, prisma, and graphql.
 #
 # telemetry.v1's Go stubs are NOT regenerated from here — that standalone module
 # now lives in the sibling opentelementry-go repo, and its stubs are generated
@@ -54,7 +54,7 @@ managed:
 inputs:
   # One directory now covers both vocabularies: protobuf/ is the root of the
   # store and entity BSR modules alike (see buf.yaml). Each proto's go_package
-  # decides where its stubs land, so entity's still reach the nested module.
+  # decides where its stubs land, so entity's still reach plugin/entity/pb/.
   - directory: protobuf
 
 plugins:

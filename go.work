@@ -1,13 +1,8 @@
 go 1.26.4
 
-// Root module — plugin binary + generated pb stubs live here.
+// Root module — plugin binary, the entity.v1 vocabulary under plugin/entity/,
+// and generated pb stubs all live here.
 use .
-
-// The neutral vocabulary (entity.v1) and its reader. A separate module so a
-// plugin that only wants the shared names can depend on it without inheriting
-// this one's dependency graph — see plugin/entity/go.mod for why that constraint
-// exists.
-use ./plugin/entity
 
 // Examples are a separate module so their transitive deps (generated gRPC
 // stubs, etc.) don't pollute the plugin's dependency graph.

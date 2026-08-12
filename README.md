@@ -52,7 +52,7 @@ Both run through the same binary on `buf generate`, selected per output by a
 
 | Source | Target | Output |
 | --- | --- | --- |
-| proto | **prisma** | A complete, runnable Prisma 7 project — multi-file schema, `package.json`, `tsconfig.json`, config, a pre-filled `.env` + `.env.example`. |
+| proto | **prisma** | A complete, runnable Prisma 7 project — multi-file schema, `package.json`, `tsconfig.json`, config, and a `.env.example` to copy to `.env`. |
 | proto | **gorm** | Go structs with GORM tags + a migration registry; optional [CRUD stores + first-party telemetry](#gorm-stores-and-tracing), [AIP-160 filter / AIP-132 order_by list engines for **SQL and Hasura GraphQL**](#aip-160-filters-and-list-engines-sql--hasura), and [proto ↔ model converters](#proto--model-converters). |
 | proto | **sql** | PostgreSQL DDL — per-schema reference files **and** one transactional, **idempotent** `migrate.sql`; FK constraints, indexes, `updated_at` triggers, `COMMENT ON`. |
 | graphql | **graphql** | A typed Go GraphQL client — row models, a fluent predicate DSL, CRUD/subscription methods (see [GraphQL client SDK](#graphql-client-sdk)). |
@@ -323,7 +323,7 @@ generated/prisma/bookstore_db/
 ├── schema.prisma                          # datasource + generator blocks
 ├── bookstore_db.config.ts                 # Prisma 7 config (URL via env)
 ├── package.json, tsconfig.json            # runnable project scaffold
-├── .env, .env.example, .gitignore, README.md  # .env is pre-filled from the datasource url (git-ignored)
+├── .env.example, .gitignore, README.md    # copy .env.example to .env (git-ignored, never generated)
 ├── bookstore_v1/bookstore.postgres.prisma # models & enums, one file per source proto
 └── inventory/inventory.postgres.prisma    # (a second file, merged datasource)
 
@@ -344,13 +344,17 @@ The Prisma output is a project you can run immediately:
 
 ```bash
 cd generated/prisma/bookstore_db
-npm install                 # .env ships pre-filled from the proto datasource url
+cp .env.example .env        # then set BOOKSTORE_DB_DATABASE_URL
+npm install
 npm run prisma:generate
 ```
 
-The emitted `.env` is git-ignored and pre-populated with the datasource `url`
-from your proto — edit it locally if your credentials differ (`.env.example`
-stays as the committed reference).
+`.env` is never generated — the plugin emits only `.env.example`. A protoc plugin
+overwrites every file it writes and cannot read what is already on disk, so
+generating `.env` would destroy your edited credentials on the next
+`buf generate`. `.env` stays git-ignored and yours; `.env.example` is the
+committed template, regenerated each run and always carrying a placeholder
+rather than the datasource `url` from your proto.
 
 The **gorm** target emits a `migrate.go` factory registry (when you pass the
 `go_module` opt, see [Plugin options](#plugin-options)). Attach it in your
@@ -597,9 +601,10 @@ import "store/v1/annotations.proto";     // storage   — how they are stored
 ```
 
 `entity.v1` is the **neutral** vocabulary. It ships from this repository as its own
-BSR module plus a Go reader (`github.com/the-protobuf-project/store/plugin/entity`) that
-every plugin built on protokit imports — this one, a cache, a streams publisher, a
-docs generator. Because they all run the *same reader*, they derive the same
+BSR module, so any plugin built on protokit — this one, a cache, a streams publisher,
+a docs generator — can depend on the vocabulary alone and generate its own stubs. The
+Go reader over it lives here at `github.com/the-protobuf-project/store/plugin/entity`.
+Because they all agree on the *same vocabulary*, they derive the same
 databases, schemas, tables, and columns from the same protos. That agreement is
 what lets those plugins compose without one of them having to import another's
 options.
@@ -642,7 +647,7 @@ and queried, which no other plugin needs to agree with.
 | --- | --- |
 | `database` | Database name. Files sharing a name merge into one tree. Defaults to the last proto package segment. |
 | `schema` | Override the schema namespace for every table in the file. |
-| `url` | Connection URL (documented in config/DDL; Prisma reads it from `.env`). |
+| `url` | Connection URL. Recorded in config/DDL with any credentials redacted, and never written to a generated file verbatim; Prisma reads the real value from your `.env`. |
 | `provider` | `postgres` (default) or `mongodb`. |
 
 ### `(entity.v1.table)` — message level
