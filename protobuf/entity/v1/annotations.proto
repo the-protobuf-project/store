@@ -7,7 +7,7 @@ import "entity/v1/datasource.proto";
 import "entity/v1/table.proto";
 import "google/protobuf/descriptor.proto";
 
-option go_package = "github.com/the-protobuf-project/store/entity/pb/entitypbv1;entitypbv1";
+option go_package = "github.com/the-protobuf-project/store/plugin/entity/pb/entitypbv1;entitypbv1";
 option java_multiple_files = true;
 option java_outer_classname = "AnnotationsProto";
 option java_package = "com.entity.v1";
@@ -44,7 +44,7 @@ option java_package = "com.entity.v1";
 // reads AIP and nothing else, and every vocabulary reaches it through a reader the
 // plugin registers. So there is no release-ordering cycle to avoid: what two
 // plugins share is the *reader*, shipped as
-// github.com/the-protobuf-project/store/entity, which depends on protokit and
+// github.com/the-protobuf-project/store/plugin/entity, which depends on protokit and
 // nothing else from store.
 //
 // # Precedence, highest first

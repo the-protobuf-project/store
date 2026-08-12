@@ -20,7 +20,7 @@ not an accident of history:
   exists at all. It ships from this repository as
   [`buf.build/the-protobuf-project/entity`](https://buf.build/the-protobuf-project/entity),
   alongside the Go reader every generator imports
-  (`github.com/the-protobuf-project/store/entity`). A store generator, a cache
+  (`github.com/the-protobuf-project/store/plugin/entity`). A store generator, a cache
   generator, and a docs generator all derive the *same* databases, schemas,
   tables, and columns from the same protos, because they all run that same
   reader. That agreement is what lets them compose.

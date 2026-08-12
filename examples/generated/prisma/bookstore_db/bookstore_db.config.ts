@@ -8,7 +8,7 @@
 //
 // Prisma 7 configuration; connection URLs are environment-driven.
 // annotations: entity.v1 (devel), store.v1 dev
-// engine:      protokit v1.3.0
+// engine:      protokit v1.2.1
 //
 // store — https://github.com/the-protobuf-project/store
 

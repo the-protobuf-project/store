@@ -35,7 +35,7 @@
 // # What it costs to depend on
 //
 // Nothing but protokit. This is a nested module —
-// github.com/the-protobuf-project/store/entity — that imports protokit and its own
+// github.com/the-protobuf-project/store/plugin/entity — that imports protokit and its own
 // generated stubs and nothing else from store. A cache generator, a streams
 // generator, or a documentation generator can consume the neutral names without
 // pulling in gorm, prisma, graphql, or a line of SQL. That constraint is the whole

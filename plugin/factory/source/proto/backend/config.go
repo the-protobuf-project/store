@@ -21,7 +21,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/the-protobuf-project/store/entity"
+	"github.com/the-protobuf-project/store/plugin/entity"
 )
 
 // Config is the parsed store.yaml.

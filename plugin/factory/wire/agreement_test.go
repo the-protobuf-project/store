@@ -31,7 +31,7 @@ import (
 	"github.com/the-protobuf-project/protokit"
 	"github.com/the-protobuf-project/protokit/golden"
 	"github.com/the-protobuf-project/protokit/schema"
-	"github.com/the-protobuf-project/store/entity"
+	"github.com/the-protobuf-project/store/plugin/entity"
 	"github.com/the-protobuf-project/store/plugin/factory/wire"
 )
 

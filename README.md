@@ -597,7 +597,7 @@ import "store/v1/annotations.proto";     // storage   — how they are stored
 ```
 
 `entity.v1` is the **neutral** vocabulary. It ships from this repository as its own
-BSR module plus a Go reader (`github.com/the-protobuf-project/store/entity`) that
+BSR module plus a Go reader (`github.com/the-protobuf-project/store/plugin/entity`) that
 every plugin built on protokit imports — this one, a cache, a streams publisher, a
 docs generator. Because they all run the *same reader*, they derive the same
 databases, schemas, tables, and columns from the same protos. That agreement is

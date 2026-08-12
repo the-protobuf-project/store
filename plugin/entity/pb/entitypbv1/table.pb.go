@@ -264,9 +264,9 @@ const file_entity_v1_table_proto_rawDesc = "" +
 	"IdStrategy\x12\x1b\n" +
 	"\x17ID_STRATEGY_UNSPECIFIED\x10\x00\x12\x14\n" +
 	"\x10ID_STRATEGY_ULID\x10\x01\x12\x14\n" +
-	"\x10ID_STRATEGY_UUID\x10\x02B\xa7\x01\n" +
+	"\x10ID_STRATEGY_UUID\x10\x02B\xae\x01\n" +
 	"\rcom.entity.v1B\n" +
-	"TableProtoP\x01ZEgithub.com/the-protobuf-project/store/entity/pb/entitypbv1;entitypbv1\xa2\x02\x03EXX\xaa\x02\tEntity.V1\xca\x02\tEntity\\V1\xe2\x02\x15Entity\\V1\\GPBMetadata\xea\x02\n" +
+	"TableProtoP\x01ZLgithub.com/the-protobuf-project/store/plugin/entity/pb/entitypbv1;entitypbv1\xa2\x02\x03EXX\xaa\x02\tEntity.V1\xca\x02\tEntity\\V1\xe2\x02\x15Entity\\V1\\GPBMetadata\xea\x02\n" +
 	"Entity::V1b\x06proto3"
 
 var (

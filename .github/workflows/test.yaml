@@ -58,14 +58,15 @@ jobs:
         working-directory: store
         run: go test -race ./...
 
-      # entity/ is a nested module, so the root module's ./... does not reach it.
-      # Running it from its own directory is not just a way to include its tests —
-      # it is the isolation check. entity must build and test as a standalone
-      # module depending on protokit alone, because that is how a cache or streams
-      # generator will consume it. A stray import back into the plugin would show
-      # up here as a resolution failure rather than downstream months later.
+      # plugin/entity/ is a nested module, so the root module's ./... does not
+      # reach it. Running it from its own directory is not just a way to include
+      # its tests — it is the isolation check. entity must build and test as a
+      # standalone module depending on protokit alone, because that is how a cache
+      # or streams generator will consume it. A stray import back into the plugin
+      # would show up here as a resolution failure rather than downstream months
+      # later.
       - name: Test entity (standalone, no store dependency)
-        working-directory: store/entity
+        working-directory: store/plugin/entity
         run: |
           go test -race ./...
           if go list -deps ./... | grep -qx 'github.com/the-protobuf-project/store'; then

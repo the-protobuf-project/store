@@ -95,8 +95,8 @@ const file_entity_v1_column_proto_rawDesc = "" +
 	"\x16entity/v1/column.proto\x12\tentity.v1\";\n" +
 	"\rColumnOptions\x12\x16\n" +
 	"\x06column\x18\x01 \x01(\tR\x06column\x12\x12\n" +
-	"\x04skip\x18\x02 \x01(\bR\x04skipB\xa8\x01\n" +
-	"\rcom.entity.v1B\vColumnProtoP\x01ZEgithub.com/the-protobuf-project/store/entity/pb/entitypbv1;entitypbv1\xa2\x02\x03EXX\xaa\x02\tEntity.V1\xca\x02\tEntity\\V1\xe2\x02\x15Entity\\V1\\GPBMetadata\xea\x02\n" +
+	"\x04skip\x18\x02 \x01(\bR\x04skipB\xaf\x01\n" +
+	"\rcom.entity.v1B\vColumnProtoP\x01ZLgithub.com/the-protobuf-project/store/plugin/entity/pb/entitypbv1;entitypbv1\xa2\x02\x03EXX\xaa\x02\tEntity.V1\xca\x02\tEntity\\V1\xe2\x02\x15Entity\\V1\\GPBMetadata\xea\x02\n" +
 	"Entity::V1b\x06proto3"
 
 var (

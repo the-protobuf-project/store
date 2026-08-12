@@ -5,14 +5,10 @@ use .
 
 // The neutral vocabulary (entity.v1) and its reader. A separate module so a
 // plugin that only wants the shared names can depend on it without inheriting
-// this one's dependency graph — see entity/go.mod for why that constraint exists.
-use ./entity
+// this one's dependency graph — see plugin/entity/go.mod for why that constraint
+// exists.
+use ./plugin/entity
 
 // Examples are a separate module so their transitive deps (generated gRPC
 // stubs, etc.) don't pollute the plugin's dependency graph.
 use ./examples
-
-// protokit's removal of protokit.v1 is unreleased. Both this module and entity/
-// carry the same replace in their go.mod; it is repeated here because workspace
-// mode resolves from go.work. Drop all three once protokit is tagged.
-replace github.com/the-protobuf-project/protokit => ../protokit

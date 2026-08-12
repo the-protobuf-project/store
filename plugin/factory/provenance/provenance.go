@@ -33,7 +33,7 @@ import (
 // entityModule is the Go module carrying the entity.v1 annotations and the reader
 // every protokit plugin shares. It is nested inside this repository but versions
 // on its own tag, so its version is looked up like any other dependency's.
-const entityModule = "github.com/the-protobuf-project/store/entity"
+const entityModule = "github.com/the-protobuf-project/store/plugin/entity"
 
 // protokitModule is the engine. It carries no annotations any more, but it still
 // builds the IR, so it stays in the banner on its own line.

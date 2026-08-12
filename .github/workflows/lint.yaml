@@ -65,5 +65,9 @@ jobs:
         working-directory: store
         run: |
           buf generate
-          git diff --exit-code -- plugin/pb/ \
-            || (echo "::error::plugin/pb/ stubs are stale — run 'buf generate' and commit" && exit 1)
+          # Both trees: one `buf generate` writes store.v1's stubs to plugin/pb/
+          # and entity.v1's into the nested module at plugin/entity/pb/. Gating
+          # only the former would let a stale copy of the vocabulary every other
+          # plugin agrees on reach the BSR.
+          git diff --exit-code -- plugin/pb/ plugin/entity/pb/ \
+            || (echo "::error::generated stubs are stale — run 'buf generate' and commit" && exit 1)

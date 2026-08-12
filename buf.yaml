@@ -1,9 +1,9 @@
 version: v2
 
 # This buf.yaml defines a workspace:
-#   protobuf/           — the publishable BSR module (buf.build/the-protobuf-project/store)
-#   entity/protobuf/    — a second publishable module (buf.build/the-protobuf-project/entity)
-#   examples/proto/     — sample annotated protos that consume the options (local only)
+#   protobuf/store/   — a publishable BSR module (buf.build/the-protobuf-project/store)
+#   protobuf/entity/  — a publishable BSR module (buf.build/the-protobuf-project/entity)
+#   examples/proto/   — sample annotated protos that consume the options (local only)
 #
 # entity.v1 is the *neutral* vocabulary — what a thing is named — and store.v1 is
 # this plugin's *physical* one. They are separate BSR modules rather than one
@@ -12,13 +12,17 @@ version: v2
 # database plugin's vocabulary to get them. entity.v1 imports only
 # google/protobuf/descriptor.proto, so depending on it is cheap.
 #
-# entity's protos live under entity/ rather than beside store.v1 under protobuf/,
-# for two reasons. buf derives a module's import paths from its root, so a module
-# rooted at protobuf/entity would publish "v1/table.proto" rather than
-# "entity/v1/table.proto"; rooting it at entity/protobuf gives the right path. And
-# it puts the protos, the generated stubs, the reader, and the go.mod of the
-# neutral vocabulary in one directory — entity/ is the whole unit another plugin
-# consumes, and nothing in it reaches back into store.
+# Both modules are rooted at protobuf/ and separated by `includes`, rather than
+# each being rooted at its own directory, because buf derives a proto's import
+# path from its module root. A module rooted at protobuf/entity would publish
+# "v1/table.proto"; rooted at protobuf/ with includes, it publishes
+# "entity/v1/table.proto", which is what every importing proto writes. The two
+# modules are still independently named, versioned, and pushed.
+#
+# The Go side is split differently and deliberately: entity's reader and its
+# generated stubs live in the nested module under plugin/entity/, so a plugin that
+# wants only the shared names does not inherit this one's dependency graph. Protos
+# group by vocabulary; Go code groups by module boundary.
 #
 # telemetry.v1 (import "telemetry/v1/*.proto") is no longer a local workspace path —
 # it's published as part of buf.build/the-protobuf-project/opentelementry (see deps:
@@ -32,9 +36,11 @@ version: v2
 # A bare `buf push` errors on the unnamed modules.
 modules:
   - path: protobuf
+    includes: [protobuf/store]
     name: buf.build/the-protobuf-project/store
 
-  - path: entity/protobuf
+  - path: protobuf
+    includes: [protobuf/entity]
     name: buf.build/the-protobuf-project/entity
 
   - path: examples/proto

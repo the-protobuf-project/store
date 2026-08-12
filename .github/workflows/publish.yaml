@@ -38,8 +38,8 @@ jobs:
         env:
           # buf authenticates to buf.build from BUF_TOKEN.
           BUF_TOKEN: ${{ secrets.BUF_TOKEN }}
-        # This is a three-module workspace (see buf.yaml): `protobuf` (store.v1)
-        # and `entity/protobuf` (entity.v1) are both named and both published,
+        # This is a three-module workspace (see buf.yaml): `protobuf/store`
+        # (store.v1) and `protobuf/entity` (entity.v1) are both named and published,
         # while `examples/proto` is a local-only workspace module with no BSR
         # name. A bare `buf push` errors on the unnamed module, so
         # --exclude-unnamed pushes only the named module. --create makes the first

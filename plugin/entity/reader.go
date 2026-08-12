@@ -23,7 +23,7 @@ import (
 
 	"github.com/the-protobuf-project/protokit"
 	"github.com/the-protobuf-project/protokit/schema"
-	"github.com/the-protobuf-project/store/entity/pb/entitypbv1"
+	"github.com/the-protobuf-project/store/plugin/entity/pb/entitypbv1"
 )
 
 // Key is the facet key entity.v1 is registered under. It names the vocabulary,

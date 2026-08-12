@@ -82,8 +82,8 @@ const file_entity_v1_annotations_proto_rawDesc = "" +
 	"datasource\x12\x1c.google.protobuf.FileOptions\x18\xb8\x8e\x03 \x01(\v2\x1c.entity.v1.DatasourceOptionsR\n" +
 	"datasource:P\n" +
 	"\x05table\x12\x1f.google.protobuf.MessageOptions\x18\xb9\x8e\x03 \x01(\v2\x17.entity.v1.TableOptionsR\x05table:Q\n" +
-	"\x06column\x12\x1d.google.protobuf.FieldOptions\x18\xba\x8e\x03 \x01(\v2\x18.entity.v1.ColumnOptionsR\x06columnB\xad\x01\n" +
-	"\rcom.entity.v1B\x10AnnotationsProtoP\x01ZEgithub.com/the-protobuf-project/store/entity/pb/entitypbv1;entitypbv1\xa2\x02\x03EXX\xaa\x02\tEntity.V1\xca\x02\tEntity\\V1\xe2\x02\x15Entity\\V1\\GPBMetadata\xea\x02\n" +
+	"\x06column\x12\x1d.google.protobuf.FieldOptions\x18\xba\x8e\x03 \x01(\v2\x18.entity.v1.ColumnOptionsR\x06columnB\xb4\x01\n" +
+	"\rcom.entity.v1B\x10AnnotationsProtoP\x01ZLgithub.com/the-protobuf-project/store/plugin/entity/pb/entitypbv1;entitypbv1\xa2\x02\x03EXX\xaa\x02\tEntity.V1\xca\x02\tEntity\\V1\xe2\x02\x15Entity\\V1\\GPBMetadata\xea\x02\n" +
 	"Entity::V1b\x06proto3"
 
 var file_entity_v1_annotations_proto_goTypes = []any{
