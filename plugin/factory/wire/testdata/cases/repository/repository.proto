@@ -7,7 +7,7 @@ import "google/api/resource.proto";
 import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/wrappers.proto";
-import "protokit/v1/annotations.proto";
+import "entity/v1/annotations.proto";
 import "store/v1/annotations.proto";
 
 option go_package = "example.com/test/gen;orgv1";
@@ -33,7 +33,7 @@ enum OrgState {
 // its own keyed table referenced by a synthesized FK, exercising the plain
 // belongs-to VO path (create-in-tx, Preload, mask-replace, hydration).
 message Location {
-  option (protokit.v1.table) = {id: ID_STRATEGY_ULID};
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
 
   // Street line.
   string line1 = 1 [(google.api.field_behavior) = REQUIRED];
@@ -47,7 +47,7 @@ message Location {
 
 // TimeWindow is a value object used as a oneof member (Member.span).
 message TimeWindow {
-  option (protokit.v1.table) = {id: ID_STRATEGY_ULID};
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
 
   // Window start.
   google.protobuf.Timestamp start_time = 1 [(google.api.field_behavior) = REQUIRED];
@@ -59,7 +59,7 @@ message TimeWindow {
 // DateStretch is the second oneof member, carrying a wrapper field so the
 // nil-able scalar codecs render inside a value object.
 message DateStretch {
-  option (protokit.v1.table) = {id: ID_STRATEGY_ULID};
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
 
   // First day (inclusive), as "2006-01-02".
   string start_day = 1 [(google.api.field_behavior) = REQUIRED];
@@ -74,7 +74,7 @@ message DateStretch {
 // User exercises the simplest repository shape: a root resource another
 // resource references (Member.user), so the ref name↔id fragments render.
 message User {
-  option (protokit.v1.table) = {id: ID_STRATEGY_ULID};
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
 
   option (google.api.resource) = {
     type: "org.v1/User"
@@ -103,7 +103,7 @@ message User {
 // column (state), and a message-typed mutable field (settings — GroupTouched
 // mask semantics).
 message Organisation {
-  option (protokit.v1.table) = {id: ID_STRATEGY_ULID};
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
 
   option (google.api.resource) = {
     type: "org.v1/Organisation"
@@ -147,7 +147,7 @@ message Organisation {
 // parent) with a reference to a root resource (user) and an optional one
 // (inviter) — both directions of the name↔bare-id ref mapping.
 message Member {
-  option (protokit.v1.table) = {id: ID_STRATEGY_ULID};
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
 
   option (google.api.resource) = {
     type: "org.v1/Member"

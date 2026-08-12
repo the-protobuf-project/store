@@ -30,7 +30,7 @@ erDiagram
 
 ### `Widget` → `widgets`
 
-Widget takes its table name and timestamps from protokit.v1.
+Widget takes its table name and timestamps from entity.v1.
 
 | Column | Type | Null |
 | --- | --- | --- |

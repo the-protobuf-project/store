@@ -7,7 +7,8 @@
 // package:  repox
 //
 // Shared runtime for the generated proto-facing repositories.
-// annotations: protokit.v1 (unknown), store.v1 (unknown)
+// annotations: entity.v1 (unknown), store.v1 (unknown)
+// engine:      protokit (unknown)
 //
 // store — https://github.com/the-protobuf-project/store
 

@@ -7,7 +7,8 @@
 -- schemas:  acme_billing
 --
 -- Single-file migration: every schema in one transaction. Idempotent — safe to re-apply.
--- annotations: protokit.v1 (unknown), store.v1 (unknown)
+-- annotations: entity.v1 (unknown), store.v1 (unknown)
+-- engine:      protokit (unknown)
 --
 -- store — https://github.com/the-protobuf-project/store
 

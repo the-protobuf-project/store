@@ -21,11 +21,12 @@ jobs:
 
       # store/go.mod has local `replace` directives for
       # opentelementry-go (telemetry.v1's Go stubs, pending a BSR/module
-      # publish) and runtime-go/telemetry (the Meter contract generated code
-      # binds to, not published yet either) — both point at ../<repo>
-      # relative to store, so CI checks them out as true siblings, matching
-      # local development. Drop these two checkouts (and go.mod's replaces)
-      # once both are published for real.
+      # publish), runtime-go/telemetry (the Meter contract generated code
+      # binds to, not published yet either), and protokit (whose removal of
+      # protokit.v1 — the change that moved entity.v1 here — is unreleased) —
+      # all point at ../<repo> relative to store, so CI checks them out as true
+      # siblings, matching local development. Drop each checkout (and go.mod's
+      # replace) as the corresponding module is published for real.
       - name: Checkout opentelementry (for the opentelementry-go replace)
         uses: actions/checkout@v7
         with:
@@ -37,6 +38,12 @@ jobs:
         with:
           repository: the-protobuf-project/runtime-go
           path: runtime-go
+
+      - name: Checkout protokit (for the protokit replace)
+        uses: actions/checkout@v7
+        with:
+          repository: the-protobuf-project/protokit
+          path: protokit
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -50,6 +57,21 @@ jobs:
       - name: Test
         working-directory: store
         run: go test -race ./...
+
+      # entity/ is a nested module, so the root module's ./... does not reach it.
+      # Running it from its own directory is not just a way to include its tests —
+      # it is the isolation check. entity must build and test as a standalone
+      # module depending on protokit alone, because that is how a cache or streams
+      # generator will consume it. A stray import back into the plugin would show
+      # up here as a resolution failure rather than downstream months later.
+      - name: Test entity (standalone, no store dependency)
+        working-directory: store/entity
+        run: |
+          go test -race ./...
+          if go list -deps ./... | grep -qx 'github.com/the-protobuf-project/store'; then
+            echo "entity/ depends on the store root module; the nested module's isolation is broken"
+            exit 1
+          fi
 
   build:
     name: Build (${{ matrix.goos }}/${{ matrix.goarch }})
@@ -75,6 +97,12 @@ jobs:
         with:
           repository: the-protobuf-project/runtime-go
           path: runtime-go
+
+      - name: Checkout protokit (for the protokit replace)
+        uses: actions/checkout@v7
+        with:
+          repository: the-protobuf-project/protokit
+          path: protokit
 
       - name: Set up Go
         uses: actions/setup-go@v7

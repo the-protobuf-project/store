@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package entity.v1;
+
+option go_package = "github.com/the-protobuf-project/store/entity/pb/entitypbv1;entitypbv1";
+option java_multiple_files = true;
+option java_outer_classname = "ColumnProto";
+option java_package = "com.entity.v1";
+
+// ColumnOptions overrides the neutral, field-level structure of a column: what
+// it is called and whether it is emitted.
+//
+// Everything physical — the storage type, sizing, defaults, constraints, and
+// referential actions — belongs to the generator's own annotation package, not
+// here. Two generators reading the same field must derive the same column
+// *name*; what they store in it is their own business. store.v1 is where this
+// repository's own physical options live.
+//
+// Applied via:
+//
+//	string internal_notes = 6 [(entity.v1.column) = {skip: true}];
+message ColumnOptions {
+  // column is an explicit column name.
+  // Defaults to the proto field name, which is already snake_case.
+  string column = 1;
+
+  // skip excludes this field from all output — no column is generated.
+  bool skip = 2;
+}

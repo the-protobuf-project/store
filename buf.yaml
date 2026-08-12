@@ -2,7 +2,23 @@ version: v2
 
 # This buf.yaml defines a workspace:
 #   protobuf/           — the publishable BSR module (buf.build/the-protobuf-project/store)
+#   entity/protobuf/    — a second publishable module (buf.build/the-protobuf-project/entity)
 #   examples/proto/     — sample annotated protos that consume the options (local only)
+#
+# entity.v1 is the *neutral* vocabulary — what a thing is named — and store.v1 is
+# this plugin's *physical* one. They are separate BSR modules rather than one
+# because their consumers differ: a cache or streams generator needs the names and
+# has no use for a SQL column type, and it should not take a dependency on a
+# database plugin's vocabulary to get them. entity.v1 imports only
+# google/protobuf/descriptor.proto, so depending on it is cheap.
+#
+# entity's protos live under entity/ rather than beside store.v1 under protobuf/,
+# for two reasons. buf derives a module's import paths from its root, so a module
+# rooted at protobuf/entity would publish "v1/table.proto" rather than
+# "entity/v1/table.proto"; rooting it at entity/protobuf gives the right path. And
+# it puts the protos, the generated stubs, the reader, and the go.mod of the
+# neutral vocabulary in one directory — entity/ is the whole unit another plugin
+# consumes, and nothing in it reaches back into store.
 #
 # telemetry.v1 (import "telemetry/v1/*.proto") is no longer a local workspace path —
 # it's published as part of buf.build/the-protobuf-project/opentelementry (see deps:
@@ -18,20 +34,23 @@ modules:
   - path: protobuf
     name: buf.build/the-protobuf-project/store
 
+  - path: entity/protobuf
+    name: buf.build/the-protobuf-project/entity
+
   - path: examples/proto
-    # examples/proto can import store options and googleapis because they
-    # share this workspace; no separate buf dep update needed during development.
+    # examples/proto can import entity options, store options, and googleapis
+    # because they share this workspace; no separate buf dep update needed
+    # during development.
 
 deps:
   - buf.build/googleapis/googleapis # google.api.resource, field_behavior, resource_reference
   - buf.build/the-protobuf-project/opentelementry # telemetry.v1 (tracing/metrics annotations)
-  - buf.build/the-protobuf-project/protokit # protokit.v1 (neutral datasource/table/column structure)
 
 lint:
   use:
     - STANDARD
   except:
-    - PACKAGE_VERSION_SUFFIX # store.v1 is intentionally version-suffixed
+    - PACKAGE_VERSION_SUFFIX # store.v1 and entity.v1 are intentionally version-suffixed
 
 breaking:
   use:

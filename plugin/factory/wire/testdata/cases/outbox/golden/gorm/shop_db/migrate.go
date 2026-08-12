@@ -7,7 +7,8 @@
 // schemas:  shop
 //
 // Migration aggregator: every model in one factory Registry.
-// annotations: protokit.v1 (unknown), store.v1 (unknown)
+// annotations: entity.v1 (unknown), store.v1 (unknown)
+// engine:      protokit (unknown)
 //
 // store — https://github.com/the-protobuf-project/store
 

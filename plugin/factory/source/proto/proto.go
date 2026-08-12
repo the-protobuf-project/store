@@ -23,7 +23,7 @@ type Source struct {
 
 // New returns a proto Source driven by protokit opts, the plugin's facet readers,
 // and the naming policy it resolved from its own config. Both readers and layout
-// may be empty/nil, which yields a pure AIP + protokit.v1 build.
+// may be empty/nil, which yields a pure AIP build.
 func New(opts protokit.Options, readers []protokit.FacetReader, layout protokit.LayoutResolver) *Source {
 	return &Source{opts: opts, readers: readers, layout: layout}
 }

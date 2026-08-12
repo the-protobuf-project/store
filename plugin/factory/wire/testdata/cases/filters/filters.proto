@@ -7,7 +7,7 @@ import "google/api/resource.proto";
 import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
 import "google/type/date.proto";
-import "protokit/v1/annotations.proto";
+import "entity/v1/annotations.proto";
 import "store/v1/annotations.proto";
 
 option go_package = "example.com/test/gen;venuev1";
@@ -27,7 +27,7 @@ enum VenueKind {
 // filterable/sortable opt-outs, a resource reference (equality-only Ref kind),
 // and shapes that are always excluded (JSONB attributes, the synthesized key).
 message Venue {
-  option (protokit.v1.table) = {id: ID_STRATEGY_ULID};
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
 
   option (google.api.resource) = {
     type: "venue.v1/Venue"
@@ -88,7 +88,7 @@ message Venue {
 // Operator is the referenced parent so the venue's reference resolves to a
 // real table (a hard FK) instead of degrading to a soft reference.
 message Operator {
-  option (protokit.v1.table) = {id: ID_STRATEGY_ULID};
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
 
   option (google.api.resource) = {
     type: "venue.v1/Operator"

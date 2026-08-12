@@ -7,7 +7,8 @@
 // package:  gormx
 //
 // Shared GORM runtime: ListOptions, the generic Store interface, the GenericStore engine, and EnsureSchemas.
-// annotations: protokit.v1 (unknown), store.v1 (unknown)
+// annotations: entity.v1 (unknown), store.v1 (unknown)
+// engine:      protokit (unknown)
 // runtime:     gorm.io/gorm
 //
 // store — https://github.com/the-protobuf-project/store

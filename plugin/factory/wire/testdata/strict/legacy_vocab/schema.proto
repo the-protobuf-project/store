@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+// Package legacyvocab.v1 is a schema written entirely in the pre-split orm.v1
+// vocabulary, as it would have been before entity.v1 existed. Nothing in it has
+// been migrated.
+//
+// It exists to pin the compatibility contract: a proto like this still generates,
+// with its structure intact, and says so with a lint diagnostic rather than
+// silently. The structure is what makes the test meaningful — if the compat
+// reader stopped working, the annotations here would simply be ignored, the build
+// would still succeed, and the tables would quietly come out with no timestamps,
+// no ULID key, and the wrong names. That is the failure this case is aimed at, and
+// it is invisible without an assertion.
+package legacyvocab.v1;
+
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "orm/v1/annotations.proto";
+
+option (orm.v1.datasource) = {
+  database: "legacy_db"
+  provider: "postgres"
+  schema: "legacy"
+};
+
+// Widget names its table, its key strategy, and its timestamps in orm.v1. Every
+// one of those is neutral structure that entity.v1 owns now.
+message Widget {
+  option (google.api.resource) = {
+    type: "legacyvocab.v1/Widget"
+    pattern: "widgets/{widget}"
+    plural: "widgets"
+    singular: "widget"
+  };
+  option (orm.v1.table) = {
+    table: "legacy_widgets"
+    id: ID_STRATEGY_ULID
+    timestamps: true
+    indexes: [{
+      columns: ["display_label"]
+      unique: true
+      index: "idx_widget_label"
+    }]
+  };
+
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  // label is renamed by orm.v1, which the compat reader maps onto the same
+  // neutral column name entity.v1 would have produced.
+  string label = 2 [(orm.v1.column) = {column: "display_label"}];
+
+  // internal is excluded by orm.v1: no column should appear for it.
+  string internal = 3 [(orm.v1.column) = {skip: true}];
+}

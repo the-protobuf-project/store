@@ -7,7 +7,9 @@
 // fully-qualified proto name), and targets look them up with protokit.Facet.
 // The reader that produces these values lives in factory/source/proto/backend;
 // this package owns the key, the stored types, and the accessors, so the two
-// sides cannot drift.
+// sides cannot drift. Only store.v1 is here — the neutral entity.v1 options are
+// structure protokit folds into the IR during the build, so there is no facet to
+// read back for them.
 //
 // Reading a facet rather than the column's Source descriptor is what makes the
 // options survive the build: a synthesized column (a surrogate key, an embedded

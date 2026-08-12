@@ -3,7 +3,8 @@
 //
 // protokit v1.2.0 replaced the old schema.Backend — which conflated reading a
 // generator's annotations, deciding neutral names, and applying a config file —
-// with separate seams, and this package supplies them:
+// with separate seams. This package supplies this plugin's half of them; the
+// neutral half is entity's (see [Readers], which composes the two):
 //
 //   - [Reader] is a schema.FacetReader over store.v1: it attaches the physical
 //     storage options to each node as a facet (see factory/facets). It is also a
@@ -76,7 +77,7 @@ func (r Reader) WithRepositoryModules(gormModule, graphqlModule string) Reader {
 func (Reader) Key() string { return facets.KeyStore }
 
 // ReadFile contributes nothing: store.v1 has no file-level option. Grouping a
-// file into a database is neutral structure and lives in protokit.v1.datasource.
+// file into a database is neutral structure and lives in (entity.v1.datasource).
 func (Reader) ReadFile(protoreflect.FileDescriptor) (any, error) { return nil, nil }
 
 // ReadMessage attaches the message's store.v1.table options, or nothing.
@@ -109,14 +110,14 @@ func (Reader) ReadField(d protoreflect.FieldDescriptor) (any, error) {
 // --- schema.StructureReader ---
 
 // ReadDatasource contributes nothing: every field of the old datasource option
-// was neutral structure and now lives in protokit.v1.datasource, which protokit
-// reads itself.
+// was neutral structure and now lives in (entity.v1.datasource), which
+// entity.Reader supplies.
 func (Reader) ReadDatasource(protoreflect.FileDescriptor) schema.Datasource {
 	return schema.Datasource{}
 }
 
 // ReadTable contributes nothing: name, skip, id, timestamps, and indexes are all
-// neutral structure and live in protokit.v1.table.
+// neutral structure and live in (entity.v1.table).
 func (Reader) ReadTable(protoreflect.MessageDescriptor) schema.TableStructure {
 	return schema.TableStructure{}
 }
@@ -127,7 +128,7 @@ func (Reader) ReadTable(protoreflect.MessageDescriptor) schema.TableStructure {
 // carries no descriptor of its own, so ON DELETE / ON UPDATE cannot be recovered
 // from a facet after the fact and must arrive here.
 //
-// Name and skip are absent on purpose: they are protokit.v1's.
+// Name and skip are absent on purpose: they are entity.v1's.
 func (Reader) ReadColumn(d protoreflect.FieldDescriptor) schema.ColumnStructure {
 	o := storeColumnOpts(d)
 	return schema.ColumnStructure{

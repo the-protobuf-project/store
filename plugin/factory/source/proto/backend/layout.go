@@ -1,45 +1,61 @@
 package backend
 
-// layout.go is the schema.LayoutResolver half of the seam: the database/schema
-// naming policy this plugin resolves from store.yaml, kept deliberately apart from
-// the annotation reading in reader.go.
+// layout.go is where this plugin hands protokit the two things that are not its
+// own vocabulary: the naming policy resolved from store.yaml, and the full reader
+// set for a run.
 //
-// The separation is what makes cross-plugin agreement testable. The same protos
-// generated under two different layouts *should* produce different database and
-// schema names; the same protos read by two different plugins should not. Only
-// the second is a bug, and only a build that keeps config out of the annotation
-// path can tell them apart.
+// Both are thin on purpose. The naming policy *rules* live in entity, not here —
+// see [NewLayout] — and the reader set is a list rather than logic. What matters
+// is that there is exactly one of each, so plugin dispatch, the golden harness,
+// and the agreement tests cannot assemble different builds.
 
-import "github.com/the-protobuf-project/protokit/schema"
+import (
+	"github.com/the-protobuf-project/protokit"
+	"github.com/the-protobuf-project/store/entity"
+	telemetrygen "github.com/the-protobuf-project/store/telemetry"
+)
 
-// Layout resolves proto packages to databases and schemas from store.yaml.
+// NewLayout returns the schema.LayoutResolver backed by cfg. A nil cfg yields a
+// resolver with no opinion, which is the correct answer for a run with no config
+// file: protokit falls back to its package-path defaults.
 //
-// The zero Layout (nil config) has no opinion, which is the correct answer for a
-// run with no config file: protokit falls back to its package-path defaults.
-type Layout struct{ cfg *Config }
-
-var _ schema.LayoutResolver = Layout{}
-
-// NewLayout returns the Layout backed by cfg. A nil cfg yields a resolver with
-// no opinion.
-func NewLayout(cfg *Config) Layout { return Layout{cfg: cfg} }
-
-// ResolveDatasource maps a proto package to its database and schema under the
-// first matching store.yaml rule.
-//
-// ok reports whether this resolver has an opinion *at all*, not whether a rule
-// matched: a loaded config still applies its global strip_version to packages no
-// rule names, so it answers true whenever a config was supplied.
-func (l Layout) ResolveDatasource(pkg string) (database, schemaName string, stripVersion, ok bool) {
-	if l.cfg == nil {
-		return "", "", false, false
+// The resolution itself is entity's. store.yaml keeps its shape — the keys are
+// still `datasources:`, `strip_version:`, `dedupe_schema_table:` — but a package
+// glob, a {leaf} template, and a stripped version suffix mean the same thing here
+// as in any other plugin reading entity.v1, because it is the same code deciding.
+// That is the half of cross-plugin agreement golden.IRAgreement cannot check: it
+// compares two plugins under one layout, so a layout that disagreed with itself
+// across plugins would pass.
+func NewLayout(cfg *Config) protokit.LayoutResolver {
+	if cfg == nil {
+		return entity.Layout(nil)
 	}
-	db, s, strip := l.cfg.resolve(pkg)
-	return db, s, strip, true
+	return entity.Layout(&cfg.LayoutConfig)
 }
 
-// DedupeSchemaTable reports store.yaml's dedupe_schema_table policy (false when no
-// config was supplied).
-func (l Layout) DedupeSchemaTable() bool {
-	return l.cfg != nil && l.cfg.DedupeSchemaTable
+// Readers returns the complete reader set for one store build, in the order
+// protokit sorts them into anyway:
+//
+//	entity.v1         the neutral names every protokit plugin must agree on
+//	entity.v1-compat  the deprecated orm.v1 / store.v1 structural options
+//	store.v1          this plugin's physical vocabulary (r)
+//	telemetry.v1      tracing/metrics annotations
+//
+// The order is what makes the precedence readable rather than incidental: an
+// explicit entity.v1 annotation beats a legacy one on the same node, and protokit
+// reports the loser as a lint diagnostic rather than dropping it. Nothing here
+// depends on registration order — protokit sorts by Key — but writing them in
+// resolved order means the list reads the way the build behaves.
+//
+// Assembling the set in one place is the point. A test that built its readers by
+// hand would be testing a plugin this binary never assembles, and the reader most
+// likely to be forgotten is the compat one, whose absence shows up only as
+// somebody else's pre-migration proto silently losing its structure.
+func Readers(r Reader) []protokit.FacetReader {
+	return []protokit.FacetReader{
+		entity.Reader(),
+		entity.CompatReader(),
+		r,
+		telemetrygen.NewReader(),
+	}
 }

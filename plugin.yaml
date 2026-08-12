@@ -11,17 +11,19 @@
 # The vocabulary this plugin owns and the key its FacetReader registers under.
 provides: store
 
-# store cannot run on its own: protokit reads the neutral structure (databases,
-# schemas, tables, columns) that everything here is layered on.
+# store cannot run on its own: protokit builds the neutral structure (databases,
+# schemas, tables, columns) that everything here is layered on. It reads no
+# vocabulary itself — entity.v1 arrives through the reader this plugin registers.
 requires:
   - protokit
 
 # Proto modules and the versions of them this plugin needs.
-#   protokit  — protokit.v1 structure options; 1.2.0 is where facets and the
-#               neutral vocabulary landed, so nothing earlier will do.
+#   entity    — entity.v1 structure options: the neutral vocabulary every
+#               protokit plugin shares. Published from this repository, but
+#               versioned separately from the plugin that ships it.
 #   store     — this plugin's own storage options.
 annotations:
-  buf.build/the-protobuf-project/protokit: '>=1.2.0'
+  buf.build/the-protobuf-project/entity: '^1'
   buf.build/the-protobuf-project/store: '^1'
 
 # A property of what the plugin *emits*, not of what builds it: the generated
@@ -31,8 +33,9 @@ runtime:
   go: '>=1.26'
 
 facets:
-  # protokit.v1 is not listed: it is not a facet, it is the neutral IR every
-  # plugin gets. reads names what this plugin consumes from *other* plugins.
+  # entity.v1 is not listed: it is not a facet. It is structure protokit folds
+  # into the IR during the build, so there is nothing to read back per node.
+  # reads names what this plugin consumes from *other* plugins.
   reads: []
 
   # telemetry.v1 tunes the instrumentation woven into the generated stores.

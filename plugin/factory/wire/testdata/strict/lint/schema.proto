@@ -8,12 +8,12 @@ syntax = "proto3";
 package lintcase.v1;
 
 import "google/api/resource.proto";
-import "protokit/v1/annotations.proto";
+import "entity/v1/annotations.proto";
 
 option java_multiple_files = true;
 option java_outer_classname = "SchemaProto";
 option java_package = "com.lintcase.v1";
-option (protokit.v1.datasource) = {
+option (entity.v1.datasource) = {
   database: "lint_db"
   provider: "postgres"
   schema: "public"

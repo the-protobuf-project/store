@@ -21,7 +21,6 @@ import (
 	"github.com/the-protobuf-project/protokit/header"
 	"github.com/the-protobuf-project/store/plugin/factory/source/proto/backend"
 	"github.com/the-protobuf-project/store/plugin/factory/wire"
-	telemetrygen "github.com/the-protobuf-project/store/telemetry"
 )
 
 // defaultTargets are the database backends every golden case runs unless it
@@ -41,7 +40,7 @@ var defaultTargets = []string{"gorm", "prisma", "sql"}
 // policy. They still need the reader — their fixtures declare storage options
 // through store.v1, and a run without it would not see them.
 func ormPlugin() protokit.Plugin {
-	return wire.Plugin([]protokit.FacetReader{backend.New(nil, "", false, false, false, false), telemetrygen.NewReader()}, nil)
+	return wire.Plugin(backend.Readers(backend.New(nil, "", false, false, false, false)), nil)
 }
 
 // ormCasePlugin is ormPlugin for a golden case directory.
@@ -60,7 +59,7 @@ func ormCasePlugin(dir string) protokit.Plugin {
 	telemetry := fileExists(filepath.Join(dir, "telemetry"))
 	reader := backend.New(cfg, "example.com/test/gen", stores, telemetry, converters, filters).
 		WithRepositoryModules(optFile(dir, "gorm_module"), optFile(dir, "graphql_module"))
-	return wire.Plugin([]protokit.FacetReader{reader, telemetrygen.NewReader()}, backend.NewLayout(cfg))
+	return wire.Plugin(backend.Readers(reader), backend.NewLayout(cfg))
 }
 
 // optFile reads a valued marker file (e.g. gorm_module holding a module path),

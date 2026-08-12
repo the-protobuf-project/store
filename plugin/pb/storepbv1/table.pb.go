@@ -24,8 +24,8 @@ const (
 // TableOptions overrides how a message's table is *stored*.
 //
 // The table's name, whether it is emitted, its key strategy, its timestamps, and
-// its composite indexes are neutral structure and live in
-// (protokit.v1.table) — protokit reads those itself. What remains here is
+// its composite indexes are neutral structure and live in (entity.v1.table),
+// which every plugin reads through the same shared reader. What remains here is
 // storage a name cannot express.
 //
 // Applied via:

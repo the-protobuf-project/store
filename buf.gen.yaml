@@ -1,9 +1,17 @@
 version: v2
 
-# Regenerates the pre-compiled Go stubs for this plugin's own option protos (store.v1).
+# Regenerates the pre-compiled Go stubs for the two option modules this repository
+# owns: store.v1 (this plugin's physical vocabulary) and entity.v1 (the neutral
+# one every protokit plugin shares).
 #
 # Run:  buf generate --template buf.gen.yaml
 # Out:  plugin/pb/storepbv1/*.pb.go
+#       entity/pb/entitypbv1/*.pb.go
+#
+# entity's stubs land inside the nested entity/ Go module, which is the point:
+# entity/ ships as github.com/the-protobuf-project/store/entity and depends on
+# protokit and these stubs alone, so a plugin that wants the neutral names does
+# not take a dependency on gorm, prisma, or graphql to get them.
 #
 # telemetry.v1's Go stubs are NOT regenerated from here — that standalone module
 # now lives in the sibling opentelementry-go repo, and its stubs are generated
@@ -43,6 +51,7 @@ managed:
 
 inputs:
   - directory: protobuf
+  - directory: entity/protobuf
 
 plugins:
   - remote: buf.build/protocolbuffers/go:v1.36.11
