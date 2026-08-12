@@ -25,7 +25,7 @@ import (
 
 // defaultTargets are the database backends every golden case runs unless it
 // ships a "targets" file.
-var defaultTargets = []string{"gorm", "prisma", "sql"}
+var defaultTargets = []string{"gorm", "prisma", "sql", "resources"}
 
 // ormPlugin builds the protokit.Plugin for one golden case: it reads any store.yaml
 // the case ships (grouping/telemetry config) and its optional "stores"/

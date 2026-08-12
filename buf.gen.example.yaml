@@ -10,10 +10,45 @@ version: v2
 #
 # The M entries supply the Go import-path mapping protogen requires for every
 # .proto it processes, so example protos don't need `option go_package`.
+# Same stale-go_package workaround buf.gen.yaml carries, for the same reason: the
+# sibling repo's telemetry/v1/*.proto files declare
+#   github.com/the-protobuf-project/opentelementry-go/protobuf/telemetry/v1/telemetrypbv1
+# which predates that module's nesting under opentelementry/opentelementry-go. The
+# example protos import telemetry.v1, so their generated stubs would import a Go
+# package that does not exist. Drop this once the sibling repo fixes its own
+# go_package options — and drop it from buf.gen.yaml at the same time.
+managed:
+  enabled: true
+  override:
+    - file_option: go_package
+      path: telemetry/v1/annotations.proto
+      value: github.com/the-protobuf-project/opentelementry/opentelementry-go/protobuf/telemetry/v1/telemetrypbv1
+    - file_option: go_package
+      path: telemetry/v1/tracing.proto
+      value: github.com/the-protobuf-project/opentelementry/opentelementry-go/protobuf/telemetry/v1/telemetrypbv1
+    - file_option: go_package
+      path: telemetry/v1/metrics.proto
+      value: github.com/the-protobuf-project/opentelementry/opentelementry-go/protobuf/telemetry/v1/telemetrypbv1
+
 inputs:
   - directory: examples/proto
 
 plugins:
+  # The protobuf Go stubs the example protos compile to. Every other block below
+  # maps these protos to this import path with M args; until now nothing actually
+  # generated the package, which was fine only because no example output
+  # referenced a proto type. The resources target does — its descriptors wire
+  # New: func() proto.Message { return &v1.Book{} } — so the stubs have to exist.
+  #
+  # paths=source_relative puts bookstore/v1/bookstore.proto at
+  # examples/gen/bookstore/v1/bookstore.pb.go, matching the M mappings.
+  - remote: buf.build/protocolbuffers/go:v1.36.11
+    out: examples/gen
+    opt:
+      - paths=source_relative
+      - Mbookstore/v1/bookstore.proto=github.com/the-protobuf-project/store/examples/gen/bookstore/v1
+      - Mbookstore/v1/inventory.proto=github.com/the-protobuf-project/store/examples/gen/bookstore/v1
+
   - local: protoc-gen-store
     out: examples/generated/prisma
     opt:
@@ -49,6 +84,19 @@ plugins:
     out: examples/generated/sql
     opt:
       - target=sql
+      - Mbookstore/v1/bookstore.proto=github.com/the-protobuf-project/store/examples/gen/bookstore/v1
+      - Mbookstore/v1/inventory.proto=github.com/the-protobuf-project/store/examples/gen/bookstore/v1
+
+  # Backend-agnostic runtime descriptors: one store.Resource per proto resource,
+  # carrying no storage engine of their own. Registering them with
+  # store.NewRegistry lets the same generated API be served by a relational
+  # driver, an EVM contract, or a Hyperledger chain. Adds a
+  # github.com/the-protobuf-project/runtime-go/database dependency to the
+  # generated package, and references the protobuf Go stubs generated above.
+  - local: protoc-gen-store
+    out: examples/generated/resources
+    opt:
+      - target=resources
       - Mbookstore/v1/bookstore.proto=github.com/the-protobuf-project/store/examples/gen/bookstore/v1
       - Mbookstore/v1/inventory.proto=github.com/the-protobuf-project/store/examples/gen/bookstore/v1
 

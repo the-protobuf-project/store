@@ -55,6 +55,7 @@ Both run through the same binary on `buf generate`, selected per output by a
 | proto | **prisma** | A complete, runnable Prisma 7 project — multi-file schema, `package.json`, `tsconfig.json`, config, and a `.env.example` to copy to `.env`. |
 | proto | **gorm** | Go structs with GORM tags + a migration registry; optional [CRUD stores + first-party telemetry](#gorm-stores-and-tracing), [AIP-160 filter / AIP-132 order_by list engines for **SQL and Hasura GraphQL**](#aip-160-filters-and-list-engines-sql--hasura), and [proto ↔ model converters](#proto--model-converters). |
 | proto | **sql** | PostgreSQL DDL — per-schema reference files **and** one transactional, **idempotent** `migrate.sql`; FK constraints, indexes, `updated_at` triggers, `COMMENT ON`. |
+| proto | **resources** | Backend-agnostic runtime descriptors (`<db>/grpcx/resources.go`) — one `store.Resource` per proto resource, so the same generated API is served by a relational driver, an EVM contract, or a Hyperledger chain (see [Runtime resource descriptors](#runtime-resource-descriptors)). |
 | graphql | **graphql** | A typed Go GraphQL client — row models, a fluent predicate DSL, CRUD/subscription methods (see [GraphQL client SDK](#graphql-client-sdk)). |
 
 Each database target also emits a `README.md` with a Mermaid ER diagram and a
@@ -526,6 +527,49 @@ re-apply**. The per-schema files remain as clean, readable reference DDL.
 ```bash
 psql "$BOOKSTORE_DB_DATABASE_URL" -f generated/sql/bookstore_db/migrate.sql
 ```
+
+## Runtime resource descriptors
+
+Every other target commits the generated API to one storage engine: the **gorm**
+target emits structs bound to `gorm.io/gorm`, **sql** emits PostgreSQL, **prisma**
+emits a Prisma schema. The **resources** target emits none of that.
+
+It renders the IR as a slice of
+[`store.Resource`](https://github.com/the-protobuf-project/runtime-go) — the
+table, the primary key, every column's kind and backend type, and the foreign
+keys — which the runtime reads through protoreflect. Because the descriptor says
+what a `Book` *is* rather than how one is stored, the same generated output is
+served by any driver:
+
+```go
+reg := store.NewRegistry(grpcx.Resources...)
+
+svc := adapter.New(orm.New(db), reg)   // relational
+svc := adapter.New(evm.New(cfg), reg)  // EVM contract
+svc := adapter.New(fabric.New(), reg)  // Hyperledger
+```
+
+Output is one file per database:
+
+```
+generated/resources/bookstore_db/grpcx/resources.go
+```
+
+No Go model types are generated and none are needed — `store.Resource.New` wires
+a `func() proto.Message` so drivers construct messages without importing your
+generated packages. Columns carrying `Generated`, `AutoCreate` or `AutoUpdate`
+report `Managed()` at runtime, so the bridge skips them and the driver supplies
+the value.
+
+This is also the seam another protokit plugin builds on: a cache, streams, or
+docs generator consumes descriptors instead of re-deriving table and column
+layout from protos itself.
+
+> **Synthesized tables are not described.** Outbox tables and many-to-many join
+> tables are materialized by the generator rather than declared by a proto
+> message, so there is no concrete type for `New` to construct. The **sql** and
+> **gorm** targets still create them; they are simply not addressable through the
+> resource registry. Each generated file names the ones it dropped.
 
 ## GraphQL client SDK
 

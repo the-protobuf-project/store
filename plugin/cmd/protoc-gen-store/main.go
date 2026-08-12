@@ -88,7 +88,7 @@ func main() {
 	// flags are populated by protogen (ParamFunc maps each buf.gen.yaml opt:
 	// "key=value" to flags.Set) before the Run closure reads them.
 	var flags flag.FlagSet
-	target := flags.String("target", "", "output backend: gorm | sql | prisma")
+	target := flags.String("target", "", "output backend: gorm | sql | prisma | repository | resources | graphql")
 	strict := flags.String("strict", "",
 		"per-rule severity for schema problems: \"\"=all warn, \"true\"=all error, "+
 			"or \"ref:error,collision:warn,index:error,lint:warn\"")
