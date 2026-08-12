@@ -629,8 +629,12 @@ and queried, which no other plugin needs to agree with.
 > | `(orm.v1.query)` | `(store.v1.query)` |
 >
 > Field semantics and field numbers are unchanged, so the migration is a rename.
+> **[MIGRATING.md](MIGRATING.md) has the scripted version**, along with the one
+> case a script cannot finish — a single `(orm.v1.column)` holding both structural
+> and physical fields, which becomes two options in two modules.
+>
 > Run with `strict=lint:error` once you believe you are done: any option the
-> compat reader is still supplying becomes a hard failure.
+> compat reader is still supplying becomes a hard failure, named field by field.
 
 ### `(entity.v1.datasource)` — file level
 

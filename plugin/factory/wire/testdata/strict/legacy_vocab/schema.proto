@@ -11,6 +11,14 @@ syntax = "proto3";
 // would still succeed, and the tables would quietly come out with no timestamps,
 // no ULID key, and the wrong names. That is the failure this case is aimed at, and
 // it is invisible without an assertion.
+//
+// testdata/strict/legacy_vocab_twin is this file migrated to entity.v1, and
+// TestLegacyVocabularyEquivalence requires the two to generate byte-identical
+// output. That is why the doc comments below describe the schema and never the
+// vocabulary: a leading comment is forwarded into the generated output as a
+// COMMENT ON statement, so prose mentioning "orm.v1" here would show up as a
+// difference between the twins and mask a real one. Vocabulary-specific notes go
+// in this package comment, which is not forwarded, or inside the message body.
 package legacyvocab.v1;
 
 import "google/api/field_behavior.proto";
@@ -23,8 +31,7 @@ option (orm.v1.datasource) = {
   schema: "legacy"
 };
 
-// Widget names its table, its key strategy, and its timestamps in orm.v1. Every
-// one of those is neutral structure that entity.v1 owns now.
+// Widget is a labelled thing with a surrogate key and audit timestamps.
 message Widget {
   option (google.api.resource) = {
     type: "legacyvocab.v1/Widget"
@@ -32,6 +39,9 @@ message Widget {
     plural: "widgets"
     singular: "widget"
   };
+  // Table name, key strategy, timestamps and indexes — every one of them neutral
+  // structure that entity.v1 owns now, declared here in the vocabulary that used
+  // to own all of it.
   option (orm.v1.table) = {
     table: "legacy_widgets"
     id: ID_STRATEGY_ULID
@@ -45,10 +55,9 @@ message Widget {
 
   string name = 1 [(google.api.field_behavior) = IDENTIFIER];
 
-  // label is renamed by orm.v1, which the compat reader maps onto the same
-  // neutral column name entity.v1 would have produced.
+  // Human-readable label for the widget.
   string label = 2 [(orm.v1.column) = {column: "display_label"}];
 
-  // internal is excluded by orm.v1: no column should appear for it.
+  // Bookkeeping the database has no use for.
   string internal = 3 [(orm.v1.column) = {skip: true}];
 }

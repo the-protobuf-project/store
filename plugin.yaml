@@ -35,13 +35,23 @@ runtime:
 facets:
   # entity.v1 is not listed: it is not a facet. It is structure protokit folds
   # into the IR during the build, so there is nothing to read back per node.
-  # reads names what this plugin consumes from *other* plugins.
+  # The criterion is what this plugin reads back out of the IR per node, not who
+  # registered the reader that put it there.
+  #
+  # entity.v1 is therefore absent, despite being indispensable: this plugin
+  # registers entity.Reader() and depends utterly on it, but consumes it through
+  # the reader's *structure* half, which protokit folds into databases, schemas,
+  # tables and columns during the build. Nothing here ever asks for an entity.v1
+  # facet by node. The hard dependency on that vocabulary is real and is declared
+  # where it belongs, under annotations: above.
   reads: []
 
-  # telemetry.v1 tunes the instrumentation woven into the generated stores.
-  # Optional because a build without it simply generates uninstrumented output —
-  # less, not broken. store.v1 is absent for a different reason: this plugin
-  # provides it, so declaring a dependency on it would say nothing.
+  # telemetry.v1 tunes the instrumentation woven into the generated stores, and
+  # is read back per node — see telemetry.Set. Optional because a build without it
+  # generates uninstrumented output: less, not broken.
+  #
+  # store.v1 is read back per node too, but is absent for a third reason: this
+  # plugin provides it, so declaring a dependency on it would say nothing.
   optional_reads:
     - telemetry.v1
 

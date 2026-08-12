@@ -176,6 +176,7 @@ option *values* survive that migration untouched.
 
 **`orm.v1` was removed in v2.** The pre-split vocabulary said everything at once —
 what a table was called *and* how its columns were stored — which is why no other
-generator could read it. See the migration table in the
-[main repository](https://github.com/the-protobuf-project/store) for the
-option-by-option mapping; field semantics are unchanged, so migrating is a rename.
+generator could read it. See
+[MIGRATING.md](https://github.com/the-protobuf-project/store/blob/main/MIGRATING.md)
+for the option-by-option mapping and a scripted rename; field semantics and field
+numbers are unchanged, so migrating changes prefixes and imports, nothing else.

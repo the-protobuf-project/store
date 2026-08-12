@@ -1,0 +1,62 @@
+syntax = "proto3";
+
+// Package legacyvocab.v1 is the migrated twin of testdata/strict/legacy_vocab:
+// the same schema, option for option, written in entity.v1 instead of the
+// pre-split orm.v1.
+//
+// The two directories exist to be compared. TestLegacyVocabularyEquivalence
+// generates both and requires byte-identical output, which is the promise
+// MIGRATING.md makes to anyone doing the rename: migrating changes what you
+// import and what prefix you write, and changes nothing about what you get.
+//
+// Keep this file in lockstep with its twin. A change to one that is not mirrored
+// in the other fails the equivalence test — which is the point, because the two
+// vocabularies drifting apart is exactly the bug no other test here would catch:
+// the compat reader could start mapping an option to the wrong field and every
+// assertion in TestLegacyVocabularyStructure would still pass, since it checks
+// that values arrive, not that they arrive the same way.
+//
+// The doc comments below are part of that lockstep. A leading comment is
+// forwarded into generated output as a COMMENT ON statement, so it has to match
+// the twin's exactly, which is why none of them mentions a vocabulary.
+package legacyvocab.v1;
+
+import "entity/v1/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+
+option (entity.v1.datasource) = {
+  database: "legacy_db"
+  provider: "postgres"
+  schema: "legacy"
+};
+
+// Widget is a labelled thing with a surrogate key and audit timestamps.
+message Widget {
+  option (google.api.resource) = {
+    type: "legacyvocab.v1/Widget"
+    pattern: "widgets/{widget}"
+    plural: "widgets"
+    singular: "widget"
+  };
+  // Table name, key strategy, timestamps and indexes — the neutral structure
+  // entity.v1 owns, which the twin declares in orm.v1.
+  option (entity.v1.table) = {
+    table: "legacy_widgets"
+    id: ID_STRATEGY_ULID
+    timestamps: true
+    indexes: [{
+      columns: ["display_label"]
+      unique: true
+      index: "idx_widget_label"
+    }]
+  };
+
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  // Human-readable label for the widget.
+  string label = 2 [(entity.v1.column) = {column: "display_label"}];
+
+  // Bookkeeping the database has no use for.
+  string internal = 3 [(entity.v1.column) = {skip: true}];
+}
