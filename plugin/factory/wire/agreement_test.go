@@ -10,10 +10,17 @@ package wire_test
 // rows persisted by another. Golden files cannot express that: they pin what
 // *this* plugin emits, not what any other plugin would agree on.
 //
-// So the assertion is made against a plugin that reads no vocabulary at all —
-// pure AIP plus protokit.v1. If the two disagree about a neutral name, something
-// storage-specific has leaked into the structure, which is exactly the mistake
-// the split exists to prevent.
+// So the assertion is made against a stub plugin that registers exactly one
+// reader: entity.Reader(), the shared neutral vocabulary. If the two disagree
+// about a neutral name, something storage-specific has leaked into the structure,
+// which is exactly the mistake the split exists to prevent.
+//
+// That stub is a closer model of a real second plugin than it used to be. protokit
+// once read the neutral vocabulary itself, so the comparison could be made against
+// a build with *no* readers; now nothing is neutral by default, and a plugin gets
+// the shared names by importing the shared reader or not at all. Registering only
+// entity.Reader() is what a cache or streams generator's proto source would
+// actually look like on its first day.
 
 import (
 	"os"
@@ -24,23 +31,24 @@ import (
 	"github.com/the-protobuf-project/protokit"
 	"github.com/the-protobuf-project/protokit/golden"
 	"github.com/the-protobuf-project/protokit/schema"
+	"github.com/the-protobuf-project/store/plugin/entity"
 	"github.com/the-protobuf-project/store/plugin/factory/wire"
 )
 
-// TestIRAgreement requires the store plugin and a bare protokit plugin to derive
-// identical neutral facts for every case whose protos are written in
-// protokit.v1.
+// TestIRAgreement requires the store plugin and a bare entity.v1 plugin to derive
+// identical neutral facts for every case whose protos are written in entity.v1.
 //
-// Every case is written in protokit.v1, so a bare protokit build reads the same
-// structure this plugin does — which is exactly the property under test.
+// Both sides read the same vocabulary through the same reader, so any divergence
+// is this plugin's own vocabulary moving a name it should not — which is exactly
+// the property under test.
 func TestIRAgreement(t *testing.T) {
-	for _, dir := range protokitV1Cases(t) {
+	for _, dir := range entityV1Cases(t) {
 		name := filepath.Base(dir)
 		if synthesizesTables[name] {
 			continue
 		}
 		t.Run(name, func(t *testing.T) {
-			golden.IRAgreement(t, dir, ormCasePlugin(dir), bareProtokitPlugin(dir))
+			golden.IRAgreement(t, dir, ormCasePlugin(dir), bareEntityPlugin(dir))
 		})
 	}
 }
@@ -61,7 +69,7 @@ var synthesizesTables = map[string]bool{"outbox": true}
 // drift, and both would otherwise show up as an intermittently failing golden
 // diff that reruns "fix".
 func TestDeterminism(t *testing.T) {
-	for _, dir := range protokitV1Cases(t) {
+	for _, dir := range entityV1Cases(t) {
 		t.Run(filepath.Base(dir), func(t *testing.T) {
 			golden.Determinism(t, dir, determinismPlugin(dir))
 		})
@@ -88,9 +96,15 @@ func determinismPlugin(dir string) protokit.Plugin {
 	return pl
 }
 
-// bareProtokitPlugin is a run with this plugin's targets but none of its
-// vocabulary: no facet readers at all. What it derives is what any other
-// protokit plugin would derive from the same protos.
+// bareEntityPlugin is a run with this plugin's targets but none of its
+// vocabulary: entity.Reader() and nothing else. What it derives is what any other
+// protokit plugin would derive from the same protos by importing the same reader.
+//
+// Note what is deliberately absent: entity.CompatReader(). A case written in the
+// deprecated vocabulary would be read by the store plugin and not by this stub, so
+// the two would disagree — correctly, because a legacy annotation is not something
+// a new plugin should be expected to understand. The cases this harness selects
+// are the entity.v1 ones (see entityV1Cases), so the situation does not arise.
 //
 // It does get the case's layout, and that is not a loophole — it is the
 // distinction the LayoutResolver split exists to draw. The same protos generated
@@ -99,13 +113,13 @@ func determinismPlugin(dir string) protokit.Plugin {
 // different plugins should not, because an annotation is the schema's. Handing
 // both sides the same layout is what leaves only the second difference visible,
 // which is the one this test is about.
-func bareProtokitPlugin(dir string) protokit.Plugin {
-	return wire.Plugin(nil, ormCasePlugin(dir).Layout)
+func bareEntityPlugin(dir string) protokit.Plugin {
+	return wire.Plugin([]protokit.FacetReader{entity.Reader()}, ormCasePlugin(dir).Layout)
 }
 
-// protokitV1Cases lists the golden cases whose protos import protokit.v1, which
-// are the ones a bare protokit build can read in full.
-func protokitV1Cases(t *testing.T) []string {
+// entityV1Cases lists the golden cases whose protos import entity.v1, which are
+// the ones a stub registering only entity.Reader() can read in full.
+func entityV1Cases(t *testing.T) []string {
 	t.Helper()
 	root := filepath.Join("testdata", "cases")
 	entries, err := os.ReadDir(root)
@@ -118,20 +132,20 @@ func protokitV1Cases(t *testing.T) []string {
 			continue
 		}
 		dir := filepath.Join(root, e.Name())
-		if usesProtokitV1(t, dir) {
+		if usesEntityV1(t, dir) {
 			out = append(out, dir)
 		}
 	}
 	if len(out) == 0 {
-		t.Fatal("no protokit.v1 cases found; the harness would pass vacuously")
+		t.Fatal("no entity.v1 cases found; the harness would pass vacuously")
 	}
 	return out
 }
 
-// usesProtokitV1 reports whether any .proto the case compiles imports
-// protokit.v1, following the "source" indirection a case may use to point at the
-// shared examples tree.
-func usesProtokitV1(t *testing.T, dir string) bool {
+// usesEntityV1 reports whether any .proto the case compiles imports entity.v1,
+// following the "source" indirection a case may use to point at the shared
+// examples tree.
+func usesEntityV1(t *testing.T, dir string) bool {
 	t.Helper()
 	if b, err := os.ReadFile(filepath.Join(dir, "source")); err == nil {
 		dir = filepath.Join(dir, strings.TrimSpace(string(b)))
@@ -148,7 +162,7 @@ func usesProtokitV1(t *testing.T, dir string) bool {
 		if err != nil {
 			continue
 		}
-		if containsImport(string(b), "protokit/v1/annotations.proto") {
+		if containsImport(string(b), "entity/v1/annotations.proto") {
 			return true
 		}
 	}

@@ -28,10 +28,8 @@ github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 github.com/the-protobuf-project/opentelementry/opentelementry-go v0.0.0-20260722091843-d33763c88e10 h1:PqeZRYLCJ//5NBcSUT/poT4Y6Ext2Jugz9z59osU8cc=
 github.com/the-protobuf-project/opentelementry/opentelementry-go v0.0.0-20260722091843-d33763c88e10/go.mod h1:3VoF0Qu2GrHnCz+nNNhupG5iDp1rYW/55nV9Ahw8fbw=
-github.com/the-protobuf-project/protokit v1.1.0 h1:8Lmm7ibEwDy9C6kc2QS67W9peFZpsd36BFQqjiEU8LU=
-github.com/the-protobuf-project/protokit v1.1.0/go.mod h1:RBLZuWMrtD02AlgUzrWXNu9kj+h2NErcQv+nGOqe1nk=
-github.com/the-protobuf-project/protokit v1.2.0 h1:vtcqj9ZshIbWDfNc/VDPgbE2L+d2ewvmkfTI4yiepsE=
-github.com/the-protobuf-project/protokit v1.2.0/go.mod h1:HODRJtLQhT39oud+Hc7hIxK4PQlhaJ6y8qU11dBpPn4=
+github.com/the-protobuf-project/protokit v1.2.1 h1:iak7iZZzYg+lYVdH7ZAO4kKGwz3ZX/0s+JK6Ykah4/A=
+github.com/the-protobuf-project/protokit v1.2.1/go.mod h1:HODRJtLQhT39oud+Hc7hIxK4PQlhaJ6y8qU11dBpPn4=
 github.com/vektah/gqlparser/v2 v2.5.36 h1:CN9mKVHgMkc+XftdOWIhb4HEL8wKSYkFAqhf8booa7s=
 github.com/vektah/gqlparser/v2 v2.5.36/go.mod h1:cAJ9qwVgPaUkWv6Gn8vn0mqOE0Ui5Pn56wNy5396XWo=
 go.yaml.in/yaml/v3 v3.0.4 h1:tfq32ie2Jv2UxXFdLJdh3jXuOzWiL1fo0bu/FbuKpbc=

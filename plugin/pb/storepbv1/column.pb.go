@@ -24,7 +24,7 @@ const (
 // ReferentialAction is the ON DELETE / ON UPDATE behavior of a foreign key
 // inferred from google.api.resource_reference.
 //
-// This stays in store.v1 rather than moving to protokit.v1 because it is a
+// This stays in store.v1 rather than moving to entity.v1 because it is a
 // storage guarantee, not a name — but protokit still consumes it mid-build: the
 // foreign-key column of an embedded child relation is synthesized and carries no
 // descriptor of its own, so the action has to reach protokit through a
@@ -98,8 +98,8 @@ func (ReferentialAction) EnumDescriptor() ([]byte, []int) {
 // foreign key it forms.
 //
 // What the column is *called*, and whether it exists at all, is neutral
-// structure and lives in (protokit.v1.column) — protokit reads that itself, so
-// every plugin agrees on the name. Nothing here changes a name.
+// structure and lives in (entity.v1.column), which every plugin reads through the
+// same shared reader, so they all agree on the name. Nothing here changes a name.
 //
 // Applied via:
 //
@@ -116,7 +116,7 @@ type ColumnOptions struct {
 	// unique adds a UNIQUE constraint to this column.
 	Unique bool `protobuf:"varint,3,opt,name=unique,proto3" json:"unique,omitempty"`
 	// index adds a single-column index on this column.
-	// Use (protokit.v1.table).indexes for composite indexes.
+	// Use (entity.v1.table).indexes for composite indexes.
 	Index bool `protobuf:"varint,4,opt,name=index,proto3" json:"index,omitempty"`
 	// max_length caps a string field: VARCHAR(max_length) instead of the
 	// VARCHAR(255) default. Provider-neutral (Mongo ignores it).

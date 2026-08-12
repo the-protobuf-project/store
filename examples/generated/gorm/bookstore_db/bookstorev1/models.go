@@ -7,7 +7,8 @@
 // database: bookstore_db
 // schema:   bookstore_v1
 //
-// annotations: protokit.v1 v1.2.0, store.v1 dev
+// annotations: entity.v1 (devel), store.v1 dev
+// engine:      protokit v1.2.1
 //
 // store — https://github.com/the-protobuf-project/store
 

@@ -7,7 +7,8 @@
 -- schemas:  store
 --
 -- Single-file migration: every schema in one transaction. Idempotent — safe to re-apply.
--- annotations: protokit.v1 (unknown), store.v1 (unknown)
+-- annotations: entity.v1 (unknown), store.v1 (unknown)
+-- engine:      protokit (unknown)
 --
 -- store — https://github.com/the-protobuf-project/store
 
@@ -19,13 +20,13 @@ CREATE SCHEMA IF NOT EXISTS "store";
 -- Tables (foreign keys are added after every table exists, so creation order
 -- never matters — even across schemas or reference cycles).
 
--- Widget takes its table name and timestamps from protokit.v1.
+-- Widget takes its table name and timestamps from entity.v1.
 CREATE TABLE IF NOT EXISTS "store"."widgets" (
     -- Unique identifier for the record.
     "id"  CHAR(26)  NOT NULL  PRIMARY KEY,
     -- name: IDENTIFIER → PRIMARY KEY.
     "name"  VARCHAR(255)  NOT NULL  UNIQUE,
-    -- label is renamed by protokit.v1 and sized by store.v1 — the two modules annotating one field without either reaching into the other's half.
+    -- label is renamed by entity.v1 and sized by store.v1 — the two modules annotating one field without either reaching into the other's half.
     "display_label"  VARCHAR(120),
     -- note carries storage options only; its column name is the proto field name.
     "note"  TEXT,
@@ -36,10 +37,10 @@ CREATE TABLE IF NOT EXISTS "store"."widgets" (
 );
 
 -- Documentation
-COMMENT ON TABLE "store"."widgets" IS 'Widget takes its table name and timestamps from protokit.v1.';
+COMMENT ON TABLE "store"."widgets" IS 'Widget takes its table name and timestamps from entity.v1.';
 COMMENT ON COLUMN "store"."widgets"."id" IS 'Unique identifier for the record.';
 COMMENT ON COLUMN "store"."widgets"."name" IS 'name: IDENTIFIER → PRIMARY KEY.';
-COMMENT ON COLUMN "store"."widgets"."display_label" IS 'label is renamed by protokit.v1 and sized by store.v1 — the two modules annotating one field without either reaching into the other''s half.';
+COMMENT ON COLUMN "store"."widgets"."display_label" IS 'label is renamed by entity.v1 and sized by store.v1 — the two modules annotating one field without either reaching into the other''s half.';
 COMMENT ON COLUMN "store"."widgets"."note" IS 'note carries storage options only; its column name is the proto field name.';
 COMMENT ON COLUMN "store"."widgets"."created_at" IS 'Timestamp when the record was created.';
 COMMENT ON COLUMN "store"."widgets"."updated_at" IS 'Timestamp when the record was last updated.';

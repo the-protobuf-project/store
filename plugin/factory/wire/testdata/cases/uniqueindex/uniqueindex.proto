@@ -1,15 +1,15 @@
 syntax = "proto3";
 
 // Package promo.v1 exercises store finder generation for a column made unique
-// via a single-column unique index (protokit.v1.table.indexes), rather than
+// via a single-column unique index (entity.v1.table.indexes), rather than
 // column.unique — store must still emit a GetBy<Field> finder for it.
 package promo.v1;
 
 import "google/api/field_behavior.proto";
 import "google/api/resource.proto";
-import "protokit/v1/annotations.proto";
+import "entity/v1/annotations.proto";
 
-option (protokit.v1.datasource) = {
+option (entity.v1.datasource) = {
   database: "promo_db"
   schema: "promo"
 };
@@ -24,7 +24,7 @@ message PromoCode {
     singular: "promoCode"
     plural: "promoCodes"
   };
-  option (protokit.v1.table) = {
+  option (entity.v1.table) = {
     indexes: [
       {
         columns: ["code"]

@@ -1,8 +1,28 @@
 version: v2
 
 # This buf.yaml defines a workspace:
-#   protobuf/           — the publishable BSR module (buf.build/the-protobuf-project/store)
-#   examples/proto/     — sample annotated protos that consume the options (local only)
+#   protobuf/store/   — a publishable BSR module (buf.build/the-protobuf-project/store)
+#   protobuf/entity/  — a publishable BSR module (buf.build/the-protobuf-project/entity)
+#   examples/proto/   — sample annotated protos that consume the options (local only)
+#
+# entity.v1 is the *neutral* vocabulary — what a thing is named — and store.v1 is
+# this plugin's *physical* one. They are separate BSR modules rather than one
+# because their consumers differ: a cache or streams generator needs the names and
+# has no use for a SQL column type, and it should not take a dependency on a
+# database plugin's vocabulary to get them. entity.v1 imports only
+# google/protobuf/descriptor.proto, so depending on it is cheap.
+#
+# Both modules are rooted at protobuf/ and separated by `includes`, rather than
+# each being rooted at its own directory, because buf derives a proto's import
+# path from its module root. A module rooted at protobuf/entity would publish
+# "v1/table.proto"; rooted at protobuf/ with includes, it publishes
+# "entity/v1/table.proto", which is what every importing proto writes. The two
+# modules are still independently named, versioned, and pushed.
+#
+# The Go side is split differently and deliberately: entity's reader and its
+# generated stubs live in the nested module under plugin/entity/, so a plugin that
+# wants only the shared names does not inherit this one's dependency graph. Protos
+# group by vocabulary; Go code groups by module boundary.
 #
 # telemetry.v1 (import "telemetry/v1/*.proto") is no longer a local workspace path —
 # it's published as part of buf.build/the-protobuf-project/opentelementry (see deps:
@@ -16,22 +36,27 @@ version: v2
 # A bare `buf push` errors on the unnamed modules.
 modules:
   - path: protobuf
+    includes: [protobuf/store]
     name: buf.build/the-protobuf-project/store
 
+  - path: protobuf
+    includes: [protobuf/entity]
+    name: buf.build/the-protobuf-project/entity
+
   - path: examples/proto
-    # examples/proto can import store options and googleapis because they
-    # share this workspace; no separate buf dep update needed during development.
+    # examples/proto can import entity options, store options, and googleapis
+    # because they share this workspace; no separate buf dep update needed
+    # during development.
 
 deps:
   - buf.build/googleapis/googleapis # google.api.resource, field_behavior, resource_reference
   - buf.build/the-protobuf-project/opentelementry # telemetry.v1 (tracing/metrics annotations)
-  - buf.build/the-protobuf-project/protokit # protokit.v1 (neutral datasource/table/column structure)
 
 lint:
   use:
     - STANDARD
   except:
-    - PACKAGE_VERSION_SUFFIX # store.v1 is intentionally version-suffixed
+    - PACKAGE_VERSION_SUFFIX # store.v1 and entity.v1 are intentionally version-suffixed
 
 breaking:
   use:

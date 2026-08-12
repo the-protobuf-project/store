@@ -74,7 +74,7 @@ by adding a template set beside the shared, language-agnostic parsing.
   a sibling plugin ([web3](https://github.com/the-protobuf-project/web3)) renders a
   blockchain backend from the same model.
 - **AIP-native.** ~80% of the proto schema is read straight from standard AIP
-  annotations; only the remaining ~20% needs `protokit.v1.*` / `store.v1.*` options.
+  annotations; only the remaining ~20% needs `entity.v1.*` / `store.v1.*` options.
 - **GraphQL client from a schema.** Point the `graphql` target at an endpoint or a
   `.graphql` SDL file and get a typed Go client — models, a predicate DSL, CRUD and
   subscriptions — behind a pluggable [dialect](#dialects) (Hasura/DDN/Grafbase today).
@@ -109,7 +109,7 @@ binary, configured by one [`store.yaml`](#configuration--ormyaml).
 flowchart LR
     subgraph Sources
         direction TB
-        P[".proto + AIP annotations<br/>+ protokit.v1 / store.v1 options"]
+        P[".proto + AIP annotations<br/>+ entity.v1 / store.v1 options"]
         Q["GraphQL endpoint<br/>or .graphql SDL"]
     end
 
@@ -152,7 +152,7 @@ flowchart TD
     REQ["field_behavior = REQUIRED"] -->|"NOT NULL<br/>(nullable otherwise → pointer/? types)"| T
     REF["resource_reference<br/>on a field"] -->|"FOREIGN KEY → resolved to referenced PK"| T
     SC["proto scalar / well-known type"] -->|"SQL column type"| T
-    O["protokit.v1 / store.v1<br/>options"] -->|"overrides + extras<br/>(types, indexes, id strategy, FK actions)"| T
+    O["entity.v1 / store.v1<br/>options"] -->|"overrides + extras<br/>(types, indexes, id strategy, FK actions)"| T
 
     T --> IR[("IR")]
     IR --> RENDER{{"target renderer"}}
@@ -191,7 +191,7 @@ deps:
   - buf.build/the-protobuf-project/store
 ```
 
-then `import "protokit/v1/annotations.proto";` and
+then `import "entity/v1/annotations.proto";` and
 `import "store/v1/annotations.proto";` in your protos.
 
 ## Quick start
@@ -204,10 +204,10 @@ package bookstore.v1;
 
 import "google/api/field_behavior.proto";
 import "google/api/resource.proto";
-import "protokit/v1/annotations.proto";
+import "entity/v1/annotations.proto";
 import "store/v1/annotations.proto";
 
-option (protokit.v1.datasource) = {
+option (entity.v1.datasource) = {
   database: "bookstore_db"
   provider: "postgres"
 };
@@ -220,7 +220,7 @@ message Author {
     plural: "authors"
   };
   // Use a generated ULID primary key + created_at/updated_at columns.
-  option (protokit.v1.table) = { id: ID_STRATEGY_ULID, timestamps: true };
+  option (entity.v1.table) = { id: ID_STRATEGY_ULID, timestamps: true };
 
   // IDENTIFIER → the AIP resource name; becomes a UNIQUE lookup column.
   string name = 1 [(google.api.field_behavior) = IDENTIFIER];
@@ -592,35 +592,51 @@ compiles regardless of the source schema's naming.
 Annotations come from two modules, and the split is the important part:
 
 ```proto
-import "protokit/v1/annotations.proto";  // structure — what things are named
+import "entity/v1/annotations.proto";  // structure — what things are named
 import "store/v1/annotations.proto";     // storage   — how they are stored
 ```
 
-`protokit.v1` is the **neutral** vocabulary. protokit reads it directly, so every
-plugin built on it — this one, a cache, a streams publisher, a docs generator —
-derives the same databases, schemas, tables, and columns from the same protos.
-That agreement is what lets those plugins compose without one of them having to
-import another's options.
+`entity.v1` is the **neutral** vocabulary. It ships from this repository as its own
+BSR module plus a Go reader (`github.com/the-protobuf-project/store/plugin/entity`) that
+every plugin built on protokit imports — this one, a cache, a streams publisher, a
+docs generator. Because they all run the *same reader*, they derive the same
+databases, schemas, tables, and columns from the same protos. That agreement is
+what lets those plugins compose without one of them having to import another's
+options.
+
+protokit itself reads neither module: it reads AIP and nothing else, and every
+vocabulary reaches it through a reader the plugin registers. `entity.v1` lived
+inside protokit as `entity.v1` until v1.3.0 and moved because a vocabulary about
+datasources and tables does not belong in an engine that also generates
+contracts.
 
 `store.v1` is **this plugin's own**. It says how a column is physically stored
 and queried, which no other plugin needs to agree with.
 
-> **`orm.v1` was removed in v2.** The single pre-split vocabulary no longer
-> exists — not deprecated, gone: a proto that imports `orm/v1/annotations.proto`
-> will not compile. Move each option to the module that now owns it:
+> **`orm.v1` was removed in v2.** The single pre-split vocabulary is no longer
+> published from this repository. If your protos still import a copy of
+> `orm/v1/annotations.proto`, they keep generating — `entity.CompatReader` reads
+> the structural half and emits a lint diagnostic per option — but the reader is a
+> migration aid, not a supported vocabulary. Move each option to the module that
+> now owns it:
 >
 > | Was | Is now |
 > | --- | --- |
-> | `(orm.v1.datasource)` | `(protokit.v1.datasource)` |
-> | `(orm.v1.table)` — `table`, `skip`, `id`, `timestamps`, `indexes` | `(protokit.v1.table)` |
-> | `(orm.v1.column)` — `column`, `skip` | `(protokit.v1.column)` |
+> | `(orm.v1.datasource)` | `(entity.v1.datasource)` |
+> | `(orm.v1.table)` — `table`, `skip`, `id`, `timestamps`, `indexes` | `(entity.v1.table)` |
+> | `(orm.v1.column)` — `column`, `skip` | `(entity.v1.column)` |
 > | `(orm.v1.column)` — `type`, `max_length`, `precision`, `scale`, `default_value`, `unique`, `index`, `on_delete`, `on_update` | `(store.v1.column)` |
 > | `(orm.v1.query)` | `(store.v1.query)` |
 >
-> Field semantics are unchanged, so the migration is a rename: pin
-> `protoc-gen-store` v1 while you do it, then upgrade.
+> Field semantics and field numbers are unchanged, so the migration is a rename.
+> **[MIGRATING.md](MIGRATING.md) has the scripted version**, along with the one
+> case a script cannot finish — a single `(orm.v1.column)` holding both structural
+> and physical fields, which becomes two options in two modules.
+>
+> Run with `strict=lint:error` once you believe you are done: any option the
+> compat reader is still supplying becomes a hard failure, named field by field.
 
-### `(protokit.v1.datasource)` — file level
+### `(entity.v1.datasource)` — file level
 
 | Field | Description |
 | --- | --- |
@@ -629,7 +645,7 @@ and queried, which no other plugin needs to agree with.
 | `url` | Connection URL (documented in config/DDL; Prisma reads it from `.env`). |
 | `provider` | `postgres` (default) or `mongodb`. |
 
-### `(protokit.v1.table)` — message level
+### `(entity.v1.table)` — message level
 
 | Field | Description |
 | --- | --- |
@@ -639,7 +655,7 @@ and queried, which no other plugin needs to agree with.
 | `id` | `ID_STRATEGY_ULID` / `ID_STRATEGY_UUID` — synthesize a generated `id` PK and demote the `IDENTIFIER` field to `UNIQUE`. |
 | `timestamps` | Add `created_at` / `updated_at` (`@updatedAt` / GORM `autoUpdateTime`). |
 
-### `(protokit.v1.column)` — field level
+### `(entity.v1.column)` — field level
 
 | Field | Description |
 | --- | --- |
@@ -765,7 +781,7 @@ datasources:
 | Key | Type | Description |
 | --- | --- | --- |
 | `datasources` | list | Ordered list of [match rules](#datasource-rules). The **first** rule whose `match` matches a package wins. |
-| `strip_version` | bool | Drop a trailing API version from derived schema names — `bookstore.v1` → schema `bookstore` instead of `bookstore_v1`. Applies to resource-type-derived and config-derived schema names, **never** to an explicit `(protokit.v1.datasource).schema` annotation. A per-rule `strip_version` overrides this default. |
+| `strip_version` | bool | Drop a trailing API version from derived schema names — `bookstore.v1` → schema `bookstore` instead of `bookstore_v1`. Applies to resource-type-derived and config-derived schema names, **never** to an explicit `(entity.v1.datasource).schema` annotation. A per-rule `strip_version` overrides this default. |
 | `dedupe_schema_table` | bool | Rename a table whose name would stutter with its schema in a schema-qualified identifier (`booking` schema + `bookings` table → `bookingBookings` in tools that join schema+table, e.g. Hasura). The redundant leading schema word is stripped; for the schema's primary table — where stripping leaves nothing — the table is renamed to a generic word (`resource`, then `entity`, …). Only the generated table name changes; proto/model names are untouched. |
 | `telemetry` | map | **gorm only.** Tune the first-party opentelementry instrumentation (see the [`telemetry` plugin opt](#plugin-options)). `enabled` (bool) overrides the opt's master switch. `metrics` (bool, default `true`) — set `false` to drop the per-operation ops counter/duration histogram tree-wide; narrow further per table with [`(telemetry.v1.telemetry).metrics`](#telemetryv1telemetry--message-level). `logs` (bool, default `true`) — set `false` to drop the telemetry adapter's trace-correlated error logging. |
 | `graphql` | map | Configures the [GraphQL source](#graphql-client-sdk): `endpoint` **xor** `schema` (a cached GraphQL SDL `.graphql` file), `admin_secret` (`env:VAR` or literal), `headers` (`Key: Value` list), `dialect` (default `hasura`), `max_depth`, `scalars` (`Name=GoType` list). Read by the `target=graphql` plugin entry. |
@@ -802,7 +818,7 @@ wins:
 
 ```mermaid
 flowchart LR
-    A["(protokit.v1.datasource)<br/>per-file annotation"] -->|wins over| B["store.yaml<br/>matched rule"]
+    A["(entity.v1.datasource)<br/>per-file annotation"] -->|wins over| B["store.yaml<br/>matched rule"]
     B -->|wins over| C["package-path<br/>default"]
 ```
 
@@ -875,7 +891,7 @@ common case needs **no annotations**. Each is overridable.
 
 | Default | Behavior | Override |
 | --- | --- | --- |
-| Surrogate keys | Every resource gets a ULID `id` primary key; the AIP `name` becomes `@unique`. | `(protokit.v1.table).id` |
+| Surrogate keys | Every resource gets a ULID `id` primary key; the AIP `name` becomes `@unique`. | `(entity.v1.table).id` |
 | AIP system fields | `create_time`/`update_time` → auto-managed `NOT NULL` timestamps; `delete_time` → nullable indexed soft-delete marker; `uid` → `UNIQUE`. (AIP-148/164) | rename the field |
 | Parent materialization | Each parent segment of the AIP resource `pattern` (`users/{user}/…`) becomes a FK column (`user_id` → `User`) with `onDelete: Cascade`. | declare the field explicitly |
 | FK indexing | Every foreign-key column gets a single-column `@@index` (Postgres does not auto-index FKs). | already indexed columns are skipped |
@@ -961,7 +977,7 @@ buf lint                                   # proto linting
   development (`v0.x`), minor releases may include breaking changes to the API or
   generated output — pin an exact tag in CI and review migration diffs.
 - The **annotation module** is published to the [Buf Schema Registry](https://buf.build/the-protobuf-project/store)
-  under `protokit.v1` (structure) and `store.v1` (storage); option field
+  under `entity.v1` (structure) and `store.v1` (storage); option field
   numbers live in the `50000`–`99999` range
   reserved for non-Google custom options.
 

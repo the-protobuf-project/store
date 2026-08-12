@@ -4,14 +4,14 @@ package weather.v1;
 
 import "google/api/field_behavior.proto";
 import "google/api/resource.proto";
-import "protokit/v1/annotations.proto";
+import "entity/v1/annotations.proto";
 import "telemetry/v1/annotations.proto";
 
 option go_package = "example.com/test/gen;weatherv1";
 option java_multiple_files = true;
 option java_outer_classname = "TelemetryV1Proto";
 option java_package = "com.weather.v1";
-option (protokit.v1.datasource) = {
+option (entity.v1.datasource) = {
   database: "weather_db"
   schema: "weather"
 };
@@ -28,7 +28,7 @@ message Reading {
     singular: "reading"
     plural: "readings"
   };
-  option (protokit.v1.table) = {id: ID_STRATEGY_ULID};
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
 
   string name = 1 [(google.api.field_behavior) = IDENTIFIER];
 
@@ -59,7 +59,7 @@ message Sensor {
     singular: "sensor"
     plural: "sensors"
   };
-  option (protokit.v1.table) = {id: ID_STRATEGY_ULID};
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
   option (telemetry.v1.telemetry) = {
     span_prefix: "weather.Sensor"
     metrics: false
@@ -80,7 +80,7 @@ message Calibration {
     singular: "calibration"
     plural: "calibrations"
   };
-  option (protokit.v1.table) = {id: ID_STRATEGY_ULID};
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
   option (telemetry.v1.telemetry) = {enabled: false};
 
   string name = 1 [(google.api.field_behavior) = IDENTIFIER];

@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+package entity.v1;
+
+option go_package = "github.com/the-protobuf-project/store/plugin/entity/pb/entitypbv1;entitypbv1";
+option java_multiple_files = true;
+option java_outer_classname = "TableProto";
+option java_package = "com.entity.v1";
+
+// IndexDef describes one multi-column index on a table.
+// Single-column indexes are expressed more concisely via a generator's own
+// column options.
+message IndexDef {
+  // columns lists field names (proto snake_case) participating in the index.
+  repeated string columns = 1;
+
+  // unique makes this a UNIQUE index.
+  bool unique = 2;
+
+  // index is an optional explicit index name.
+  // Auto-generated as idx_<table>_<cols> when empty.
+  string index = 3;
+}
+
+// TableOptions overrides the neutral, table-level structure of a message: what
+// the persisted entity is called, whether it is emitted at all, and the
+// key/timestamp synthesis every generator consumes.
+//
+// Nothing here is storage-specific. Physical rendering (column types, sizing,
+// constraints) belongs to the generator's own annotation package.
+//
+// Applied via:
+//
+//	option (entity.v1.table) = {
+//	  table: "shelves"
+//	  id: ID_STRATEGY_ULID
+//	  timestamps: true
+//	};
+message TableOptions {
+  // table is an explicit table name.
+  // Defaults to snake_case plural of the google.api.resource.type suffix.
+  string table = 1;
+
+  // skip excludes this message from all output — no table is generated.
+  bool skip = 2;
+
+  // id synthesizes a generated primary-key column (ULID or UUID) and demotes the
+  // IDENTIFIER field to a UNIQUE constraint — the production pattern where AIP
+  // resource names are lookup keys, not storage keys.
+  IdStrategy id = 3;
+
+  // timestamps appends created_at / updated_at audit columns:
+  // created_at defaulted at insert; updated_at maintained on write.
+  bool timestamps = 4;
+
+  // indexes declares additional multi-column indexes beyond those inferred from
+  // AIP annotations (e.g. composite unique constraints).
+  repeated IndexDef indexes = 5;
+}
+
+// IdStrategy selects how the primary-key column is generated for a table.
+// When set (not UNSPECIFIED), an `id` column becomes the PK and any IDENTIFIER
+// field is demoted to UNIQUE NOT NULL.
+enum IdStrategy {
+  // No synthesized key: the IDENTIFIER field stays the primary key.
+  ID_STRATEGY_UNSPECIFIED = 0;
+
+  // ULID primary key: lexicographically sortable, application-generated.
+  ID_STRATEGY_ULID = 1;
+
+  // UUID primary key: the datasource's native UUID type where one exists.
+  ID_STRATEGY_UUID = 2;
+}

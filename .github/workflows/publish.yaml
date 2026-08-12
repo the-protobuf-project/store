@@ -38,9 +38,10 @@ jobs:
         env:
           # buf authenticates to buf.build from BUF_TOKEN.
           BUF_TOKEN: ${{ secrets.BUF_TOKEN }}
-        # This is a two-module workspace (see buf.yaml): the publishable `protobuf`
-        # module is named, while `examples/proto` is a local-only workspace module
-        # with no BSR name. A bare `buf push` errors on the unnamed module, so
+        # This is a three-module workspace (see buf.yaml): `protobuf/store`
+        # (store.v1) and `protobuf/entity` (entity.v1) are both named and published,
+        # while `examples/proto` is a local-only workspace module with no BSR
+        # name. A bare `buf push` errors on the unnamed module, so
         # --exclude-unnamed pushes only the named module. --create makes the first
         # release auto-create the (public) BSR repository; --git-metadata stamps the tag.
         run: buf push --exclude-unnamed --create --create-visibility public --git-metadata

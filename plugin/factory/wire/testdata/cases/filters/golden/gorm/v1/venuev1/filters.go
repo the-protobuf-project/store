@@ -8,7 +8,8 @@
 // schema:   venue_v1
 //
 // AIP-160 filter / AIP-132 order_by specs — data for the shared filterx engines.
-// annotations: protokit.v1 (unknown), store.v1 (unknown)
+// annotations: entity.v1 (unknown), store.v1 (unknown)
+// engine:      protokit (unknown)
 //
 // store — https://github.com/the-protobuf-project/store
 

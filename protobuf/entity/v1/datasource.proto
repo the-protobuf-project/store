@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package entity.v1;
+
+option go_package = "github.com/the-protobuf-project/store/plugin/entity/pb/entitypbv1;entitypbv1";
+option java_multiple_files = true;
+option java_outer_classname = "DatasourceProto";
+option java_package = "com.entity.v1";
+
+// DatasourceOptions groups the messages of a .proto file into one database and
+// names the schema they live in. Files that share the same database name merge
+// into a single generated schema tree.
+//
+// This is neutral structure: it decides what things are *named*, not how any
+// particular generator renders them. Every generator that runs entity.Reader()
+// reads the same values from here, which is what makes two plugins over the same
+// protos agree on database, schema, and table names.
+//
+// Applied via:
+//
+//	option (entity.v1.datasource) = {
+//	  database: "bookstore_db"
+//	  schema: "bookstore"
+//	  provider: "postgres"
+//	  url: "postgresql://localhost:5432/bookstore_db"
+//	};
+message DatasourceOptions {
+  // database is the explicit database identifier.
+  // Defaults to the last segment of the proto package name.
+  string database = 1;
+
+  // schema overrides the schema namespace for every table in this file.
+  // When unset, the schema is inferred from the google.api.resource.type prefix
+  // ("bookstore.v1/Book" → "bookstore_v1").
+  //
+  // An explicit value here is authoritative: it is never version-stripped, even
+  // when the plugin's layout config asks for stripping elsewhere.
+  string schema = 2;
+
+  // url is the database connection URL documented in generated config and DDL
+  // headers.
+  string url = 3;
+
+  // provider selects the datasource's type system.
+  // Accepted values: "postgres" (default), "mongodb", "evm", "solana", "fabric".
+  string provider = 4;
+}

@@ -4,15 +4,15 @@ syntax = "proto3";
 // Run `buf generate --template buf.gen.example.yaml` from the repo root.
 //
 // It is annotated in the two current vocabularies, which is the split a schema
-// author sees: protokit.v1 decides what things are *named* (and every plugin
-// built on protokit reads it, so they all agree), while store.v1 decides how
-// they are *stored*.
+// author sees: entity.v1 decides what things are *named* (and every plugin built
+// on protokit reads it through the same shared reader, so they all agree), while
+// store.v1 decides how they are *stored*.
 package bookstore.v1;
 
+import "entity/v1/annotations.proto";
 import "google/api/field_behavior.proto";
 import "google/api/resource.proto";
 import "google/protobuf/timestamp.proto";
-import "protokit/v1/annotations.proto";
 import "store/v1/annotations.proto";
 import "telemetry/v1/annotations.proto";
 
@@ -21,7 +21,7 @@ option java_outer_classname = "BookstoreProto";
 option java_package = "com.bookstore.v1";
 // Files in this package declare the same datasource name, so bookstore.proto
 // and inventory.proto merge into one bookstore_db schema tree.
-option (protokit.v1.datasource) = {
+option (entity.v1.datasource) = {
   database: "bookstore_db"
   provider: "postgres"
   url: "postgresql://user:pass@localhost:5432/bookstore_db"
@@ -37,7 +37,7 @@ message Author {
     singular: "author"
     plural: "authors"
   };
-  option (protokit.v1.table) = {
+  option (entity.v1.table) = {
     id: ID_STRATEGY_ULID
     timestamps: true
   };
@@ -62,7 +62,7 @@ message Book {
   };
 
   // Extra composite index: (author_id, published_year) for timeline queries.
-  option (protokit.v1.table) = {
+  option (entity.v1.table) = {
     indexes: [
       {
         columns: [
@@ -105,7 +105,7 @@ message Book {
   int32 published_year = 5;
 
   // internal_notes exists only in the proto contract; excluded from the DB.
-  string internal_notes = 6 [(protokit.v1.column) = {skip: true}];
+  string internal_notes = 6 [(entity.v1.column) = {skip: true}];
 
   // genre demonstrates proto enum → database enum generation, and — with the
   // telemetry opt — labels every traced Create/Update span with its value

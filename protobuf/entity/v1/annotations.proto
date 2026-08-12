@@ -1,0 +1,76 @@
+syntax = "proto3";
+
+package entity.v1;
+
+import "entity/v1/column.proto";
+import "entity/v1/datasource.proto";
+import "entity/v1/table.proto";
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/the-protobuf-project/store/plugin/entity/pb/entitypbv1;entitypbv1";
+option java_multiple_files = true;
+option java_outer_classname = "AnnotationsProto";
+option java_package = "com.entity.v1";
+
+// annotations.proto is the single import a schema author needs for the neutral
+// vocabulary:
+//
+//	import "entity/v1/annotations.proto";
+//
+// entity.v1 is the *neutral* vocabulary: the structure that decides what things
+// are named and which of them exist. Every generator built on protokit — a
+// database generator, a chain generator, a documentation generator — derives the
+// same databases, schemas, tables, and columns from the same protos, because they
+// all run the same reader over these options.
+//
+// It deliberately expresses nothing storage-specific. Physical rendering (column
+// types, sizing, defaults, constraints, referential actions, query surfaces) is
+// each generator's own concern and lives in that generator's own annotation
+// module — store.v1 in this repository, web3.v1 in web3.
+//
+// # Where it lives, and why not in protokit
+//
+// This module shipped as protokit.v1, inside the engine, through protokit v1.3.0.
+// The reasoning was that every plugin imports protokit, so a vocabulary the engine
+// reads cannot live downstream of it. That reasoning was sound and the conclusion
+// was still wrong, for two reasons.
+//
+// What the vocabulary says is persistence-shaped: datasource, table, column, id
+// strategy. web3 has no datasources and no tables. Holding it in protokit made the
+// neutral engine a persistence engine with a generic name, and handed every future
+// non-relational plugin a vocabulary it could not use.
+//
+// And the premise stopped being true. protokit does not read this module — it
+// reads AIP and nothing else, and every vocabulary reaches it through a reader the
+// plugin registers. So there is no release-ordering cycle to avoid: what two
+// plugins share is the *reader*, shipped as
+// github.com/the-protobuf-project/store/plugin/entity, which depends on protokit and
+// nothing else from store.
+//
+// # Precedence, highest first
+//
+//  1. google.api.resource            → database, schema, table names
+//  2. google.api.field_behavior      → NOT NULL, primary key
+//  3. google.api.resource_reference  → foreign keys
+//  4. entity.v1.datasource/.table/.column → structure AIP cannot express
+//  5. the plugin's layout config, then protokit's package-path defaults
+//
+// Field numbers 50000-99999 are reserved for non-Google options. entity.v1 uses
+// 51000-51002 — the numbers protokit.v1 used, kept deliberately so a proto's
+// option *values* survive the migration untouched and only the package prefix
+// changes. store.v1's 50010-50012 are clear of them, so a file may carry both.
+extend google.protobuf.FileOptions {
+  // datasource groups the file's messages into a database and names its schema.
+  DatasourceOptions datasource = 51000;
+}
+
+extend google.protobuf.MessageOptions {
+  // table overrides table-level structure: name, skip, id strategy, timestamps,
+  // indexes.
+  TableOptions table = 51001;
+}
+
+extend google.protobuf.FieldOptions {
+  // column overrides column-level structure: name and skip.
+  ColumnOptions column = 51002;
+}

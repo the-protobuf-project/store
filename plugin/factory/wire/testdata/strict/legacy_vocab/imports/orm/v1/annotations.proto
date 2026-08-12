@@ -1,0 +1,80 @@
+syntax = "proto3";
+
+// Package orm.v1 is the pre-split vocabulary this plugin used before the naming
+// half moved out of it — first to protokit.v1, then to entity.v1.
+//
+// It is vendored here, and only here, on purpose. It is not published from this
+// repository any more and there are no Go stubs for it, which is precisely the
+// situation entity.CompatReader has to handle: a proto in the wild imports this
+// file, so its extension *declarations* reach the plugin in protoc's descriptor
+// set, while nothing about it is linked into the binary. The compat reader
+// resolves the extensions from those declarations with dynamicpb and reads the
+// fields by name.
+//
+// Keeping a copy here is not a violation of the "never clone a proto" rule: this
+// is a fixture standing in for a schema someone else has not migrated yet, not a
+// dependency this repository builds against. If it drifts from whatever orm.v1
+// really was, the test still tests the thing it exists to test — that an
+// unlinked, unknown vocabulary is read at all.
+package orm.v1;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "example.com/legacy/ormpbv1;ormpbv1";
+
+// Field numbers 50000-50003, the range orm.v1 occupied. Clear of store.v1's
+// 50010-50012 and entity.v1's 51000-51002, so a mid-migration file may carry all
+// three at once.
+extend google.protobuf.FileOptions {
+  DatasourceOptions datasource = 50000;
+}
+
+extend google.protobuf.MessageOptions {
+  TableOptions table = 50001;
+}
+
+extend google.protobuf.FieldOptions {
+  ColumnOptions column = 50002;
+}
+
+// DatasourceOptions is the file-level grouping, replaced by
+// (entity.v1.datasource).
+message DatasourceOptions {
+  string database = 1;
+  string schema = 2;
+  string url = 3;
+  string provider = 4;
+}
+
+// TableOptions is the message-level structure, replaced by (entity.v1.table).
+message TableOptions {
+  string table = 1;
+  bool skip = 2;
+  IdStrategy id = 3;
+  bool timestamps = 4;
+  repeated IndexDef indexes = 5;
+}
+
+// ColumnOptions is the field-level structure, replaced by (entity.v1.column).
+// The physical fields orm.v1 also carried are omitted: they are store.v1's now,
+// and the compat reader deliberately does not read them.
+message ColumnOptions {
+  string column = 1;
+  bool skip = 2;
+}
+
+// IndexDef mirrors entity.v1's, which is what lets the compat reader map it by
+// field name without a per-vocabulary conversion table.
+message IndexDef {
+  repeated string columns = 1;
+  bool unique = 2;
+  string index = 3;
+}
+
+// IdStrategy is numbered differently from entity.v1's on purpose: the compat
+// reader maps it by value *name*, not by number, and this is what proves it.
+enum IdStrategy {
+  ID_STRATEGY_UNSPECIFIED = 0;
+  ID_STRATEGY_UUID = 1;
+  ID_STRATEGY_ULID = 2;
+}

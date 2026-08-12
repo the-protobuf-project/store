@@ -3,7 +3,8 @@ module github.com/the-protobuf-project/store
 go 1.26.4
 
 require (
-	github.com/the-protobuf-project/protokit v1.2.0
+	github.com/the-protobuf-project/protokit v1.2.1
+	github.com/the-protobuf-project/store/plugin/entity v0.0.0
 	google.golang.org/genproto/googleapis/api v0.0.0-20260720211330-0afa2a65878a
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
@@ -22,3 +23,9 @@ require (
 	github.com/vektah/gqlparser/v2 v2.5.36 // indirect
 	golang.org/x/sync v0.21.0 // indirect
 )
+
+// plugin/entity/ is a nested module in this repository: the neutral entity.v1
+// vocabulary and its reader, kept separate so a plugin that wants only the shared
+// names does not inherit this module's dependency graph. The replace points at
+// the directory until it is tagged on its own.
+replace github.com/the-protobuf-project/store/plugin/entity => ./plugin/entity

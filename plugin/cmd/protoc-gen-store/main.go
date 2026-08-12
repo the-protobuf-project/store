@@ -1,5 +1,5 @@
 // Command protoc-gen-store is a protoc plugin that reads proto descriptors
-// annotated with google.api.*, protokit.v1.*, and store.v1.* options, then generates database
+// annotated with google.api.*, entity.v1.*, and store.v1.* options, then generates database
 // schema artifacts for the requested backend: gorm, sql, or prisma. The generic
 // IR engine lives in the protokit module; the on-chain (solidity/subgraph)
 // targets ship as the separate protoc-gen-web3 plugin.
@@ -19,7 +19,7 @@
 // # Inference priority
 //
 //  1. google.api.* annotations — table, column, FK inference (~80%)
-//  2. protokit.v1 / store.v1   — overrides: name, skip, type, unique, index
+//  2. entity.v1 / store.v1    — overrides: name, skip, type, unique, index
 //  3. buf.gen.yaml opt:         — global defaults (target backend)
 package main
 
@@ -39,7 +39,6 @@ import (
 	"github.com/the-protobuf-project/store/plugin/factory/config"
 	"github.com/the-protobuf-project/store/plugin/factory/source/proto/backend"
 	"github.com/the-protobuf-project/store/plugin/factory/wire"
-	telemetrygen "github.com/the-protobuf-project/store/telemetry"
 	"google.golang.org/protobuf/compiler/protogen"
 	"google.golang.org/protobuf/types/pluginpb"
 )
@@ -150,7 +149,7 @@ func main() {
 			WithRepositoryModules(*gormModule, *graphqlModule)
 		reg := wire.Registry(
 			protokit.Options{Target: *target, Strict: *strict, Version: v},
-			[]protokit.FacetReader{reader, telemetrygen.NewReader()},
+			backend.Readers(reader),
 			backend.NewLayout(cfg))
 
 		tgt, ok := reg.Targets[*target]
