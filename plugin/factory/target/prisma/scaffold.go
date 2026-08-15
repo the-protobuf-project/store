@@ -9,6 +9,7 @@ package prisma
 import (
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 
 	"google.golang.org/protobuf/compiler/protogen"
@@ -17,18 +18,26 @@ import (
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
 	"github.com/the-protobuf-project/protokit/templates"
+	"github.com/the-protobuf-project/store/plugin/factory/facets"
 	"github.com/the-protobuf-project/store/plugin/factory/provenance"
+	"github.com/the-protobuf-project/store/plugin/factory/target/searchindex"
 	"github.com/the-protobuf-project/store/plugin/factory/target/types"
 )
 
 // schemaFileView prepares the datasource template data for one database.
-func schemaFileView(db *schema.Database, provider types.Provider) map[string]any {
+func schemaFileView(db *schema.Database, provider types.Provider, fx facets.Set) map[string]any {
 	names := make([]string, 0, len(db.Schemas))
 	quoted := make([]string, 0, len(db.Schemas))
+	var extensions []string
 	for _, s := range db.Schemas {
 		names = append(names, s.Name)
 		quoted = append(quoted, `"`+s.Name+`"`)
+		for _, t := range s.Tables {
+			extensions = append(extensions, searchindex.Extensions(searchindex.For(t, fx))...)
+		}
 	}
+	slices.Sort(extensions)
+	extensions = slices.Compact(extensions)
 	return map[string]any{
 		"Header": provenance.Render("//", header.Info{
 			PluginVersion: db.PluginVersion,
@@ -45,6 +54,9 @@ func schemaFileView(db *schema.Database, provider types.Provider) map[string]any
 		"Provider":    provider.PrismaProvider(),
 		"SchemaList":  strings.Join(quoted, ", "),
 		"MultiSchema": provider == types.Postgres,
+		// Prisma names extensions as bare identifiers, not strings.
+		"Extensions":    extensions,
+		"ExtensionList": strings.Join(extensions, ", "),
 	}
 }
 

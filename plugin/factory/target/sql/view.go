@@ -9,7 +9,9 @@ import (
 
 	"github.com/the-protobuf-project/protokit/header"
 	"github.com/the-protobuf-project/protokit/schema"
+	"github.com/the-protobuf-project/store/plugin/factory/facets"
 	"github.com/the-protobuf-project/store/plugin/factory/provenance"
+	"github.com/the-protobuf-project/store/plugin/factory/target/searchindex"
 	"github.com/the-protobuf-project/store/plugin/factory/target/types"
 )
 
@@ -58,12 +60,14 @@ type schemaDDL struct {
 }
 
 // schemaView assembles the template data for one schema's DDL file.
-func schemaView(db *schema.Database, s *schema.Schema, typeOf types.TypeOf) map[string]any {
+func schemaView(db *schema.Database, s *schema.Schema, typeOf types.TypeOf, fx facets.Set) map[string]any {
 	enums := enumDDLViews(s)
 
 	var tables []tableView
+	var extensions []string
 	for _, t := range s.Tables {
-		tables = append(tables, tableViewOf(s, t, typeOf))
+		tables = append(tables, tableViewOf(s, t, typeOf, fx))
+		extensions = append(extensions, searchindex.Extensions(searchindex.For(t, fx))...)
 	}
 
 	ddl := schemaDDLOf(s, false) // per-schema files use plain, readable CREATE TRIGGER
@@ -75,12 +79,13 @@ func schemaView(db *schema.Database, s *schema.Schema, typeOf types.TypeOf) map[
 			Database:      db.Name,
 			Schema:        s.Name,
 		}),
-		"SchemaQ":   quoteIdent(s.Name),
-		"Enums":     enums,
-		"Tables":    tables,
-		"Functions": ddl.Functions,
-		"Triggers":  ddl.Triggers,
-		"Comments":  ddl.Comments,
+		"Extensions": dedupe(extensions),
+		"SchemaQ":    quoteIdent(s.Name),
+		"Enums":      enums,
+		"Tables":     tables,
+		"Functions":  ddl.Functions,
+		"Triggers":   ddl.Triggers,
+		"Comments":   ddl.Comments,
 	}
 }
 
@@ -186,11 +191,11 @@ type migrateTableView struct {
 // dependency order: all schemas, then enums, then tables (no inline FKs), then
 // FK constraints as ALTER TABLE, then indexes, trigger functions, triggers, and
 // COMMENT ON. The whole file is wrapped in a transaction by the template.
-func migrateView(db *schema.Database, typeOf types.TypeOf) map[string]any {
+func migrateView(db *schema.Database, typeOf types.TypeOf, fx facets.Set) map[string]any {
 	var schemaNames []string
 	var enumStmts []string
 	var tables []migrateTableView
-	var alters, indexes, functions, triggers, comments []string
+	var alters, indexes, functions, triggers, comments, extensions []string
 
 	for _, s := range db.Schemas {
 		schemaNames = append(schemaNames, quoteIdent(s.Name))
@@ -218,6 +223,9 @@ func migrateView(db *schema.Database, typeOf types.TypeOf) map[string]any {
 					"ALTER TABLE "+ref+" ADD "+fkDef(t.Name, fk)+";")
 			}
 			indexes = append(indexes, indexStmts(s, t, true)...)
+			plans := searchindex.For(t, fx)
+			indexes = append(indexes, searchIndexStmts(s, t, plans)...)
+			extensions = append(extensions, searchindex.Extensions(plans)...)
 		}
 
 		ddl := schemaDDLOf(s, true) // DROP + CREATE TRIGGER — re-runnable on every PostgreSQL version
@@ -235,14 +243,17 @@ func migrateView(db *schema.Database, typeOf types.TypeOf) map[string]any {
 			Schema:        strings.Join(schemaLabels(db), ", "),
 			Notes:         []string{"Single-file migration: every schema in one transaction. Idempotent — safe to re-apply."},
 		}),
-		"Schemas":   schemaNames,
-		"EnumStmts": enumStmts,
-		"Tables":    tables,
-		"Alters":    alters,
-		"Indexes":   indexes,
-		"Functions": functions,
-		"Triggers":  triggers,
-		"Comments":  comments,
+		// Extensions are created once for the database, before any index using
+		// their operator classes.
+		"Extensions": dedupe(extensions),
+		"Schemas":    schemaNames,
+		"EnumStmts":  enumStmts,
+		"Tables":     tables,
+		"Alters":     alters,
+		"Indexes":    indexes,
+		"Functions":  functions,
+		"Triggers":   triggers,
+		"Comments":   comments,
 	}
 }
 
@@ -267,7 +278,7 @@ func schemaLabels(db *schema.Database) []string {
 }
 
 // tableViewOf renders one table's column defs, FK constraints, and indexes.
-func tableViewOf(s *schema.Schema, t *schema.Table, typeOf types.TypeOf) tableView {
+func tableViewOf(s *schema.Schema, t *schema.Table, typeOf types.TypeOf, fx facets.Set) tableView {
 	tv := tableView{Comment: t.Comment, Ref: qualified(s.Name, t.Name)}
 
 	for _, col := range t.Columns {
@@ -281,6 +292,7 @@ func tableViewOf(s *schema.Schema, t *schema.Table, typeOf types.TypeOf) tableVi
 	}
 
 	tv.Indexes = indexStmts(s, t, false)
+	tv.Indexes = append(tv.Indexes, searchIndexStmts(s, t, searchindex.For(t, fx))...)
 	return tv
 }
 
@@ -307,6 +319,35 @@ func indexStmts(s *schema.Schema, t *schema.Table, ifNotExists bool) []string {
 			"CREATE %sINDEX %s%s ON %s (%s);",
 			unique, guard, quoteIdent(idx.Name), qualified(s.Name, t.Name), strings.Join(cols, ", "),
 		))
+	}
+	return out
+}
+
+// searchIndexStmts renders the GIN indexes planned from a table's query surface.
+// IF NOT EXISTS throughout, matching the re-runnable migration: these are added
+// alongside the B-tree indexes, never in place of them.
+func searchIndexStmts(s *schema.Schema, t *schema.Table, plans []searchindex.Plan) []string {
+	out := make([]string, 0, len(plans))
+	for _, p := range plans {
+		col := quoteIdent(p.Column)
+		if p.Ops != "" {
+			col += " " + p.Ops
+		}
+		out = append(out, fmt.Sprintf("-- %s\nCREATE INDEX IF NOT EXISTS %s ON %s USING gin (%s);",
+			p.Why, quoteIdent(p.Name), qualified(s.Name, t.Name), col))
+	}
+	return out
+}
+
+// dedupe returns vals with duplicates removed, order preserved.
+func dedupe(vals []string) []string {
+	out := make([]string, 0, len(vals))
+	seen := map[string]bool{}
+	for _, v := range vals {
+		if !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
 	}
 	return out
 }

@@ -36,16 +36,17 @@ var VenueFilterSpec = filterx.Spec{
 		"tags":           {Column: "tags", Kind: filterx.KindTags},
 	},
 	Search: []string{"display_name"},
-	Sort: map[string]string{
-		"capacity":       "capacity",
-		"create_time":    "create_time",
-		"display_name":   "display_name",
-		"internal_code":  "internal_code",
-		"kind":           "kind",
-		"licence_expiry": "licence_expiry",
-		"name":           "name",
-		"open_air":       "open_air",
+	Sort: map[string]filterx.SortSpec{
+		"capacity":       {Column: "capacity", Kind: filterx.KindInt},
+		"create_time":    {Column: "create_time", Kind: filterx.KindTimestamp, NotNull: true},
+		"display_name":   {Column: "display_name", Kind: filterx.KindText, NotNull: true},
+		"internal_code":  {Column: "internal_code", Kind: filterx.KindText},
+		"kind":           {Column: "kind", Kind: filterx.KindEnum, NotNull: true},
+		"licence_expiry": {Column: "licence_expiry", Kind: filterx.KindDate},
+		"name":           {Column: "name", Kind: filterx.KindText, NotNull: true},
+		"open_air":       {Column: "open_air", Kind: filterx.KindBool},
 	},
+	PK: []filterx.SortSpec{{Column: "id", Kind: filterx.KindText, NotNull: true}},
 }
 
 // OperatorFilterSpec is Operator's AIP-160 filter / AIP-132 order_by surface,
@@ -57,8 +58,9 @@ var OperatorFilterSpec = filterx.Spec{
 		"name":         {Column: "name", Kind: filterx.KindText},
 	},
 	Search: []string{"display_name"},
-	Sort: map[string]string{
-		"display_name": "display_name",
-		"name":         "name",
+	Sort: map[string]filterx.SortSpec{
+		"display_name": {Column: "display_name", Kind: filterx.KindText, NotNull: true},
+		"name":         {Column: "name", Kind: filterx.KindText, NotNull: true},
 	},
+	PK: []filterx.SortSpec{{Column: "id", Kind: filterx.KindText, NotNull: true}},
 }

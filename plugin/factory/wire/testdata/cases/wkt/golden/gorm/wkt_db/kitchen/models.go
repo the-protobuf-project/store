@@ -50,7 +50,7 @@ type Sink struct {
 	// String wrapper → VARCHAR(255).
 	MaybeLabel *string `gorm:"column:maybe_label" json:"maybe_label,omitempty"`
 	// repeated string → VARCHAR(255)[].
-	Tags pq.StringArray `gorm:"column:tags;type:text[]" json:"tags,omitempty"`
+	Tags pq.StringArray `gorm:"column:tags;type:text[];index:idx_sinks_tags_gin,type:gin" json:"tags,omitempty"`
 	// repeated int32 → INTEGER[].
 	Scores pq.Int32Array `gorm:"column:scores;type:integer[]" json:"scores,omitempty"`
 	// map → JSONB.

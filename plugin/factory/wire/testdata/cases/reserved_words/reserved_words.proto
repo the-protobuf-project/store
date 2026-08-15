@@ -20,7 +20,8 @@ option (entity.v1.datasource) = {
 };
 
 // Account is forced onto the reserved table name "user" via a table override,
-// with reserved-word columns and a composite UNIQUE index over them.
+// with reserved-word columns, a composite UNIQUE index over them, and
+// column-level index requests both covered and uncovered by that composite.
 message Account {
   option (google.api.resource) = {
     type: "reserved.v1/Account"
@@ -44,11 +45,18 @@ message Account {
   // name: IDENTIFIER → PRIMARY KEY.
   string name = 1 [(google.api.field_behavior) = IDENTIFIER];
 
-  // order is a reserved word; also carries a single-column index.
+  // order is a reserved word. Its single-column index request is redundant —
+  // order already leads the composite UNIQUE above, whose B-tree serves the
+  // same single-column lookups — so no separate index is emitted for it.
   string order = 2 [(store.v1.column) = {index: true}];
 
   // select is a reserved word.
   string select = 3;
+
+  // grant is a reserved word carrying a single-column index no composite
+  // covers, so one is emitted — with both the column and the generated index
+  // name quoted.
+  string grant = 5 [(store.v1.column) = {index: true}];
 
   // state exercises a quoted, schema-qualified enum type reference.
   State state = 4 [(google.api.field_behavior) = OUTPUT_ONLY];

@@ -176,7 +176,7 @@ func (r Reader) Enrich(ir *protokit.IR) error {
 		for _, s := range db.Schemas {
 			for _, t := range s.Tables {
 				for _, c := range t.Columns {
-					enrichColumn(c, fx.Column(c))
+					enrichColumn(t, c, fx.Column(c))
 				}
 			}
 		}
@@ -202,7 +202,7 @@ func (r Reader) Enrich(ir *protokit.IR) error {
 // enrichColumn folds store.v1.column's constraint rendering onto one column:
 // unique/index are additive, and a non-empty default_value overrides the AIP enum
 // default protokit may have set.
-func enrichColumn(c *schema.Column, o *storepbv1.ColumnOptions) {
+func enrichColumn(t *schema.Table, c *schema.Column, o *storepbv1.ColumnOptions) {
 	if v := o.GetDefaultValue(); v != "" {
 		c.Default = v
 	}
@@ -211,7 +211,33 @@ func enrichColumn(c *schema.Column, o *storepbv1.ColumnOptions) {
 	}
 	if o.GetIndex() {
 		c.Index = true
+		indexColumn(t, c)
 	}
+}
+
+// indexColumn records a column-level index request as a real single-column entry
+// in t.Indexes. Column.Index alone only ever reached the GORM struct tag, so an
+// index declared that way existed for AutoMigrate users and silently not for
+// anyone applying the SQL or Prisma output. Running during enrichment puts the
+// index in place before protokit's finalizeIndexes, so it is auto-named and
+// suppresses the redundant foreign-key index the same way a declared composite
+// does.
+//
+// Redundant requests are dropped rather than emitted: PostgreSQL already indexes
+// primary-key and unique columns, and a B-tree serves its leftmost prefix, so a
+// composite index starting with this column covers single-column lookups too.
+// Emitting them anyway would cost writes and storage for no read benefit — and,
+// under AutoMigrate, one extra catalog round trip per index on every boot.
+func indexColumn(t *schema.Table, c *schema.Column) {
+	if c.PrimaryKey || c.Unique {
+		return
+	}
+	for _, idx := range t.Indexes {
+		if len(idx.Columns) > 0 && idx.Columns[0] == c.Name {
+			return
+		}
+	}
+	t.Indexes = append(t.Indexes, &schema.Index{Columns: []string{c.Name}})
 }
 
 // boolStr renders a bool as the "true"/"false" tokens db.Opts stores.

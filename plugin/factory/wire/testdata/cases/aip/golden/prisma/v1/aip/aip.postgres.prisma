@@ -35,7 +35,7 @@ model Document {
   /// delete_time marks a soft-deleted row when set (AIP-164).
   deleteTime DateTime? @v1.Timestamptz(6) @map("delete_time")
 
-  /// Composite index on [delete_time].
+  /// Index on [delete_time].
   @@index([deleteTime])
   /// Maps the model to the "documents" table in the database.
   @@map("documents")

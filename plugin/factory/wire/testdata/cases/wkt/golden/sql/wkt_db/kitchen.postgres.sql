@@ -49,6 +49,8 @@ CREATE TABLE "kitchen"."sinks" (
     -- map → JSONB.
     "attributes"  JSONB
 );
+-- tag containment (@>) cannot use a B-tree
+CREATE INDEX IF NOT EXISTS "idx_sinks_tags_gin" ON "kitchen"."sinks" USING gin ("tags");
 
 
 -- Column and table documentation, persisted to the catalog.

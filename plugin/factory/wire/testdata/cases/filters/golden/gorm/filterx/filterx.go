@@ -24,8 +24,10 @@ package filterx
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -107,8 +109,29 @@ type Spec struct {
 	// Search lists the columns a bareword free-text term matches
 	// (case-insensitive contains, OR-combined).
 	Search []string
-	// Sort maps order_by field names to their physical columns.
-	Sort map[string]string
+	// Sort maps order_by field names to their sortable columns.
+	Sort map[string]SortSpec
+	// PK lists the table's primary-key columns. OrderTerms appends them as the
+	// final order_by terms so every page has a total order: paging over a
+	// partially-ordered result lets PostgreSQL return ties in any order between
+	// queries, which silently duplicates and skips rows across pages. A total
+	// order is also what makes the keyset cursor land on exactly one row.
+	PK []SortSpec
+}
+
+// SortSpec describes one sortable column: the physical column and the kind that
+// decides how a cursor value for it is written into, and recovered from, a page
+// token. A column can be sortable without being filterable, so its kind is
+// recorded here rather than being looked up in Fields.
+type SortSpec struct {
+	Column string
+	Kind   Kind
+	// NotNull drops the NULL half of this column's keyset comparison. It is not
+	// only noise: `(col > ? OR col IS NULL)` is a disjunction PostgreSQL cannot
+	// serve as one index range scan, where the bare `col > ?` it reduces to can
+	// be. Every query carries the primary-key tiebreaker, so this matters most
+	// there.
+	NotNull bool
 }
 
 // --- filter parsing --------------------------------------------------------------
@@ -332,32 +355,41 @@ func CamelCase(snake string) string {
 
 // --- order_by ------------------------------------------------------------------
 
-// OrderTerm is one resolved order_by term: a physical column and direction.
+// OrderTerm is one resolved order_by term: a physical column, a direction, and
+// the column's kind (which the keyset cursor needs to round-trip its value).
 type OrderTerm struct {
-	Column string
-	Desc   bool
+	Column  string
+	Desc    bool
+	Kind    Kind
+	NotNull bool
 }
 
 // OrderTerms parses an AIP-132 order_by string ("expiry_date desc, name")
 // against the spec's sort allowlist. Unknown fields and malformed terms are
-// rejected with ErrInvalid; the empty string yields no terms.
+// rejected with ErrInvalid.
+//
+// The spec's primary key is appended as the final term (see [Spec.PK]), so the
+// result is always a total order — including for the empty order_by, which
+// would otherwise page over an unordered result. A caller-supplied term already
+// on a PK column is left as-is rather than duplicated, keeping the caller's
+// chosen direction.
 func OrderTerms(spec Spec, orderBy string) ([]OrderTerm, error) {
 	orderBy = strings.TrimSpace(orderBy)
 	if orderBy == "" {
-		return nil, nil
+		return pkTerms(spec, nil), nil
 	}
 	parts := strings.Split(orderBy, ",")
-	terms := make([]OrderTerm, 0, len(parts))
+	terms := make([]OrderTerm, 0, len(parts)+len(spec.PK))
 	for _, part := range parts {
 		fields := strings.Fields(part)
 		if len(fields) == 0 || len(fields) > 2 {
 			return nil, fmt.Errorf("%w: malformed order_by term %q", ErrInvalid, strings.TrimSpace(part))
 		}
-		col, ok := spec.Sort[fields[0]]
+		ss, ok := spec.Sort[fields[0]]
 		if !ok {
 			return nil, fmt.Errorf("%w: cannot sort by %q", ErrInvalid, fields[0])
 		}
-		term := OrderTerm{Column: col}
+		term := OrderTerm{Column: ss.Column, Kind: ss.Kind, NotNull: ss.NotNull}
 		if len(fields) == 2 {
 			switch strings.ToLower(fields[1]) {
 			case "asc":
@@ -369,7 +401,27 @@ func OrderTerms(spec Spec, orderBy string) ([]OrderTerm, error) {
 		}
 		terms = append(terms, term)
 	}
-	return terms, nil
+	return pkTerms(spec, terms), nil
+}
+
+// pkTerms appends the spec's primary-key columns to terms, skipping any column
+// the caller already sorts on. Ascending is the tiebreaker direction: it only
+// orders rows the caller's own terms left tied, so the choice is invisible
+// except in making the total order stable.
+func pkTerms(spec Spec, terms []OrderTerm) []OrderTerm {
+	for _, pk := range spec.PK {
+		sorted := false
+		for _, t := range terms {
+			if t.Column == pk.Column {
+				sorted = true
+				break
+			}
+		}
+		if !sorted {
+			terms = append(terms, OrderTerm{Column: pk.Column, Kind: pk.Kind, NotNull: pk.NotNull})
+		}
+	}
+	return terms
 }
 
 // --- pagination ------------------------------------------------------------------
@@ -388,46 +440,189 @@ const (
 	maxPageSize     = 1000
 )
 
-// PageBounds clamps the page size to [1, maxPageSize] (defaulting when unset)
-// and decodes the opaque page token into a row offset.
-func PageBounds(in ListInput) (limit, offset int) {
-	limit = int(in.PageSize)
+// PageLimit clamps the requested page size to [1, maxPageSize], defaulting when
+// unset.
+func PageLimit(in ListInput) int {
+	limit := int(in.PageSize)
 	switch {
 	case limit <= 0:
-		limit = defaultPageSize
+		return defaultPageSize
 	case limit > maxPageSize:
-		limit = maxPageSize
+		return maxPageSize
 	}
-	return limit, decodeOffset(in.PageToken)
+	return limit
 }
 
-// EncodeOffset mints the opaque next-page token for a row offset.
-func EncodeOffset(offset int) string {
-	return base64.RawURLEncoding.EncodeToString([]byte(strconv.Itoa(offset)))
+// Cursor is a decoded page token: the order_by key of the previous page's last
+// row. Paging resumes at the rows sorting strictly after it.
+//
+// This is keyset (seek) paging, not OFFSET paging. OFFSET makes PostgreSQL scan
+// and discard every skipped row, so page N costs O(N × page size) and deep pages
+// crawl; a cursor compares against an indexable key, so every page costs the
+// same. It is also stable under concurrent writes: a row inserted before the
+// cursor shifts every later row by one position, which silently repeats or skips
+// rows when the next page is addressed by position.
+//
+// Cols is carried alongside Vals so a token minted under one order_by is
+// rejected rather than misread when replayed against another.
+type Cursor struct {
+	Cols []string `json:"c"`
+	// Vals holds each column's value in its text form, or nil for SQL NULL.
+	Vals []*string `json:"v"`
 }
 
-func decodeOffset(token string) int {
+// EncodeCursor mints the opaque next-page token addressing the row whose
+// order_by key is vals.
+func EncodeCursor(terms []OrderTerm, vals []*string) (string, error) {
+	c := Cursor{Cols: make([]string, len(terms)), Vals: vals}
+	for i, t := range terms {
+		c.Cols[i] = t.Column
+	}
+	raw, err := json.Marshal(c)
+	if err != nil {
+		return "", fmt.Errorf("filterx: encoding page token: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+// DecodeCursor reads a page token back into the values addressed by terms. The
+// empty token is the first page and yields nil.
+//
+// A token that does not decode, or whose columns disagree with terms, is
+// rejected with ErrInvalid rather than being treated as the first page: silently
+// restarting hands the caller a plausible-looking page that is not the one they
+// asked for, and can loop a paging client forever. Tokens minted by the previous
+// offset-based scheme fail this check, as does replaying a token under a
+// different order_by.
+func DecodeCursor(terms []OrderTerm, token string) ([]*string, error) {
 	if token == "" {
-		return 0
+		return nil, nil
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(token)
 	if err != nil {
-		return 0
+		return nil, fmt.Errorf("%w: malformed page token", ErrInvalid)
 	}
-	n, err := strconv.Atoi(string(raw))
-	if err != nil || n < 0 {
-		return 0
+	var c Cursor
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return nil, fmt.Errorf("%w: malformed page token", ErrInvalid)
 	}
-	return n
+	if len(c.Cols) != len(terms) || len(c.Vals) != len(terms) {
+		return nil, fmt.Errorf("%w: page token does not match this order_by", ErrInvalid)
+	}
+	for i, t := range terms {
+		if c.Cols[i] != t.Column {
+			return nil, fmt.Errorf("%w: page token does not match this order_by", ErrInvalid)
+		}
+	}
+	return c.Vals, nil
 }
 
-// NextToken trims a limit+1 result page and mints the next-page token when a
-// further page exists. Engines fetch limit+1 rows and hand them here.
-func NextToken[M any](rows []M, limit, offset int) ([]M, string) {
-	if len(rows) > limit {
-		return rows[:limit], EncodeOffset(offset + limit)
+// FieldNamer reports the identifier a row type uses for one of its fields: the
+// gorm tag's column for a model, the JSON name for a GraphQL response type. ""
+// means the field does not hold a column.
+type FieldNamer func(reflect.StructField) string
+
+// ColumnKey maps a physical column to the identifier its row type uses for it.
+// The two differ on the GraphQL side, where Hasura exposes columns in camelCase.
+type ColumnKey func(column string) string
+
+// SameColumn is the [ColumnKey] for row types that name fields by their physical
+// column.
+func SameColumn(column string) string { return column }
+
+// CursorValues reads the order_by key out of row — the last row of a page — in
+// the text form [EncodeCursor] stores. Columns absent from the row type are an
+// error rather than a NULL: silently treating a missing sort column as NULL
+// would mint a cursor that resumes in the wrong place.
+func CursorValues(row any, terms []OrderTerm, keyOf ColumnKey, nameOf FieldNamer) ([]*string, error) {
+	rv := reflect.Indirect(reflect.ValueOf(row))
+	if rv.Kind() != reflect.Struct {
+		return nil, fmt.Errorf("filterx: cannot read a page cursor from %T", row)
 	}
-	return rows, ""
+	byName := map[string]reflect.Value{}
+	rt := rv.Type()
+	for i := 0; i < rt.NumField(); i++ {
+		if name := nameOf(rt.Field(i)); name != "" {
+			byName[name] = rv.Field(i)
+		}
+	}
+	out := make([]*string, len(terms))
+	for i, t := range terms {
+		fv, ok := byName[keyOf(t.Column)]
+		if !ok {
+			return nil, fmt.Errorf("filterx: %T has no field for sort column %q", row, t.Column)
+		}
+		out[i] = formatCursorValue(fv, t.Kind)
+	}
+	return out, nil
+}
+
+// formatCursorValue renders one column value in the text form a page token
+// carries, or nil for a NULL (a nil pointer or a nil interface).
+func formatCursorValue(v reflect.Value, kind Kind) *string {
+	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			return nil
+		}
+		v = v.Elem()
+	}
+	var s string
+	switch t := v.Interface().(type) {
+	case time.Time:
+		// Dates and instants both round-trip through the same textual forms the
+		// filter language accepts, so ParseDate/ParseTimestamp recover them.
+		if kind == KindDate {
+			s = t.Format("2006-01-02")
+		} else {
+			s = t.Format(time.RFC3339Nano)
+		}
+	default:
+		// Ints, floats, bools and strings all round-trip through their default
+		// text form via the Parse* helpers below.
+		s = fmt.Sprint(t)
+	}
+	return &s
+}
+
+// ParseCursorValue recovers one cursor value as the typed comparison argument
+// its column takes, reusing the same conversions the filter language uses.
+func ParseCursorValue(s *string, kind Kind) (any, error) {
+	if s == nil {
+		return nil, nil
+	}
+	switch kind {
+	case KindTimestamp:
+		return ParseTimestamp(*s)
+	case KindDate:
+		return ParseDate(*s)
+	case KindInt:
+		return ParseInt(*s)
+	case KindFloat:
+		return ParseFloat(*s)
+	case KindBool:
+		return ParseBool(*s)
+	default:
+		return *s, nil
+	}
+}
+
+// NextPage trims a limit+1 result page and mints the token addressing the page
+// after it. Engines fetch limit+1 rows and hand them here; the extra row is the
+// existence probe for a further page, which is why no COUNT is needed.
+func NextPage[M any](rows []M, limit int, terms []OrderTerm, keyOf ColumnKey, nameOf FieldNamer) ([]M, string, error) {
+	if len(rows) <= limit {
+		return rows, "", nil
+	}
+	page := rows[:limit]
+	vals, err := CursorValues(page[len(page)-1], terms, keyOf, nameOf)
+	if err != nil {
+		return nil, "", err
+	}
+	token, err := EncodeCursor(terms, vals)
+	if err != nil {
+		return nil, "", err
+	}
+	return page, token, nil
 }
 
 // --- observability ----------------------------------------------------------------

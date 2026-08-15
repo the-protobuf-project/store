@@ -11,7 +11,9 @@ import (
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
 
+	"github.com/the-protobuf-project/store/plugin/factory/facets"
 	"github.com/the-protobuf-project/store/plugin/factory/provenance"
+	"github.com/the-protobuf-project/store/plugin/factory/target/searchindex"
 	"github.com/the-protobuf-project/store/plugin/factory/target/types"
 	"github.com/the-protobuf-project/store/telemetry"
 )
@@ -31,7 +33,7 @@ type enumView struct {
 }
 
 // packageView assembles the template data for one schema package.
-func packageView(db *schema.Database, s *schema.Schema, pkg string, typeOf types.TypeOf, tel telemetry.Set) map[string]any {
+func packageView(db *schema.Database, s *schema.Schema, pkg string, typeOf types.TypeOf, tel telemetry.Set, fx facets.Set) map[string]any {
 	var models []modelView
 	needTime, needJSON, needPQ := false, false, false
 
@@ -60,6 +62,7 @@ func packageView(db *schema.Database, s *schema.Schema, pkg string, typeOf types
 			btByCol[bt.Col] = bt
 		}
 		idxTags := indexTagsByColumn(t)
+		searchTags := searchIndexTagsByColumn(t, searchindex.For(t, fx))
 		for _, col := range t.Columns {
 			gt := goType(col, typeOf)
 			needTime = needTime || strings.Contains(gt, "time.Time")
@@ -67,7 +70,11 @@ func packageView(db *schema.Database, s *schema.Schema, pkg string, typeOf types
 			needPQ = needPQ || strings.HasPrefix(gt, "pq.")
 
 			goField := gormFieldName(col)
-			extra := idxTags[col.Name]
+			// Built fresh rather than appended onto the map's slice, which append
+			// could otherwise write into in place.
+			extra := make([]string, 0, len(idxTags[col.Name])+len(searchTags[col.Name])+1)
+			extra = append(extra, idxTags[col.Name]...)
+			extra = append(extra, searchTags[col.Name]...)
 			if col.Enum != nil {
 				if chk := enumCheck(t.Name, col); chk != "" {
 					extra = append(extra, chk)

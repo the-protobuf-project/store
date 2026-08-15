@@ -75,6 +75,8 @@ CREATE TABLE "embedded_v1"."metadatas" (
     CONSTRAINT "fk_metadatas_owner" FOREIGN KEY ("owner") REFERENCES "embedded_v1"."attendees"("id")
 );
 CREATE INDEX "idx_metadatas_owner" ON "embedded_v1"."metadatas" ("owner");
+-- tag containment (@>) cannot use a B-tree
+CREATE INDEX IF NOT EXISTS "idx_metadatas_tags_gin" ON "embedded_v1"."metadatas" USING gin ("tags");
 
 -- Join table for the many-to-many relation Event.attendees ↔ Attendee.
 CREATE TABLE "embedded_v1"."event_attendees" (

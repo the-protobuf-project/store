@@ -28,9 +28,10 @@ var ShelfFilterSpec = filterx.Spec{
 		"name":     {Column: "name", Kind: filterx.KindText},
 		"theme":    {Column: "theme", Kind: filterx.KindText},
 	},
-	Sort: map[string]string{
-		"capacity": "capacity",
-		"name":     "name",
-		"theme":    "theme",
+	Sort: map[string]filterx.SortSpec{
+		"capacity": {Column: "capacity", Kind: filterx.KindInt},
+		"name":     {Column: "name", Kind: filterx.KindText, NotNull: true},
+		"theme":    {Column: "theme", Kind: filterx.KindText, NotNull: true},
 	},
+	PK: []filterx.SortSpec{{Column: "id", Kind: filterx.KindText, NotNull: true}},
 }

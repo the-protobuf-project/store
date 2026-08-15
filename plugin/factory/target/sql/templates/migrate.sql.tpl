@@ -1,7 +1,11 @@
 {{.Header}}
 
 BEGIN;
-
+{{if .Extensions}}
+-- Extensions (operator classes the search indexes below are built with)
+{{range .Extensions}}CREATE EXTENSION IF NOT EXISTS "{{.}}";
+{{end}}
+{{- end}}
 -- Schemas
 {{range .Schemas}}CREATE SCHEMA IF NOT EXISTS {{.}};
 {{end}}

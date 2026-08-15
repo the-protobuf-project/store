@@ -50,7 +50,7 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 		}
 
 		f := p.NewGeneratedFile(db.Name+"/schema.prisma", "")
-		if err := templates.Render(tmpl, f, "schema.prisma.tpl", schemaFileView(db, provider)); err != nil {
+		if err := templates.Render(tmpl, f, "schema.prisma.tpl", schemaFileView(db, provider, fx)); err != nil {
 			return fmt.Errorf("prisma: %s: %w", db.Name, err)
 		}
 
@@ -74,7 +74,7 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 			dir := fragmentDir(db.Name, g.sourceDir, g.fileBase)
 			path := fmt.Sprintf("%s/%s.%s.prisma", dir, g.fileBase, provider.FragmentExt())
 			ff := p.NewGeneratedFile(path, "")
-			if err := templates.Render(tmpl, ff, "fragment.prisma.tpl", fragmentView(db, g, provider, typeOf)); err != nil {
+			if err := templates.Render(tmpl, ff, "fragment.prisma.tpl", fragmentView(db, g, provider, typeOf, fx)); err != nil {
 				return fmt.Errorf("prisma: %s: %w", path, err)
 			}
 		}

@@ -106,6 +106,8 @@ CREATE INDEX IF NOT EXISTS "idx_events_billing_id" ON "embedded_v1"."events" ("b
 CREATE INDEX IF NOT EXISTS "idx_events_metadata_id" ON "embedded_v1"."events" ("metadata_id");
 CREATE INDEX IF NOT EXISTS "idx_attendees_event_id" ON "embedded_v1"."attendees" ("event_id");
 CREATE INDEX IF NOT EXISTS "idx_metadatas_owner" ON "embedded_v1"."metadatas" ("owner");
+-- tag containment (@>) cannot use a B-tree
+CREATE INDEX IF NOT EXISTS "idx_metadatas_tags_gin" ON "embedded_v1"."metadatas" USING gin ("tags");
 CREATE UNIQUE INDEX IF NOT EXISTS "idx_event_attendees_event_id_attendee_id" ON "embedded_v1"."event_attendees" ("event_id", "attendee_id");
 CREATE INDEX IF NOT EXISTS "idx_event_attendees_attendee_id" ON "embedded_v1"."event_attendees" ("attendee_id");
 

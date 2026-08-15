@@ -90,7 +90,7 @@ type Metadata struct {
 	// Free-form source system label.
 	Source *string `gorm:"column:source" json:"source,omitempty"`
 	// Arbitrary tags.
-	Tags pq.StringArray `gorm:"column:tags;type:text[]" json:"tags,omitempty"`
+	Tags pq.StringArray `gorm:"column:tags;type:text[];index:idx_metadatas_tags_gin,type:gin" json:"tags,omitempty"`
 	// Singular resource reference → belongs-to with a bare-named FK column (`owner`, no `_id`). Its auto-index must name the scalar field `ownerID`, not the `owner` relation field, or Prisma rejects the @@index.
 	OwnerID *string   `gorm:"column:owner;index:idx_metadatas_owner" json:"owner,omitempty"`
 	Owner   *Attendee `gorm:"foreignKey:OwnerID" json:"owner_rel,omitempty"`

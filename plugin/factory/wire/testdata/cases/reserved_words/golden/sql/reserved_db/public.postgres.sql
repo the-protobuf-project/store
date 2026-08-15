@@ -17,26 +17,30 @@ CREATE SCHEMA IF NOT EXISTS "public";
 -- State is the account lifecycle state.
 CREATE TYPE "public"."state" AS ENUM ('ACTIVE', 'CLOSED');
 
--- Account is forced onto the reserved table name "user" via a table override, with reserved-word columns and a composite UNIQUE index over them.
+-- Account is forced onto the reserved table name "user" via a table override, with reserved-word columns, a composite UNIQUE index over them, and column-level index requests both covered and uncovered by that composite.
 CREATE TABLE "public"."user" (
     -- Unique identifier for the record.
     "id"  CHAR(26)  NOT NULL  PRIMARY KEY,
     -- name: IDENTIFIER → PRIMARY KEY.
     "name"  VARCHAR(255)  NOT NULL  UNIQUE,
-    -- order is a reserved word; also carries a single-column index.
+    -- order is a reserved word. Its single-column index request is redundant — order already leads the composite UNIQUE above, whose B-tree serves the same single-column lookups — so no separate index is emitted for it.
     "order"  VARCHAR(255),
     -- select is a reserved word.
     "select"  VARCHAR(255),
+    -- grant is a reserved word carrying a single-column index no composite covers, so one is emitted — with both the column and the generated index name quoted.
+    "grant"  VARCHAR(255),
     -- state exercises a quoted, schema-qualified enum type reference.
     "state"  "public"."state"
 );
 CREATE UNIQUE INDEX "idx_user_order_select" ON "public"."user" ("order", "select");
+CREATE INDEX "idx_user_grant" ON "public"."user" ("grant");
 
 
 -- Column and table documentation, persisted to the catalog.
-COMMENT ON TABLE "public"."user" IS 'Account is forced onto the reserved table name "user" via a table override, with reserved-word columns and a composite UNIQUE index over them.';
+COMMENT ON TABLE "public"."user" IS 'Account is forced onto the reserved table name "user" via a table override, with reserved-word columns, a composite UNIQUE index over them, and column-level index requests both covered and uncovered by that composite.';
 COMMENT ON COLUMN "public"."user"."id" IS 'Unique identifier for the record.';
 COMMENT ON COLUMN "public"."user"."name" IS 'name: IDENTIFIER → PRIMARY KEY.';
-COMMENT ON COLUMN "public"."user"."order" IS 'order is a reserved word; also carries a single-column index.';
+COMMENT ON COLUMN "public"."user"."order" IS 'order is a reserved word. Its single-column index request is redundant — order already leads the composite UNIQUE above, whose B-tree serves the same single-column lookups — so no separate index is emitted for it.';
 COMMENT ON COLUMN "public"."user"."select" IS 'select is a reserved word.';
+COMMENT ON COLUMN "public"."user"."grant" IS 'grant is a reserved word carrying a single-column index no composite covers, so one is emitted — with both the column and the generated index name quoted.';
 COMMENT ON COLUMN "public"."user"."state" IS 'state exercises a quoted, schema-qualified enum type reference.';

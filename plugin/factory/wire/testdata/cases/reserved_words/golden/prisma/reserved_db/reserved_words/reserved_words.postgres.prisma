@@ -26,7 +26,7 @@ enum State {
   @@schema("public")
 }
 
-/// Account is forced onto the reserved table name "user" via a table override, with reserved-word columns and a composite UNIQUE index over them.
+/// Account is forced onto the reserved table name "user" via a table override, with reserved-word columns, a composite UNIQUE index over them, and column-level index requests both covered and uncovered by that composite.
 model Account {
   /// Unique identifier for the record.
   id String @id @default(ulid()) @map("id")
@@ -34,17 +34,22 @@ model Account {
   /// name: IDENTIFIER → PRIMARY KEY.
   name String @unique @map("name")
 
-  /// order is a reserved word; also carries a single-column index.
+  /// order is a reserved word. Its single-column index request is redundant — order already leads the composite UNIQUE above, whose B-tree serves the same single-column lookups — so no separate index is emitted for it.
   order String? @map("order")
 
   /// select is a reserved word.
   select String? @map("select")
+
+  /// grant is a reserved word carrying a single-column index no composite covers, so one is emitted — with both the column and the generated index name quoted.
+  grant String? @map("grant")
 
   /// state exercises a quoted, schema-qualified enum type reference.
   state State? @map("state")
 
   /// Unique constraint on [order, select].
   @@unique([order, select])
+  /// Index on [grant].
+  @@index([grant])
   /// Maps the model to the "user" table in the database.
   @@map("user")
   /// Maps the model to the "public" schema in the database.

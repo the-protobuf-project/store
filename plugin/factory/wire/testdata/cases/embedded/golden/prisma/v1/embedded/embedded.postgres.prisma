@@ -50,11 +50,11 @@ model Event {
   /// Back-relation: EventAttendees records that reference this model via event_id.
   eventAttendees EventAttendees[]
 
-  /// Composite index on [location_id].
+  /// Index on [location_id].
   @@index([locationID])
-  /// Composite index on [billing_id].
+  /// Index on [billing_id].
   @@index([billingID])
-  /// Composite index on [metadata_id].
+  /// Index on [metadata_id].
   @@index([metadataID])
   /// Maps the model to the "events" table in the database.
   @@map("events")
@@ -85,7 +85,7 @@ model Attendee {
   /// Back-relation: EventAttendees records that reference this model via attendee_id.
   eventAttendees EventAttendees[]
 
-  /// Composite index on [event_id].
+  /// Index on [event_id].
   @@index([eventID])
   /// Maps the model to the "attendees" table in the database.
   @@map("attendees")
@@ -136,8 +136,10 @@ model Metadata {
   /// Back-relation: Event records that reference this model via metadata_id.
   events Event[]
 
-  /// Composite index on [owner].
+  /// Index on [owner].
   @@index([ownerID])
+  /// GIN index: tag containment (@>) cannot use a B-tree.
+  @@index([tags], type: Gin)
   /// Maps the model to the "metadatas" table in the database.
   @@map("metadatas")
   /// Maps the model to the "embedded_v1" schema in the database.
@@ -166,7 +168,7 @@ model EventAttendees {
 
   /// Unique constraint on [event_id, attendee_id].
   @@unique([eventID, attendeeID])
-  /// Composite index on [attendee_id].
+  /// Index on [attendee_id].
   @@index([attendeeID])
   /// Maps the model to the "event_attendees" table in the database.
   @@map("event_attendees")

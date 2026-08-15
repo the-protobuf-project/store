@@ -7,12 +7,15 @@ package gorm
 // its full import path; without it, no aggregator is emitted.
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/the-protobuf-project/protokit/header"
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
+	"github.com/the-protobuf-project/store/plugin/factory/facets"
 	"github.com/the-protobuf-project/store/plugin/factory/provenance"
+	"github.com/the-protobuf-project/store/plugin/factory/target/searchindex"
 )
 
 // importView is one per-schema models package the aggregator imports. Alias is
@@ -34,10 +37,11 @@ func importAlias(pkg, path string) string {
 // aggregateView assembles the migrate.go template data: the package name, the
 // per-schema imports, and the fully-qualified model expressions (pkg.Model) the
 // Default registry is preloaded with, in schema-then-declaration order.
-func aggregateView(db *schema.Database) map[string]any {
+func aggregateView(db *schema.Database, fx facets.Set) map[string]any {
 	var imports []importView
 	var models []string
 	seen := map[string]bool{}
+	var extensions []string
 	var schemaNames []string
 
 	for _, s := range db.Schemas {
@@ -55,8 +59,11 @@ func aggregateView(db *schema.Database) map[string]any {
 				})
 			}
 			models = append(models, pkg+"."+t.LocalName)
+			extensions = append(extensions, searchindex.Extensions(searchindex.For(t, fx))...)
 		}
 	}
+	slices.Sort(extensions)
+	extensions = slices.Compact(extensions)
 
 	return map[string]any{
 		"Header": provenance.Render("//", header.Info{
@@ -72,6 +79,7 @@ func aggregateView(db *schema.Database) map[string]any {
 		"Imports":              imports,
 		"Models":               models,
 		"Schemas":              schemaNames,
+		"Extensions":           extensions,
 		"Telemetry":            dbTelemetry(db),
 		"TelemetryMetrics":     dbTelemetryMetrics(db),
 		"OpentelementryImport": opentelementryModule,
