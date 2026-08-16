@@ -478,6 +478,44 @@ paginate limit+1 with an opaque page token. Invalid filter/order input is
 rejected with `filterx.ErrInvalid` — translate it to your invalid-argument
 error (e.g. gRPC `InvalidArgument`) with `errors.Is`.
 
+**Paging is keyset (seek), not `OFFSET`.** The page token carries the previous
+page's sort key, and the next page is the rows sorting strictly after it. Two
+consequences worth knowing:
+
+- **Every page costs the same.** `OFFSET` makes PostgreSQL scan and discard
+  every skipped row, so page *N* costs O(*N* × page size); a cursor compares
+  against an indexable key instead. Pair a hot `order_by` with an index on
+  `(sort columns…, primary key)` to keep the seek a range scan.
+- **The primary key is appended to every `order_by`.** Without a total order,
+  `LIMIT` over tied rows may return them in any order between queries, which
+  silently repeats or drops rows across page boundaries — and leaves a cursor
+  with no single row to resume from.
+
+Page tokens are opaque and tied to the `order_by` that minted them: replaying
+one under a different `order_by`, or a token from the previous offset-based
+scheme, is rejected with `filterx.ErrInvalid` rather than silently returning a
+different page. Callers restart paging when they change sort order.
+
+**GIN indexes back the containment operators.** Two of the filter surface's
+operators cannot use a B-tree at all — `:` and free-text search compile to
+`ILIKE '%term%'`, whose leading wildcard leaves the tree no prefix to descend,
+and tag filters compile to `col @> ARRAY[?]`, which is not a B-tree operator.
+Both would otherwise sequentially scan on every query. All three targets emit
+matching GIN indexes for them, from one shared plan:
+
+| Surface | SQL | GORM | Prisma |
+|---|---|---|---|
+| `search: true` on a text field | `USING gin (col gin_trgm_ops)` | `index:…,type:gin,expression:…` | `@@index([col(ops: raw("gin_trgm_ops"))], type: Gin)` |
+| a filterable `repeated string` | `USING gin (col)` | `index:…,type:gin` | `@@index([col], type: Gin)` |
+
+A trigram index needs the `pg_trgm` extension, so it is only planned for a field
+that opted into `search: true`. `migrate.sql` creates the extension, Prisma
+declares it on the datasource (behind its `postgresqlExtensions` preview
+feature), and — since `AutoMigrate` cannot `CREATE EXTENSION` — `EnsureSchemas`
+installs it before `Migrate` runs. Installing an extension needs privileges a
+least-privilege application role may not hold; grant it, or create the extension
+once out of band.
+
 **Distributed tracing into Hasura's own engine spans**: Hasura DDN's engine
 (`ddn-engine`) emits its own OTEL spans (parse/validate/plan/execute) and
 accepts a standard W3C `traceparent` header on the incoming request — set

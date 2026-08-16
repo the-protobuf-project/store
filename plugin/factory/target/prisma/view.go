@@ -10,7 +10,9 @@ import (
 	"github.com/the-protobuf-project/protokit/header"
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
+	"github.com/the-protobuf-project/store/plugin/factory/facets"
 	"github.com/the-protobuf-project/store/plugin/factory/provenance"
+	"github.com/the-protobuf-project/store/plugin/factory/target/searchindex"
 	"github.com/the-protobuf-project/store/plugin/factory/target/types"
 )
 
@@ -26,7 +28,7 @@ type modelView struct {
 // <file>.<provider>.prisma fragment. A fragment may span several @@schemas, so
 // every model and enum carries its own schema (rendered per block in the
 // template) rather than a single fragment-wide schema.
-func fragmentView(db *schema.Database, g fragmentGroup, provider types.Provider, typeOf types.TypeOf) map[string]any {
+func fragmentView(db *schema.Database, g fragmentGroup, provider types.Provider, typeOf types.TypeOf, fx facets.Set) map[string]any {
 	var enums []*schema.Enum
 	for _, e := range g.enums {
 		enums = append(enums, withFallbackComments(e))
@@ -34,7 +36,7 @@ func fragmentView(db *schema.Database, g fragmentGroup, provider types.Provider,
 	dsName := naming.DatasourceName(db.Name)
 	models := make([]modelView, 0, len(g.tables))
 	for _, t := range g.tables {
-		models = append(models, modelViewOf(t, provider, dsName, typeOf))
+		models = append(models, modelViewOf(t, provider, dsName, typeOf, fx))
 	}
 	srcProto := g.sourceProto
 	if srcProto == "" {
@@ -78,7 +80,7 @@ func fragmentSchemas(g fragmentGroup) []string {
 
 // modelViewOf renders one table into template-ready field and index lines.
 // dsName is the Prisma datasource block name, used to prefix native-type attributes.
-func modelViewOf(t *schema.Table, provider types.Provider, dsName string, typeOf types.TypeOf) modelView {
+func modelViewOf(t *schema.Table, provider types.Provider, dsName string, typeOf types.TypeOf, fx facets.Set) modelView {
 	fkByCol := map[string]*schema.ForeignKey{}
 	for _, fk := range t.ForeignKeys {
 		fkByCol[fk.Column] = fk
@@ -153,13 +155,34 @@ func modelViewOf(t *schema.Table, provider types.Provider, dsName string, typeOf
 				cols[i] = naming.Camel(c)
 			}
 		}
-		directive, label := "@@index", "Composite index"
+		directive, label := "@@index", "Index"
+		if len(idx.Columns) > 1 {
+			label = "Composite index"
+		}
 		if idx.Unique {
 			directive, label = "@@unique", "Unique constraint"
 		}
 		m.Indexes = append(m.Indexes, fieldLine{
 			Doc:  label + " on [" + strings.Join(idx.Columns, ", ") + "].",
 			Decl: directive + "([" + strings.Join(cols, ", ") + "])",
+		})
+	}
+
+	// GIN indexes serving the query surface (see the searchindex package). The
+	// operator class rides on the field via ops:, and raw() passes it through
+	// verbatim — Prisma has no named constant for gin_trgm_ops, which comes from
+	// an extension rather than core PostgreSQL.
+	for _, p := range searchindex.For(t, fx) {
+		field := naming.Camel(p.Column)
+		if col, ok := colByName[p.Column]; ok {
+			field = scalarFieldName(col)
+		}
+		if p.Ops != "" {
+			field += `(ops: raw("` + p.Ops + `"))`
+		}
+		m.Indexes = append(m.Indexes, fieldLine{
+			Doc:  "GIN index: " + p.Why + ".",
+			Decl: "@@index([" + field + "], type: Gin)",
 		})
 	}
 	return m

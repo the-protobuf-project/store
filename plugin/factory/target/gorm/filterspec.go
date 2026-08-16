@@ -25,10 +25,23 @@ type filterFieldView struct {
 	EnumPrefix string // proto enum value prefix ("UNIT_TYPE_"), enum kinds only
 }
 
-// filterSortView is one sortable field in a table spec.
+// filterSortView is one sortable field in a table spec. Kind travels with the
+// column because the keyset cursor round-trips each sort value through the page
+// token, and a column can be sortable without being filterable — so its kind is
+// not always recoverable from the spec's Fields.
 type filterSortView struct {
-	Field  string
-	Column string
+	Field   string
+	Column  string
+	Kind    string // filterx kind const name, e.g. "KindText"
+	NotNull bool   // drops the NULL half of this column's keyset comparison
+}
+
+// filterPKView is one primary-key column, appended as the order_by tiebreaker
+// and therefore also a cursor column.
+type filterPKView struct {
+	Column  string
+	Kind    string
+	NotNull bool
 }
 
 // filterTableView is the spec data for one table.
@@ -39,6 +52,7 @@ type filterTableView struct {
 	Fields  []filterFieldView
 	Search  []string // columns matched by a bareword free-text term
 	Sort    []filterSortView
+	PK      []filterPKView // primary-key columns, appended as the order_by tiebreaker
 }
 
 // buildFilterTable plans one table's spec. Returns ok=false when nothing on the
@@ -48,6 +62,22 @@ func buildFilterTable(s *schema.Schema, t *schema.Table, fx facets.Set) (filterT
 		SpecVar: t.LocalName + "FilterSpec",
 		Model:   t.LocalName,
 		Table:   fmt.Sprintf("%q.%q", s.Name, t.Name),
+	}
+	// Collected before the filter pass, which skips synthesized columns: a
+	// surrogate primary key is synthesized, and it is exactly the column the
+	// order_by tiebreaker needs.
+	for _, c := range t.Columns {
+		if !c.PrimaryKey {
+			continue
+		}
+		// A key type classifyFilterColumn excludes from filtering is still a
+		// perfectly good tiebreaker; it just travels through the cursor as text.
+		kind, _, ok := classifyFilterColumn(c)
+		if !ok {
+			kind = "KindText"
+		}
+		// A primary key is never NULL whether or not the column carries the flag.
+		v.PK = append(v.PK, filterPKView{Column: c.Name, Kind: kind, NotNull: true})
 	}
 	for _, c := range t.Columns {
 		if c.Source == nil {
@@ -81,7 +111,7 @@ func buildFilterTable(s *schema.Schema, t *schema.Table, fx facets.Set) (filterT
 				on = *opts.Sortable
 			}
 			if on {
-				v.Sort = append(v.Sort, filterSortView{Field: field, Column: c.Name})
+				v.Sort = append(v.Sort, filterSortView{Field: field, Column: c.Name, Kind: kind, NotNull: c.NotNull})
 			}
 		}
 	}

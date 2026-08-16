@@ -24,6 +24,7 @@ package filterx
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"gorm.io/gorm"
@@ -93,12 +94,18 @@ func (e *GormEngine[M]) Where(conds []Condition) (string, []any, error) {
 }
 
 // OrderClause resolves an order_by string into a safe "col DIR, ..." clause
-// via the spec's sort allowlist. Empty order_by yields an empty clause.
+// via the spec's sort allowlist. Empty order_by still yields the spec's
+// primary-key clause, which [OrderTerms] appends to keep paging stable.
 func (e *GormEngine[M]) OrderClause(orderBy string) (string, error) {
 	terms, err := OrderTerms(e.spec, orderBy)
 	if err != nil {
 		return "", err
 	}
+	return orderClause(terms), nil
+}
+
+// orderClause renders resolved terms as the "col DIR, ..." clause.
+func orderClause(terms []OrderTerm) string {
 	parts := make([]string, 0, len(terms))
 	for _, t := range terms {
 		dir := "ASC"
@@ -107,7 +114,134 @@ func (e *GormEngine[M]) OrderClause(orderBy string) (string, error) {
 		}
 		parts = append(parts, t.Column+" "+dir)
 	}
-	return strings.Join(parts, ", "), nil
+	return strings.Join(parts, ", ")
+}
+
+// qualifyCol renders a column reference qualified by the spec's table.
+func qualifyCol(spec Spec, col string) string { return spec.Table + `."` + col + `"` }
+
+// Seek renders the keyset predicate resuming after pageToken, under the ordering
+// orderBy resolves to — the clause List ANDs in to fetch the next page. The
+// empty token is the first page and yields an empty clause; a token that does
+// not match this order_by is rejected with ErrInvalid. Exposed alongside Where
+// and OrderClause so a caller composing its own query pages the same way List
+// does.
+func (e *GormEngine[M]) Seek(orderBy, pageToken string) (string, []any, error) {
+	terms, err := OrderTerms(e.spec, orderBy)
+	if err != nil {
+		return "", nil, err
+	}
+	cursor, err := DecodeCursor(terms, pageToken)
+	if err != nil {
+		return "", nil, err
+	}
+	return keysetWhere(e.spec, terms, cursor)
+}
+
+// keysetWhere renders the "rows strictly after the cursor" predicate. An empty
+// cursor is the first page and yields no clause.
+//
+// A row-value comparison — (a, b) > (?, ?) — would be shorter, but PostgreSQL
+// only accepts it when every term sorts the same way, and order_by permits mixed
+// directions. So the comparison is written in its expanded lexicographic form:
+// one branch per term, matching the rows that tie on every earlier term and sort
+// strictly after on this one.
+//
+// NULLs follow PostgreSQL's defaults for each direction — ASC sorts them last,
+// DESC first — because that is the order the query itself runs with. Getting
+// this wrong does not error; it silently drops the rows on the null side of the
+// cursor, since any comparison with NULL is NULL rather than true.
+func keysetWhere(spec Spec, terms []OrderTerm, cursor []*string) (string, []any, error) {
+	if cursor == nil {
+		return "", nil, nil
+	}
+	var branches []string
+	var args []any
+	for i, t := range terms {
+		after, afterArgs, err := keysetAfter(spec, t, cursor[i])
+		if err != nil {
+			return "", nil, err
+		}
+		if after == "" {
+			// Nothing sorts strictly after this value on this term (an ASC NULL is
+			// already last), so only the tie branch continues into later terms.
+			continue
+		}
+		parts := make([]string, 0, i+1)
+		branchArgs := make([]any, 0, i+1)
+		for j := 0; j < i; j++ {
+			eq, eqArgs, err := keysetEq(spec, terms[j], cursor[j])
+			if err != nil {
+				return "", nil, err
+			}
+			parts = append(parts, eq)
+			branchArgs = append(branchArgs, eqArgs...)
+		}
+		parts = append(parts, after)
+		branchArgs = append(branchArgs, afterArgs...)
+		if len(parts) == 1 {
+			branches = append(branches, parts[0])
+		} else {
+			branches = append(branches, "("+strings.Join(parts, " AND ")+")")
+		}
+		args = append(args, branchArgs...)
+	}
+	if len(branches) == 0 {
+		return "", nil, nil
+	}
+	return "(" + strings.Join(branches, " OR ") + ")", args, nil
+}
+
+// keysetEq matches rows tying with the cursor on one term.
+func keysetEq(spec Spec, t OrderTerm, v *string) (string, []any, error) {
+	col := qualifyCol(spec, t.Column)
+	if v == nil {
+		return col + " IS NULL", nil, nil
+	}
+	arg, err := ParseCursorValue(v, t.Kind)
+	if err != nil {
+		return "", nil, err
+	}
+	return col + " = ?", []any{arg}, nil
+}
+
+// keysetAfter matches rows sorting strictly after the cursor on one term.
+// Returns "" when no row can: an ASC NULL already sorts last.
+func keysetAfter(spec Spec, t OrderTerm, v *string) (string, []any, error) {
+	col := qualifyCol(spec, t.Column)
+	if v == nil {
+		if t.Desc {
+			return col + " IS NOT NULL", nil, nil // DESC sorts NULLs first
+		}
+		return "", nil, nil
+	}
+	arg, err := ParseCursorValue(v, t.Kind)
+	if err != nil {
+		return "", nil, err
+	}
+	if t.Desc {
+		return col + " < ?", []any{arg}, nil
+	}
+	if t.NotNull {
+		return col + " > ?", []any{arg}, nil
+	}
+	// ASC sorts NULLs last, so they fall after every non-null value.
+	return "(" + col + " > ? OR " + col + " IS NULL)", []any{arg}, nil
+}
+
+// GormColumn resolves the physical column a model field maps to, reading the
+// column: fragment the models target writes into every field's gorm tag.
+func GormColumn(f reflect.StructField) string {
+	tag, ok := f.Tag.Lookup("gorm")
+	if !ok {
+		return ""
+	}
+	for _, part := range strings.Split(tag, ";") {
+		if col, found := strings.CutPrefix(part, "column:"); found {
+			return col
+		}
+	}
+	return ""
 }
 
 // List runs the paginated list: it applies the spec-driven filter and order to
@@ -115,7 +249,7 @@ func (e *GormEngine[M]) OrderClause(orderBy string) (string, error) {
 // and mints the opaque next-page token. Invalid filter/order input is rejected
 // with ErrInvalid before any query runs.
 func (e *GormEngine[M]) List(ctx context.Context, q *gorm.DB, in ListInput) ([]M, string, error) {
-	order, err := e.OrderClause(in.OrderBy)
+	terms, err := OrderTerms(e.spec, in.OrderBy)
 	if err != nil {
 		e.observer.Debug("rejected order_by", map[string]any{"table": e.spec.Table, "order_by": in.OrderBy, "error": err.Error()})
 		return nil, "", err
@@ -125,14 +259,27 @@ func (e *GormEngine[M]) List(ctx context.Context, q *gorm.DB, in ListInput) ([]M
 		e.observer.Debug("rejected filter", map[string]any{"table": e.spec.Table, "error": err.Error()})
 		return nil, "", err
 	}
+	cursor, err := DecodeCursor(terms, in.PageToken)
+	if err != nil {
+		e.observer.Debug("rejected page_token", map[string]any{"table": e.spec.Table, "error": err.Error()})
+		return nil, "", err
+	}
+	seek, seekArgs, err := keysetWhere(e.spec, terms, cursor)
+	if err != nil {
+		e.observer.Debug("rejected page_token", map[string]any{"table": e.spec.Table, "error": err.Error()})
+		return nil, "", err
+	}
 
-	limit, offset := PageBounds(in)
-	q = q.WithContext(ctx).Limit(limit + 1).Offset(offset)
-	if order != "" {
+	limit := PageLimit(in)
+	q = q.WithContext(ctx).Limit(limit + 1)
+	if order := orderClause(terms); order != "" {
 		q = q.Order(order)
 	}
 	if where != "" {
 		q = q.Where(where, args...)
+	}
+	if seek != "" {
+		q = q.Where(seek, seekArgs...)
 	}
 
 	var rows []M
@@ -142,8 +289,7 @@ func (e *GormEngine[M]) List(ctx context.Context, q *gorm.DB, in ListInput) ([]M
 	if err != nil {
 		return nil, "", err
 	}
-	page, next := NextToken(rows, limit, offset)
-	return page, next, nil
+	return NextPage(rows, limit, terms, SameColumn, GormColumn)
 }
 
 // sqlCondition translates one spec-listed condition.

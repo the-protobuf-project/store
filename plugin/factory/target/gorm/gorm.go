@@ -79,7 +79,7 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 		for _, s := range db.Schemas {
 			pkg := naming.GoPackage(s.Name)
 			f := p.NewGeneratedFile(fmt.Sprintf("%s/%s/models.go", db.Name, pkg), "")
-			if err := renderGo(f, "models.go.tpl", packageView(db, s, pkg, typeOf, tel)); err != nil {
+			if err := renderGo(f, "models.go.tpl", packageView(db, s, pkg, typeOf, tel, fx)); err != nil {
 				return fmt.Errorf("gorm: %s/%s: %w", db.Name, pkg, err)
 			}
 			// Opt-in: proto↔model converters, one protobuf.go per schema package.
@@ -173,7 +173,7 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 		// output tree's base import path.
 		if dbGoModule(db) != "" {
 			mf := p.NewGeneratedFile(fmt.Sprintf("%s/migrate.go", db.Name), "")
-			if err := renderGo(mf, "migrate.go.tpl", aggregateView(db)); err != nil {
+			if err := renderGo(mf, "migrate.go.tpl", aggregateView(db, fx)); err != nil {
 				return fmt.Errorf("gorm: %s/migrate.go: %w", db.Name, err)
 			}
 		}

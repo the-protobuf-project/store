@@ -29,7 +29,7 @@ model Product {
   /// Relation to Money via price_id.
   price Money @relation(fields: [priceID], references: [id], onDelete: Cascade)
 
-  /// Composite index on [price_id].
+  /// Index on [price_id].
   @@index([priceID])
   /// Maps the model to the "products" table in the database.
   @@map("products")

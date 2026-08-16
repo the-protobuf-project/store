@@ -1,0 +1,22 @@
+{
+  "name": "v1-prisma",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Generated Prisma schema for the v1 database. Managed by protoc-gen-store — edit the source .proto, not these files.",
+  "scripts": {
+    "prisma:generate": "prisma generate --config v1.config.ts",
+    "prisma:migrate": "prisma migrate dev --config v1.config.ts",
+    "prisma:deploy": "prisma migrate deploy --config v1.config.ts",
+    "prisma:studio": "prisma studio --config v1.config.ts",
+    "prisma:format": "prisma format --config v1.config.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^7.0.0"
+  },
+  "devDependencies": {
+    "prisma": "^7.0.0",
+    "dotenv": "^16.4.0",
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
+  }
+}

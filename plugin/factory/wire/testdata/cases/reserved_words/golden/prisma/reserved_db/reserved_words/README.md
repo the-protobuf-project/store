@@ -22,7 +22,7 @@ Schema file: [`reserved_words.postgres.prisma`](./reserved_words.postgres.prisma
 
 ### `Account` → `user`
 
-Account is forced onto the reserved table name "user" via a table override, with reserved-word columns and a composite UNIQUE index over them.
+Account is forced onto the reserved table name "user" via a table override, with reserved-word columns, a composite UNIQUE index over them, and column-level index requests both covered and uncovered by that composite.
 
 | Column | Type | Null |
 | --- | --- | --- |
@@ -30,6 +30,7 @@ Account is forced onto the reserved table name "user" via a table override, with
 | `name` | `VARCHAR(255)` | not null |
 | `order` | `VARCHAR(255)` | nullable |
 | `select` | `VARCHAR(255)` | nullable |
+| `grant` | `VARCHAR(255)` | nullable |
 | `state` | `State` | nullable |
 
 ### Enums

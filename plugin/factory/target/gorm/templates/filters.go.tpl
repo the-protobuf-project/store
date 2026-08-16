@@ -20,10 +20,13 @@ var {{.SpecVar}} = filterx.Spec{
 {{- if .Search}}
 	Search: []string{ {{- range $i, $c := .Search}}{{if $i}}, {{end}}"{{$c}}"{{end -}} },
 {{- end}}
-	Sort: map[string]string{
+	Sort: map[string]filterx.SortSpec{
 {{- range .Sort}}
-		"{{.Field}}": "{{.Column}}",
+		"{{.Field}}": {Column: "{{.Column}}", Kind: filterx.{{.Kind}}{{if .NotNull}}, NotNull: true{{end}}},
 {{- end}}
 	},
+{{- if .PK}}
+	PK: []filterx.SortSpec{ {{- range $i, $c := .PK}}{{if $i}}, {{end}}{Column: "{{$c.Column}}", Kind: filterx.{{$c.Kind}}{{if $c.NotNull}}, NotNull: true{{end}}}{{end -}} },
+{{- end}}
 }
 {{- end}}

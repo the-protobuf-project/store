@@ -28,11 +28,12 @@ var AuthorFilterSpec = filterx.Spec{
 		"display_name": {Column: "display_name", Kind: filterx.KindText},
 		"name":         {Column: "name", Kind: filterx.KindText},
 	},
-	Sort: map[string]string{
-		"bio":          "bio",
-		"display_name": "display_name",
-		"name":         "name",
+	Sort: map[string]filterx.SortSpec{
+		"bio":          {Column: "bio", Kind: filterx.KindText},
+		"display_name": {Column: "display_name", Kind: filterx.KindText, NotNull: true},
+		"name":         {Column: "name", Kind: filterx.KindText, NotNull: true},
 	},
+	PK: []filterx.SortSpec{{Column: "id", Kind: filterx.KindText, NotNull: true}},
 }
 
 // BookFilterSpec is Book's AIP-160 filter / AIP-132 order_by surface,
@@ -48,12 +49,13 @@ var BookFilterSpec = filterx.Spec{
 		"published_year": {Column: "published_year", Kind: filterx.KindInt},
 		"title":          {Column: "title", Kind: filterx.KindText},
 	},
-	Sort: map[string]string{
-		"create_time":    "create_time",
-		"genre":          "genre",
-		"isbn":           "isbn",
-		"name":           "name",
-		"published_year": "published_year",
-		"title":          "title",
+	Sort: map[string]filterx.SortSpec{
+		"create_time":    {Column: "create_time", Kind: filterx.KindTimestamp, NotNull: true},
+		"genre":          {Column: "genre", Kind: filterx.KindEnum, NotNull: true},
+		"isbn":           {Column: "isbn", Kind: filterx.KindText},
+		"name":           {Column: "name", Kind: filterx.KindText, NotNull: true},
+		"published_year": {Column: "published_year", Kind: filterx.KindInt},
+		"title":          {Column: "title", Kind: filterx.KindText, NotNull: true},
 	},
+	PK: []filterx.SortSpec{{Column: "id", Kind: filterx.KindText, NotNull: true}},
 }

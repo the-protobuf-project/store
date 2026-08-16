@@ -56,6 +56,10 @@ CREATE TABLE IF NOT EXISTS "kitchen"."sinks" (
     "attributes"  JSONB
 );
 
+-- Indexes
+-- tag containment (@>) cannot use a B-tree
+CREATE INDEX IF NOT EXISTS "idx_sinks_tags_gin" ON "kitchen"."sinks" USING gin ("tags");
+
 -- Documentation
 COMMENT ON TABLE "kitchen"."sinks" IS 'Sink is one table holding every interesting type mapping.';
 COMMENT ON COLUMN "kitchen"."sinks"."id" IS 'Unique identifier for the record.';

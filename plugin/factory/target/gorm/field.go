@@ -10,6 +10,7 @@ import (
 
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
+	"github.com/the-protobuf-project/store/plugin/factory/target/searchindex"
 	"github.com/the-protobuf-project/store/plugin/factory/target/types"
 )
 
@@ -73,9 +74,11 @@ func structTag(col *schema.Column, extra []string, telemetryTag string, typeOf t
 	case col.Default != "":
 		gormParts = append(gormParts, "default:"+col.Default)
 	}
-	if col.Index {
-		gormParts = append(gormParts, "index")
-	}
+	// col.Index deliberately renders nothing here: the backend's enrichment turns
+	// it into a real t.Indexes entry, so it arrives through extra as a *named*
+	// index fragment matching the SQL target's. Emitting a bare "index" as well
+	// would create a second, differently-named index under AutoMigrate that no
+	// other target knows about.
 	gormParts = append(gormParts, extra...)
 	tag := `gorm:"` + strings.Join(gormParts, ";") + `"`
 
@@ -117,6 +120,30 @@ func indexTagsByColumn(t *schema.Table) map[string][]string {
 			}
 			out[col] = append(out[col], frag)
 		}
+	}
+	return out
+}
+
+// searchIndexTagsByColumn maps each column to the GORM tag fragment creating the
+// GIN index its query surface needs (see the searchindex package for why a
+// B-tree cannot serve these).
+//
+// The access method rides on type:, and the operator class on expression:, which
+// the driver substitutes verbatim in place of the quoted column — so
+// `type:gin,expression:tags gin_trgm_ops` reaches PostgreSQL as
+// `USING gin(tags gin_trgm_ops)`, matching the SQL target's DDL. Neither
+// fragment may contain a comma: GORM splits index tag settings on it.
+//
+// AutoMigrate cannot CREATE EXTENSION, so a trigram index needs pg_trgm already
+// installed — EnsureSchemas does that before Migrate runs.
+func searchIndexTagsByColumn(t *schema.Table, plans []searchindex.Plan) map[string][]string {
+	out := map[string][]string{}
+	for _, p := range plans {
+		frag := "index:" + p.Name + ",type:gin"
+		if p.Ops != "" {
+			frag += ",expression:" + p.Column + " " + p.Ops
+		}
+		out[p.Column] = append(out[p.Column], frag)
 	}
 	return out
 }

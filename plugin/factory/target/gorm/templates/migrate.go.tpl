@@ -32,6 +32,20 @@ var schemas = []string{
 	"{{.}}",
 {{- end}}
 }
+{{- if .Extensions}}
+
+// extensions lists the Postgres extensions the models' search indexes are built
+// with. AutoMigrate cannot CREATE EXTENSION, and an index naming an operator
+// class from a missing one fails, so EnsureSchemas installs them first.
+// Installing an extension needs privileges a least-privilege application role
+// may not hold; grant it, or create them once out of band with the SQL target's
+// migrate.sql, which issues the same statements.
+var extensions = []string{
+{{- range .Extensions}}
+	"{{.}}",
+{{- end}}
+}
+{{- end}}
 
 // Registry collects GORM models so they migrate together.
 type Registry struct {
@@ -71,6 +85,13 @@ func (*Registry) EnsureSchemas(db *gorm.DB) error {
 			return err
 		}
 	}
+{{- if .Extensions}}
+	for _, name := range extensions {
+		if err := db.Exec(`CREATE EXTENSION IF NOT EXISTS "` + name + `"`).Error; err != nil {
+			return err
+		}
+	}
+{{- end}}
 	return nil
 }
 

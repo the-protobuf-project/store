@@ -49,7 +49,7 @@ model Note {
   /// Relation to User via user_id.
   user User @relation(fields: [userID], references: [id], onDelete: Cascade)
 
-  /// Composite index on [user_id].
+  /// Index on [user_id].
   @@index([userID])
   /// Maps the model to the "notes" table in the database.
   @@map("notes")

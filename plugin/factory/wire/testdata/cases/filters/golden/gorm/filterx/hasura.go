@@ -26,6 +26,9 @@ package filterx
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"strings"
+	"time"
 
 	"github.com/the-protobuf-project/runtime-go/network/graphql"
 )
@@ -110,12 +113,19 @@ func (e *HasuraEngine[M]) Predicate(conds []Condition) (graphql.Predicate, bool,
 }
 
 // OrderTerms resolves an order_by string into GraphQL order terms via the
-// spec's sort allowlist. Empty order_by yields no terms.
+// spec's sort allowlist. Empty order_by still yields the spec's primary-key
+// term, which [OrderTerms] appends to keep paging stable.
 func (e *HasuraEngine[M]) OrderTerms(orderBy string) ([]graphql.OrderTerm, error) {
 	terms, err := OrderTerms(e.spec, orderBy)
 	if err != nil {
 		return nil, err
 	}
+	return gqlOrderTerms(terms), nil
+}
+
+// gqlOrderTerms converts resolved terms to their GraphQL form. Direction is all
+// a graphql.OrderTerm carries, so StringField serves every column type.
+func gqlOrderTerms(terms []OrderTerm) []graphql.OrderTerm {
 	out := make([]graphql.OrderTerm, 0, len(terms))
 	for _, t := range terms {
 		f := graphql.StringField{Col: CamelCase(t.Column)}
@@ -125,7 +135,155 @@ func (e *HasuraEngine[M]) OrderTerms(orderBy string) ([]graphql.OrderTerm, error
 			out = append(out, f.Asc())
 		}
 	}
-	return out, nil
+	return out
+}
+
+// Seek builds the keyset predicate resuming after pageToken, under the ordering
+// orderBy resolves to — the predicate List ANDs in to fetch the next page. The
+// empty token is the first page and yields ok=false; a token that does not match
+// this order_by is rejected with ErrInvalid. Exposed alongside Predicate and
+// OrderTerms so a caller composing its own request pages the same way List does.
+func (e *HasuraEngine[M]) Seek(orderBy, pageToken string) (graphql.Predicate, bool, error) {
+	terms, err := OrderTerms(e.spec, orderBy)
+	if err != nil {
+		return graphql.Predicate{}, false, err
+	}
+	cursor, err := DecodeCursor(terms, pageToken)
+	if err != nil {
+		return graphql.Predicate{}, false, err
+	}
+	return keysetPredicate(terms, cursor)
+}
+
+// keysetPredicate builds the "rows strictly after the cursor" predicate, the
+// GraphQL twin of the gorm engine's keysetWhere — see that function for why the
+// comparison is expanded lexicographically rather than written as a row-value
+// comparison, and how NULLs are placed. An empty cursor is the first page and
+// yields ok=false.
+func keysetPredicate(terms []OrderTerm, cursor []*string) (graphql.Predicate, bool, error) {
+	if cursor == nil {
+		return graphql.Predicate{}, false, nil
+	}
+	var branches []graphql.Predicate
+	for i, t := range terms {
+		after, ok, err := keysetAfterPred(t, cursor[i])
+		if err != nil {
+			return graphql.Predicate{}, false, err
+		}
+		if !ok {
+			continue // an ASC NULL already sorts last; only the tie branch continues
+		}
+		parts := make([]graphql.Predicate, 0, i+1)
+		for j := 0; j < i; j++ {
+			eq, err := keysetEqPred(terms[j], cursor[j])
+			if err != nil {
+				return graphql.Predicate{}, false, err
+			}
+			parts = append(parts, eq)
+		}
+		parts = append(parts, after)
+		if len(parts) == 1 {
+			branches = append(branches, parts[0])
+		} else {
+			branches = append(branches, graphql.And(parts...))
+		}
+	}
+	switch len(branches) {
+	case 0:
+		return graphql.Predicate{}, false, nil
+	case 1:
+		return branches[0], true, nil
+	default:
+		return graphql.Or(branches...), true, nil
+	}
+}
+
+// keysetEqPred matches rows tying with the cursor on one term.
+func keysetEqPred(t OrderTerm, v *string) (graphql.Predicate, error) {
+	col := CamelCase(t.Column)
+	if v == nil {
+		return graphql.StringField{Col: col}.IsNull(true), nil
+	}
+	arg, err := ParseCursorValue(v, t.Kind)
+	if err != nil {
+		return graphql.Predicate{}, err
+	}
+	return gqlEq(col, t.Kind, arg)
+}
+
+// keysetAfterPred matches rows sorting strictly after the cursor on one term.
+// ok=false when no row can: an ASC NULL already sorts last.
+func keysetAfterPred(t OrderTerm, v *string) (graphql.Predicate, bool, error) {
+	col := CamelCase(t.Column)
+	f := graphql.StringField{Col: col}
+	if v == nil {
+		if t.Desc {
+			return f.IsNull(false), true, nil // DESC sorts NULLs first
+		}
+		return graphql.Predicate{}, false, nil
+	}
+	arg, err := ParseCursorValue(v, t.Kind)
+	if err != nil {
+		return graphql.Predicate{}, false, err
+	}
+	if t.Desc {
+		return graphql.After(f.Desc(), arg), true, nil
+	}
+	if t.NotNull {
+		return graphql.After(f.Asc(), arg), true, nil
+	}
+	// ASC sorts NULLs last, so they fall after every non-null value.
+	return graphql.Or(graphql.After(f.Asc(), arg), f.IsNull(true)), true, nil
+}
+
+// gqlEq renders an equality on a cursor value. Unlike the ordering comparisons —
+// which graphql.After takes as any — equality is only exposed per column type,
+// so the kind selects the typed field handle and the Go type its value takes.
+func gqlEq(col string, kind Kind, arg any) (graphql.Predicate, error) {
+	switch kind {
+	case KindInt:
+		v, ok := arg.(int64)
+		if !ok {
+			return graphql.Predicate{}, fmt.Errorf("%w: page token value for %q is not an integer", ErrInvalid, col)
+		}
+		return graphql.Int64Field{Col: col}.Eq(graphql.Int64(v)), nil
+	case KindFloat:
+		v, ok := arg.(float64)
+		if !ok {
+			return graphql.Predicate{}, fmt.Errorf("%w: page token value for %q is not a number", ErrInvalid, col)
+		}
+		return graphql.FloatField{Col: col}.Eq(v), nil
+	case KindBool:
+		v, ok := arg.(bool)
+		if !ok {
+			return graphql.Predicate{}, fmt.Errorf("%w: page token value for %q is not a boolean", ErrInvalid, col)
+		}
+		return graphql.BoolField{Col: col}.Eq(v), nil
+	case KindDate, KindTimestamp:
+		// Instants cross the wire in the same textual form they were parsed from,
+		// which is what the GraphQL scalar takes.
+		v, ok := arg.(time.Time)
+		if !ok {
+			return graphql.Predicate{}, fmt.Errorf("%w: page token value for %q is not a timestamp", ErrInvalid, col)
+		}
+		if kind == KindDate {
+			return graphql.StringField{Col: col}.Eq(v.Format("2006-01-02")), nil
+		}
+		return graphql.StringField{Col: col}.Eq(v.Format(time.RFC3339Nano)), nil
+	default:
+		v, ok := arg.(string)
+		if !ok {
+			return graphql.Predicate{}, fmt.Errorf("%w: page token value for %q is not a string", ErrInvalid, col)
+		}
+		return graphql.StringField{Col: col}.Eq(v), nil
+	}
+}
+
+// GraphQLColumn resolves the physical column a response field holds. Hasura names
+// its fields in camelCase, which is the form the JSON tag carries.
+func GraphQLColumn(f reflect.StructField) string {
+	name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+	return name
 }
 
 // List runs the paginated list through the engine's query handler: it builds
@@ -134,25 +292,40 @@ func (e *HasuraEngine[M]) OrderTerms(orderBy string) ([]graphql.OrderTerm, error
 // next-page token. Invalid filter/order input is rejected with ErrInvalid
 // before any query runs.
 func (e *HasuraEngine[M]) List(ctx context.Context, in ListInput) ([]M, string, error) {
-	order, err := e.OrderTerms(in.OrderBy)
+	terms, err := OrderTerms(e.spec, in.OrderBy)
 	if err != nil {
 		e.observer.Debug("rejected order_by", map[string]any{"table": e.spec.Table, "order_by": in.OrderBy, "error": err.Error()})
 		return nil, "", err
 	}
+	order := gqlOrderTerms(terms)
 	where, hasWhere, err := e.Predicate(in.Filter)
 	if err != nil {
 		e.observer.Debug("rejected filter", map[string]any{"table": e.spec.Table, "error": err.Error()})
 		return nil, "", err
 	}
 
-	preds := make([]graphql.Predicate, 0, len(e.scope)+1)
+	preds := make([]graphql.Predicate, 0, len(e.scope)+2)
 	preds = append(preds, e.scope...)
 	if hasWhere {
 		preds = append(preds, where)
 	}
 
-	limit, offset := PageBounds(in)
-	req := (&graphql.ListRequest{}).Limit(limit + 1).Offset(offset)
+	cursor, err := DecodeCursor(terms, in.PageToken)
+	if err != nil {
+		e.observer.Debug("rejected page_token", map[string]any{"table": e.spec.Table, "error": err.Error()})
+		return nil, "", err
+	}
+	seek, hasSeek, err := keysetPredicate(terms, cursor)
+	if err != nil {
+		e.observer.Debug("rejected page_token", map[string]any{"table": e.spec.Table, "error": err.Error()})
+		return nil, "", err
+	}
+	if hasSeek {
+		preds = append(preds, seek)
+	}
+
+	limit := PageLimit(in)
+	req := (&graphql.ListRequest{}).Limit(limit + 1)
 	if len(order) > 0 {
 		req = req.OrderBy(order...)
 	}
@@ -173,8 +346,7 @@ func (e *HasuraEngine[M]) List(ctx context.Context, in ListInput) ([]M, string, 
 	if err != nil {
 		return nil, "", err
 	}
-	page, next := NextToken(rows, limit, offset)
-	return page, next, nil
+	return NextPage(rows, limit, terms, CamelCase, GraphQLColumn)
 }
 
 // gqlCondition translates one spec-listed condition.

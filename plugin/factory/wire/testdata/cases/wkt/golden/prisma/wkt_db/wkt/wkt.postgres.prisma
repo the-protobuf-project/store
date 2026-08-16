@@ -62,6 +62,8 @@ model Sink {
   /// map → JSONB.
   attributes Json? @map("attributes")
 
+  /// GIN index: tag containment (@>) cannot use a B-tree.
+  @@index([tags], type: Gin)
   /// Maps the model to the "sinks" table in the database.
   @@map("sinks")
   /// Maps the model to the "kitchen" schema in the database.

@@ -49,7 +49,7 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 		for _, s := range db.Schemas {
 			path := fmt.Sprintf("%s/%s.postgres.sql", db.Name, s.Name)
 			f := p.NewGeneratedFile(path, "")
-			if err := templates.Render(tmpl, f, "schema.sql.tpl", schemaView(db, s, typeOf)); err != nil {
+			if err := templates.Render(tmpl, f, "schema.sql.tpl", schemaView(db, s, typeOf, fx)); err != nil {
 				return fmt.Errorf("sql: %s: %w", path, err)
 			}
 		}
@@ -57,7 +57,7 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 		// in one transaction (foreign keys deferred to ALTER statements).
 		migratePath := db.Name + "/migrate.sql"
 		mf := p.NewGeneratedFile(migratePath, "")
-		if err := templates.Render(tmpl, mf, "migrate.sql.tpl", migrateView(db, typeOf)); err != nil {
+		if err := templates.Render(tmpl, mf, "migrate.sql.tpl", migrateView(db, typeOf, fx)); err != nil {
 			return fmt.Errorf("sql: %s: %w", migratePath, err)
 		}
 		rf := p.NewGeneratedFile(db.Name+"/README.md", "")

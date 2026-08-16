@@ -37,7 +37,7 @@ type Venue struct {
 	// Resource name; the AIP identifier.
 	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
 	// Human-friendly name; opted into the bareword free-text search.
-	DisplayName string `gorm:"column:display_name;not null" json:"display_name" validate:"required"`
+	DisplayName string `gorm:"column:display_name;not null;index:idx_venues_display_name_trgm,type:gin,expression:display_name gin_trgm_ops" json:"display_name" validate:"required"`
 	// The owning operator: a resource reference filters as an identity match.
 	OperatorID string    `gorm:"column:operator;not null;index:idx_venues_operator" json:"operator" validate:"required"`
 	Operator   *Operator `gorm:"foreignKey:OperatorID" json:"operator_rel,omitempty"`
@@ -50,7 +50,7 @@ type Venue struct {
 	// Date the venue's licence expires: the renewal-reminder bound filter.
 	LicenceExpiry *time.Time `gorm:"column:licence_expiry;type:date" json:"licence_expiry,omitempty"`
 	// Arbitrary tags: `:` containment.
-	Tags pq.StringArray `gorm:"column:tags;type:text[]" json:"tags,omitempty"`
+	Tags pq.StringArray `gorm:"column:tags;type:text[];index:idx_venues_tags_gin,type:gin" json:"tags,omitempty"`
 	// An internal code, deliberately unfilterable but still sortable.
 	InternalCode *string `gorm:"column:internal_code" json:"internal_code,omitempty"`
 	// A per-row nonce, filterable but deliberately unsortable.
@@ -70,7 +70,7 @@ type Operator struct {
 	// Resource name; the AIP identifier.
 	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
 	// Display name, searchable.
-	DisplayName string `gorm:"column:display_name;not null" json:"display_name" validate:"required"`
+	DisplayName string `gorm:"column:display_name;not null;index:idx_operators_display_name_trgm,type:gin,expression:display_name gin_trgm_ops" json:"display_name" validate:"required"`
 	// Back-relation: Venue records that reference this via operator.
 	Venues []Venue `gorm:"foreignKey:OperatorID" json:"venues,omitempty"`
 }

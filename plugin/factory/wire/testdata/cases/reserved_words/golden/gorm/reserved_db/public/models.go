@@ -25,16 +25,18 @@ const (
 	StateClosed State = "CLOSED"
 )
 
-// Account is forced onto the reserved table name "user" via a table override, with reserved-word columns and a composite UNIQUE index over them.
+// Account is forced onto the reserved table name "user" via a table override, with reserved-word columns, a composite UNIQUE index over them, and column-level index requests both covered and uncovered by that composite.
 type Account struct {
 	// Unique identifier for the record.
 	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
 	// name: IDENTIFIER → PRIMARY KEY.
 	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
-	// order is a reserved word; also carries a single-column index.
-	Order *string `gorm:"column:order;index;uniqueIndex:idx_user_order_select,priority:1" json:"order,omitempty"`
+	// order is a reserved word. Its single-column index request is redundant — order already leads the composite UNIQUE above, whose B-tree serves the same single-column lookups — so no separate index is emitted for it.
+	Order *string `gorm:"column:order;uniqueIndex:idx_user_order_select,priority:1" json:"order,omitempty"`
 	// select is a reserved word.
 	Select *string `gorm:"column:select;uniqueIndex:idx_user_order_select,priority:2" json:"select,omitempty"`
+	// grant is a reserved word carrying a single-column index no composite covers, so one is emitted — with both the column and the generated index name quoted.
+	Grant *string `gorm:"column:grant;index:idx_user_grant" json:"grant,omitempty"`
 	// state exercises a quoted, schema-qualified enum type reference.
 	State *State `gorm:"column:state;check:chk_user_state,state IN ('ACTIVE','CLOSED')" json:"state,omitempty"`
 }

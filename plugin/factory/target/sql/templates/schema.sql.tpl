@@ -1,4 +1,11 @@
 {{.Header}}
+{{- if .Extensions}}
+
+-- Extensions (operator classes the search indexes below are built with).
+-- Database-wide, not schema-scoped: creating one twice is a no-op.
+{{range .Extensions}}CREATE EXTENSION IF NOT EXISTS "{{.}}";
+{{end}}
+{{- end}}
 
 CREATE SCHEMA IF NOT EXISTS {{.SchemaQ}};
 {{range .Enums}}

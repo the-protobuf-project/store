@@ -71,7 +71,7 @@ model OrderOutbox {
 
   /// Composite index on [published_at, created_at].
   @@index([publishedAt, createdAt])
-  /// Composite index on [aggregate_id].
+  /// Index on [aggregate_id].
   @@index([aggregateID])
   /// Maps the model to the "orders_outbox" table in the database.
   @@map("orders_outbox")
