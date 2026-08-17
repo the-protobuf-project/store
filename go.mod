@@ -5,7 +5,7 @@ go 1.26.4
 require (
 	github.com/the-protobuf-project/protokit v1.2.1
 	google.golang.org/genproto/googleapis/api v0.0.0-20260720211330-0afa2a65878a
-	google.golang.org/protobuf v1.36.11
+	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 )
 
