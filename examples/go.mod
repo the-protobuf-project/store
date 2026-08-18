@@ -7,8 +7,8 @@ go 1.26.4
 replace github.com/the-protobuf-project/store => ../
 
 require (
-	github.com/the-protobuf-project/opentelementry/opentelementry-go v0.0.0-20260722091843-d33763c88e10
 	github.com/the-protobuf-project/runtime-go/network v0.0.0-20260811065629-38bfe6784069
+	github.com/the-protobuf-project/telemetry/telemetry-go v0.0.0-20260817061725-884f94d7858d
 	gorm.io/gorm v1.31.2
 )
 

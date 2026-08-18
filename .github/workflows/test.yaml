@@ -20,18 +20,18 @@ jobs:
           path: store
 
       # store/go.mod has local `replace` directives for
-      # opentelementry-go (telemetry.v1's Go stubs, pending a BSR/module
+      # telemetry-go (telemetry.v1's Go stubs, pending a BSR/module
       # publish), runtime-go/telemetry (the Meter contract generated code
       # binds to, not published yet either), and protokit (whose removal of
       # protokit.v1 — the change that moved entity.v1 here — is unreleased) —
       # all point at ../<repo> relative to store, so CI checks them out as true
       # siblings, matching local development. Drop each checkout (and go.mod's
       # replace) as the corresponding module is published for real.
-      - name: Checkout opentelementry (for the opentelementry-go replace)
+      - name: Checkout telemetry (for the telemetry-go replace)
         uses: actions/checkout@v7
         with:
-          repository: the-protobuf-project/opentelementry
-          path: opentelementry
+          repository: the-protobuf-project/telemetry
+          path: telemetry
 
       - name: Checkout runtime-go (for the runtime-go/telemetry replace)
         uses: actions/checkout@v7
@@ -72,11 +72,11 @@ jobs:
         with:
           path: store
 
-      - name: Checkout opentelementry (for the opentelementry-go replace)
+      - name: Checkout telemetry (for the telemetry-go replace)
         uses: actions/checkout@v7
         with:
-          repository: the-protobuf-project/opentelementry
-          path: opentelementry
+          repository: the-protobuf-project/telemetry
+          path: telemetry
 
       - name: Checkout runtime-go (for the runtime-go/telemetry replace)
         uses: actions/checkout@v7

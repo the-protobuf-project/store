@@ -21,7 +21,7 @@ func dbStores(db *schema.Database) bool { return db.Opt("stores") == "true" }
 // dbConverters reports whether to emit proto↔model converters per schema.
 func dbConverters(db *schema.Database) bool { return db.Opt("converters") == "true" }
 
-// dbTelemetry reports whether to fold first-party opentelementry
+// dbTelemetry reports whether to fold first-party telemetry
 // instrumentation into the generated output (instrumented stores, the
 // telemetry package, the filterx observer, Registry.Instrument).
 func dbTelemetry(db *schema.Database) bool { return telemetry.Enabled(db) }

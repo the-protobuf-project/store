@@ -38,7 +38,7 @@ type Reader struct {
 	cfg        *Config // store.yaml; read here only for its telemetry block
 	goModule   string  // Go import path of the output dir (gorm migration aggregator)
 	stores     bool    // gorm: also emit a typed CRUD store per resource
-	telemetry  bool    // gorm: fold first-party opentelementry instrumentation in
+	telemetry  bool    // gorm: fold first-party telemetry instrumentation in
 	converters bool    // gorm: also emit proto↔model converters per schema
 	filters    bool    // gorm: also emit AIP filter/order specs + the filterx engines
 

@@ -402,7 +402,7 @@ runs CRUD for any model — so one engine can drive every entity. Enabling `stor
 adds a `gorm.io/gorm` dependency to the models package.
 
 **Telemetry** (`telemetry` opt, **off by default**) folds first-party
-[opentelementry](https://github.com/the-protobuf-project/opentelementry)
+[telemetry](https://github.com/the-protobuf-project/telemetry)
 observability into the generated tree — spans, per-operation metrics, and
 trace-correlated logs — with no third-party otel library involved. Every
 generated store gains a `Telemetry gormx.Telemetry` field (nil is a no-op,
@@ -411,7 +411,7 @@ generated adapter once and every instrumented store, and the migration
 `Registry`, observe through it:
 
 ```go
-o, err := opentelementry.New().
+o, err := telemetry.New().
     WithService("bookstore-api", "1.0.0").
     WithOTLP("localhost", 4317).
     WithTracing().
@@ -434,7 +434,7 @@ Mark low-cardinality fields as span labels with
 the database operation itself (table, op, status, duration) by design —
 domain-level metrics belong to the application, not the ORM. It needs
 `go_module` (the adapter package lives alongside the aggregator) and adds the
-`github.com/the-protobuf-project/opentelementry/opentelementry-go` dependency.
+`github.com/the-protobuf-project/telemetry/telemetry-go` dependency.
 Tune the generated default — including metrics/logs-off — via
 [`store.yaml` `telemetry:`](#top-level-keys).
 
@@ -532,8 +532,8 @@ Every engine is tunable through its chainable options: `Override` installs a
 custom handler for one filter field (the escape hatch for derived predicates
 the schema can't express), and `Observe` plugs an `Observer` in for query spans
 and rejected-input debug events. The `telemetry` opt additionally emits a
-ready-made [opentelementry](https://github.com/the-protobuf-project/opentelementry)
-observer adapter (`filterx.OpentelementryObserver`). The Hasura engine adds a
+ready-made [telemetry](https://github.com/the-protobuf-project/telemetry)
+observer adapter (`filterx.TelemetryObserver`). The Hasura engine adds a
 dependency on `github.com/the-protobuf-project/runtime-go` (its `graphql`
 package).
 
@@ -769,7 +769,7 @@ string state = 5 [(telemetry.v1.telemetry_field) = { label: true, label_key: "bo
 
 | Field | Description |
 | --- | --- |
-| `label` | Include this field as a span attribute (an `opentelementry:"trace:<name>"` struct tag on the generated model field). Safe for any cardinality — spans absorb per-row values. |
+| `label` | Include this field as a span attribute (a `telemetry:"trace:<name>"` struct tag on the generated model field). Safe for any cardinality — spans absorb per-row values. |
 | `label_key` | Override the attribute name. Defaults to `<model_snake>.<column>`, e.g. `book.genre`. |
 
 ## Configuration — `store.yaml`
@@ -801,7 +801,7 @@ A complete config showing every key:
 strip_version: true           # flatten the API version out of derived schema names
 dedupe_schema_table: true     # strip a redundant schema word from stuttering table names
 
-# gorm first-party opentelementry instrumentation (gorm target; see the telemetry plugin opt)
+# gorm first-party telemetry instrumentation (gorm target; see the telemetry plugin opt)
 telemetry:
   enabled: true                # override the telemetry opt's master switch
   metrics: false                # spans + logs only — drop the per-operation ops counter/histogram
@@ -826,7 +826,7 @@ datasources:
 | `datasources` | list | Ordered list of [match rules](#datasource-rules). The **first** rule whose `match` matches a package wins. |
 | `strip_version` | bool | Drop a trailing API version from derived schema names — `bookstore.v1` → schema `bookstore` instead of `bookstore_v1`. Applies to resource-type-derived and config-derived schema names, **never** to an explicit `(entity.v1.datasource).schema` annotation. A per-rule `strip_version` overrides this default. |
 | `dedupe_schema_table` | bool | Rename a table whose name would stutter with its schema in a schema-qualified identifier (`booking` schema + `bookings` table → `bookingBookings` in tools that join schema+table, e.g. Hasura). The redundant leading schema word is stripped; for the schema's primary table — where stripping leaves nothing — the table is renamed to a generic word (`resource`, then `entity`, …). Only the generated table name changes; proto/model names are untouched. |
-| `telemetry` | map | **gorm only.** Tune the first-party opentelementry instrumentation (see the [`telemetry` plugin opt](#plugin-options)). `enabled` (bool) overrides the opt's master switch. `metrics` (bool, default `true`) — set `false` to drop the per-operation ops counter/duration histogram tree-wide; narrow further per table with [`(telemetry.v1.telemetry).metrics`](#telemetryv1telemetry--message-level). `logs` (bool, default `true`) — set `false` to drop the telemetry adapter's trace-correlated error logging. |
+| `telemetry` | map | **gorm only.** Tune the first-party telemetry instrumentation (see the [`telemetry` plugin opt](#plugin-options)). `enabled` (bool) overrides the opt's master switch. `metrics` (bool, default `true`) — set `false` to drop the per-operation ops counter/duration histogram tree-wide; narrow further per table with [`(telemetry.v1.telemetry).metrics`](#telemetryv1telemetry--message-level). `logs` (bool, default `true`) — set `false` to drop the telemetry adapter's trace-correlated error logging. |
 | `graphql` | map | Configures the [GraphQL source](#graphql-client-sdk): `endpoint` **xor** `schema` (a cached GraphQL SDL `.graphql` file), `admin_secret` (`env:VAR` or literal), `headers` (`Key: Value` list), `dialect` (default `hasura`), `max_depth`, `scalars` (`Name=GoType` list). Read by the `target=graphql` plugin entry. |
 | `generate` | list | Per-target settings, keyed by `target`: `go_module`, `package`, `runtime_module`, `dump_schema` for the `graphql` target; the gorm knobs are set as plugin opts instead. buf owns each entry's output dir (`out:`), so it isn't set here. |
 
@@ -911,9 +911,9 @@ Passed via `opt:` in `buf.gen.yaml`.
 | `target` | What to emit: `prisma` \| `gorm` \| `sql` \| `graphql`. Required. (`graphql` reads its endpoint from `store.yaml`'s [`graphql`](#top-level-keys) block — see [GraphQL client SDK](#graphql-client-sdk).) |
 | `go_module` | **gorm only.** Go import path of the output directory (e.g. `github.com/me/gen`). Enables the `migrate.go` factory registry, whose package imports each per-schema models package. Omit it and the per-schema model packages still generate, just without the aggregator. |
 | `stores` | **gorm only.** Also emit a typed CRUD store per resource — one `<model>_store.go` file each (see [GORM stores](#gorm-stores-and-tracing)). Off by default; turning it on adds a `gorm.io/gorm` dependency to each models package. |
-| `filters` | **gorm only.** Emit AIP-160 filter / AIP-132 order_by specs per schema (`filters.go`) plus the shared `filterx` engine package serving both **SQL (GORM)** and **Hasura DDN GraphQL** (see [filters and list engines](#aip-160-filters-and-list-engines-sql--hasura)). Off by default; requires `go_module`. The Hasura engine adds a `github.com/the-protobuf-project/runtime-go` dependency. With `telemetry`, also emits an [opentelementry](https://github.com/the-protobuf-project/opentelementry) `Observer` adapter (`filterx.OpentelementryObserver`) for the list engines' spans and debug events. |
+| `filters` | **gorm only.** Emit AIP-160 filter / AIP-132 order_by specs per schema (`filters.go`) plus the shared `filterx` engine package serving both **SQL (GORM)** and **Hasura DDN GraphQL** (see [filters and list engines](#aip-160-filters-and-list-engines-sql--hasura)). Off by default; requires `go_module`. The Hasura engine adds a `github.com/the-protobuf-project/runtime-go` dependency. With `telemetry`, also emits a [telemetry](https://github.com/the-protobuf-project/telemetry) `Observer` adapter (`filterx.TelemetryObserver`) for the list engines' spans and debug events. |
 | `converters` | **gorm only.** Emit `protobuf.go` proto ↔ model converters per schema — `<Model>ToProto` / `<Model>FromProto` plus enum value mappers (see [converters](#proto--model-converters)). Off by default. |
-| `telemetry` | **gorm only.** Fold first-party [opentelementry](https://github.com/the-protobuf-project/opentelementry) instrumentation into the generated output — instrumented stores (with `stores`), a `telemetry` adapter/plugin package, a `filterx` observer (with `filters`), and `Registry.Instrument` (see [Telemetry](#gorm-stores-and-tracing)). **Off by default**; takes effect with `go_module`, and adds the `github.com/the-protobuf-project/opentelementry/opentelementry-go` dependency. Tune it further via `store.yaml` `telemetry:` and `telemetry.v1`'s `(telemetry.v1.telemetry)`/`(telemetry.v1.telemetry_field)` annotations. |
+| `telemetry` | **gorm only.** Fold first-party [telemetry](https://github.com/the-protobuf-project/telemetry) instrumentation into the generated output — instrumented stores (with `stores`), a `telemetry` adapter/plugin package, a `filterx` observer (with `filters`), and `Registry.Instrument` (see [Telemetry](#gorm-stores-and-tracing)). **Off by default**; takes effect with `go_module`, and adds the `github.com/the-protobuf-project/telemetry/telemetry-go` dependency. Tune it further via `store.yaml` `telemetry:` and `telemetry.v1`'s `(telemetry.v1.telemetry)`/`(telemetry.v1.telemetry_field)` annotations. |
 | `strict` | Per-rule severity for schema problems. `""` (default) warns on everything; `true` makes every rule a hard error; a spec like `ref:error,collision:warn,index:error,lint:warn` sets severity per rule. Rules: **ref** (unresolved/dropped references), **collision** (global name qualification), **index** (index names an unknown column), **lint** (validate-on-generate advisories). |
 | `config` | Path to a [`store.yaml`](#configuration--ormyaml) layout config. |
 | `M<proto>=<import>` | Go import-path mapping for a proto file, required when protos omit `option go_package`. |
@@ -922,10 +922,10 @@ Passed via `opt:` in `buf.gen.yaml`.
 > **Migration:** the `otel` and `pulse` opts, and `store.yaml`'s `otel:` block, are
 > removed — an unknown `opt:`/yaml key now fails the build loudly rather than
 > silently doing nothing. Replace them with `telemetry` and `store.yaml`
-> `telemetry:`. `Registry.Instrument` now takes an
-> `*opentelementry.Opentelementry` handle (`Instrument(db, o)`, not
+> `telemetry:`. `Registry.Instrument` now takes a
+> `*telemetry.Handle` (`Instrument(db, o)`, not
 > `Instrument(db, opts ...tracing.Option)`), and `filterx.PulseObserver` is now
-> `filterx.OpentelementryObserver`.
+> `filterx.TelemetryObserver`.
 
 ## Defaults applied automatically
 

@@ -26,10 +26,10 @@ github.com/rogpeppe/go-internal v1.14.1 h1:UQB4HGPB6osV0SQTLymcB4TgvyWu6ZyliaW0t
 github.com/rogpeppe/go-internal v1.14.1/go.mod h1:MaRKkUm5W0goXpeCfT7UZI6fk/L7L7so1lCWt35ZSgc=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
-github.com/the-protobuf-project/opentelementry/opentelementry-go v0.0.0-20260722091843-d33763c88e10 h1:PqeZRYLCJ//5NBcSUT/poT4Y6Ext2Jugz9z59osU8cc=
-github.com/the-protobuf-project/opentelementry/opentelementry-go v0.0.0-20260722091843-d33763c88e10/go.mod h1:3VoF0Qu2GrHnCz+nNNhupG5iDp1rYW/55nV9Ahw8fbw=
 github.com/the-protobuf-project/protokit v1.2.1 h1:iak7iZZzYg+lYVdH7ZAO4kKGwz3ZX/0s+JK6Ykah4/A=
 github.com/the-protobuf-project/protokit v1.2.1/go.mod h1:HODRJtLQhT39oud+Hc7hIxK4PQlhaJ6y8qU11dBpPn4=
+github.com/the-protobuf-project/telemetry/telemetry-go v0.0.0-20260817061725-884f94d7858d h1:pOgLDzcsu3zr5g8Vm/5Yt93/NXddKLR8+ZoGaAfLJeY=
+github.com/the-protobuf-project/telemetry/telemetry-go v0.0.0-20260817061725-884f94d7858d/go.mod h1:wr7SUpMA9nd5dvI2GC0l3IaqX8CF7I8uNN+NLhLwIM4=
 github.com/vektah/gqlparser/v2 v2.5.36 h1:CN9mKVHgMkc+XftdOWIhb4HEL8wKSYkFAqhf8booa7s=
 github.com/vektah/gqlparser/v2 v2.5.36/go.mod h1:cAJ9qwVgPaUkWv6Gn8vn0mqOE0Ui5Pn56wNy5396XWo=
 go.yaml.in/yaml/v3 v3.0.4 h1:tfq32ie2Jv2UxXFdLJdh3jXuOzWiL1fo0bu/FbuKpbc=

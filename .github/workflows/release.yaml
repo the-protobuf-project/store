@@ -18,18 +18,18 @@ jobs:
           path: store
           fetch-depth: 0
 
-      # go.mod has local `replace` directives for opentelementry-go
+      # go.mod has local `replace` directives for telemetry-go
       # (telemetry.v1's Go stubs) and runtime-go/telemetry (the Meter
       # contract generated code binds to) — neither published yet, both
       # resolved via ../<repo> relative to store. goreleaser's before-hooks run
       # `go mod tidy`/`go test ./...`, so these need to be true siblings here
       # too, matching local development. Drop both checkouts (and the two
       # go.mod replaces) once each is published for real.
-      - name: Checkout opentelementry (for the opentelementry-go replace)
+      - name: Checkout telemetry (for the telemetry-go replace)
         uses: actions/checkout@v7
         with:
-          repository: the-protobuf-project/opentelementry
-          path: opentelementry
+          repository: the-protobuf-project/telemetry
+          path: telemetry
 
       - name: Checkout runtime-go (for the runtime-go/telemetry replace)
         uses: actions/checkout@v7

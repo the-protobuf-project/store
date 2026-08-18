@@ -63,7 +63,7 @@ var protokitVersion = sync.OnceValue(func() string { return moduleVersion(protok
 // prefix ("//" for Go, Prisma and TypeScript; "--" for SQL).
 //
 // runtimeModules names the modules the *generated* code imports — gorm.io/gorm
-// for the stores, the opentelementry SDK for the telemetry adapter. Their
+// for the stores, the telemetry SDK for the telemetry adapter. Their
 // versions are deliberately absent: the consumer's go.mod resolves those, not
 // this plugin, and printing the version this binary happened to build against
 // would be a plausible-looking lie. Omit the argument for output with no runtime

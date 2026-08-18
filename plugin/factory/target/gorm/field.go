@@ -43,7 +43,7 @@ func goType(col *schema.Column, typeOf types.TypeOf) string {
 // index fragments this column participates in (composite and synthesized FK
 // indexes) and, for an enum column, a CHECK constraint — so GORM AutoMigrate
 // reproduces the same indexes and enum value integrity the SQL target emits.
-// telemetryTag, when non-empty, is the pre-rendered opentelementry tag the SDK
+// telemetryTag, when non-empty, is the pre-rendered telemetry tag the SDK
 // reflects over (span attributes and value metrics).
 func structTag(col *schema.Column, extra []string, telemetryTag string, typeOf types.TypeOf) string {
 	gormParts := []string{"column:" + col.Name}

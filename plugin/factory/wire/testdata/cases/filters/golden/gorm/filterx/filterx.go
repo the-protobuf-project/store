@@ -630,7 +630,7 @@ func NextPage[M any](rows []M, limit int, terms []OrderTerm, keyOf ColumnKey, na
 // Observer receives the engines' trace spans and debug events; wire one with
 // the engines' Observe option (engines observe nothing by default). Adapt your
 // telemetry runtime to this interface — with the telemetry opt, a ready-made
-// opentelementry adapter (OpentelementryObserver) is generated in this package.
+// telemetry adapter (TelemetryObserver) is generated in this package.
 type Observer interface {
 	// Span wraps one engine operation (e.g. a list fetch) in a trace span.
 	Span(ctx context.Context, name string, fn func(context.Context) error) error

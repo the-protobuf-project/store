@@ -13,7 +13,6 @@ import (
 
 	"gorm.io/gorm"
 {{- if .Telemetry}}
-	"{{.OpentelementryImport}}"
 	"{{.TelemetryImport}}"
 {{- end}}
 )
@@ -110,12 +109,12 @@ var Default = New().Register(
 {{end}})
 {{- if .Telemetry}}
 
-// Instrument installs the generated first-party opentelementry GORM plugin on
+// Instrument installs the generated first-party telemetry GORM plugin on
 // db, so every query the application runs emits a span{{if .TelemetryMetrics}} and metric{{end}} through o.
 // Call it once at startup, after opening the connection and before serving
 // traffic:
 //
-//	o, err := opentelementry.New().WithService("api", "1.0.0").WithOTLP("localhost", 4317).WithTracing().Build()
+//	o, err := telemetry.New().WithService("api", "1.0.0").WithOTLP("localhost", 4317).WithTracing().Build()
 //	if err != nil {
 //		log.Fatal(err)
 //	}
@@ -123,7 +122,7 @@ var Default = New().Register(
 //	if err := {{.Package}}.Default.Instrument(db, o); err != nil {
 //		log.Fatal(err)
 //	}
-func (*Registry) Instrument(db *gorm.DB, o *opentelementry.Opentelementry) error {
+func (*Registry) Instrument(db *gorm.DB, o *telemetry.Handle) error {
 	return db.Use(telemetry.Plugin(o))
 }
 {{- end}}

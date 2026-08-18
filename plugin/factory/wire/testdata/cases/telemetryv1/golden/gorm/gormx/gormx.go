@@ -168,7 +168,7 @@ func quoteIdent(s string) string {
 // to the application, not the ORM; record those with your own metrics setup.
 type Telemetry interface {
 	// Span wraps one store operation in a trace span; data (the model on
-	// writes, nil elsewhere) carries `opentelementry:"trace:..."`-tagged
+	// writes, nil elsewhere) carries `telemetry:"trace:..."`-tagged
 	// fields the SDK lifts into span attributes.
 	Span(ctx context.Context, name string, data any, fn func(context.Context) error) error
 	// RecordOp records one completed operation: an ops counter + duration
@@ -199,6 +199,6 @@ func OrNop(t Telemetry) Telemetry {
 // the struct tags drive the SDK's metric registration (names are
 // service-prefixed by the SDK at record time).
 type OpMetric struct {
-	Ops        int64   `opentelementry:"metric:counter:orm.store.ops"`
-	DurationMS float64 `opentelementry:"metric:histogram:orm.store.duration_ms"`
+	Ops        int64   `telemetry:"metric:counter:orm.store.ops"`
+	DurationMS float64 `telemetry:"metric:histogram:orm.store.duration_ms"`
 }

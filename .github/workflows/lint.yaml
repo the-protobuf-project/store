@@ -19,11 +19,11 @@ jobs:
         with:
           path: store
 
-      - name: Checkout opentelementry (for the opentelementry-go replace)
+      - name: Checkout telemetry (for the telemetry-go replace)
         uses: actions/checkout@v7
         with:
-          repository: the-protobuf-project/opentelementry
-          path: opentelementry
+          repository: the-protobuf-project/telemetry
+          path: telemetry
 
       - name: Checkout runtime-go (for the runtime-go/telemetry replace)
         uses: actions/checkout@v7

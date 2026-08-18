@@ -20,9 +20,9 @@ type Reading struct {
 	ID   string `gorm:"column:id;primaryKey;not null" json:"id"`
 	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
 	// Station labels every span for this table (default attribute name).
-	Station string `gorm:"column:station;not null" json:"station" validate:"required" opentelementry:"trace:reading.station"`
+	Station string `gorm:"column:station;not null" json:"station" validate:"required" telemetry:"trace:reading.station"`
 	// Condition carries an explicit attribute name override.
-	Condition    *string  `gorm:"column:condition" json:"condition,omitempty" opentelementry:"trace:weather.condition"`
+	Condition    *string  `gorm:"column:condition" json:"condition,omitempty" telemetry:"trace:weather.condition"`
 	TemperatureC *float64 `gorm:"column:temperature_c" json:"temperature_c,omitempty"`
 }
 

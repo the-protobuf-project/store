@@ -18,7 +18,7 @@ require (
 require (
 	github.com/agnivade/levenshtein v1.2.1 // indirect
 	github.com/bufbuild/protocompile v0.14.1 // indirect
-	github.com/the-protobuf-project/opentelementry/opentelementry-go v0.0.0-20260722091843-d33763c88e10
+	github.com/the-protobuf-project/telemetry/telemetry-go v0.0.0-20260817061725-884f94d7858d
 	github.com/vektah/gqlparser/v2 v2.5.36 // indirect
 	golang.org/x/sync v0.21.0 // indirect
 )

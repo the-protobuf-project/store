@@ -105,11 +105,11 @@ func main() {
 			"(<Model>ToProto / <Model>FromProto plus per-enum value mappers; introduces "+
 			"a dependency on the generated proto packages)")
 	telemetry := flags.Bool("telemetry", false,
-		"gorm target only: fold first-party opentelementry instrumentation into the "+
+		"gorm target only: fold first-party telemetry instrumentation into the "+
 			"generated output — instrumented stores (with stores), a telemetry "+
 			"adapter/plugin package, a filterx observer (with filters), and "+
 			"Registry.Instrument. Requires go_module; generated consumers gain a "+
-			"github.com/the-protobuf-project/opentelementry/opentelementry-go dependency. "+
+			"github.com/the-protobuf-project/telemetry/telemetry-go dependency. "+
 			"store.yaml telemetry: and telemetry.v1's (telemetry.v1.telemetry) annotations tune it further")
 	filters := flags.Bool("filters", false,
 		"gorm target only: also generate AIP-160 filter / AIP-132 order_by specs per "+

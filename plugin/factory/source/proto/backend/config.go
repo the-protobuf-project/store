@@ -31,7 +31,7 @@ type Config struct {
 	// store.yaml exactly as before, while the rules behind them are entity's.
 	entity.LayoutConfig `yaml:",inline"`
 
-	// Telemetry tunes the gorm target's first-party opentelementry
+	// Telemetry tunes the gorm target's first-party telemetry
 	// instrumentation (instrumented stores, the telemetry package, the
 	// filterx observer, Registry.Instrument). Nil leaves the telemetry plugin
 	// opt in charge. Replaces the removed `otel:` block.

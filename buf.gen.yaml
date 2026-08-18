@@ -16,7 +16,7 @@ version: v2
 # what keeps it clear of gorm, prisma, and graphql.
 #
 # telemetry.v1's Go stubs are NOT regenerated from here — that standalone module
-# now lives in the sibling opentelementry-go repo, and its stubs are generated
+# now lives in the sibling telemetry-go repo, and its stubs are generated
 # separately over there (see telemetrypbv1). store only regenerates its own store.v1
 # stubs, which reference telemetry.v1 types via the Go import path, not codegen.
 #
@@ -27,10 +27,10 @@ version: v2
 #
 # managed/override below works around a stale go_package in the sibling repo's
 # telemetry/v1/*.proto files: they currently declare
-#   github.com/the-protobuf-project/opentelementry-go/protobuf/telemetry/v1/telemetrypbv1
-# which predates that module's nesting under opentelementry/opentelementry-go and doesn't
+#   github.com/the-protobuf-project/telemetry-go/protobuf/telemetry/v1/telemetrypbv1
+# which predates that module's nesting under telemetry/telemetry-go and doesn't
 # match its real Go import path (confirmed via `go list` in that repo):
-#   github.com/the-protobuf-project/opentelementry/opentelementry-go/protobuf/telemetry/v1/telemetrypbv1
+#   github.com/the-protobuf-project/telemetry/telemetry-go/protobuf/telemetry/v1/telemetrypbv1
 # Without this override, annotations.pb.go's generated import for
 # the telemetry reader's TelemetryOptions/TelemetryFieldOptions types
 # would point at a Go package that doesn't exist. This is a local, generation-time fix
@@ -43,13 +43,13 @@ managed:
   override:
     - file_option: go_package
       path: telemetry/v1/annotations.proto
-      value: github.com/the-protobuf-project/opentelementry/opentelementry-go/protobuf/telemetry/v1/telemetrypbv1
+      value: github.com/the-protobuf-project/telemetry/telemetry-go/protobuf/telemetry/v1/telemetrypbv1
     - file_option: go_package
       path: telemetry/v1/tracing.proto
-      value: github.com/the-protobuf-project/opentelementry/opentelementry-go/protobuf/telemetry/v1/telemetrypbv1
+      value: github.com/the-protobuf-project/telemetry/telemetry-go/protobuf/telemetry/v1/telemetrypbv1
     - file_option: go_package
       path: telemetry/v1/metrics.proto
-      value: github.com/the-protobuf-project/opentelementry/opentelementry-go/protobuf/telemetry/v1/telemetrypbv1
+      value: github.com/the-protobuf-project/telemetry/telemetry-go/protobuf/telemetry/v1/telemetrypbv1
 
 inputs:
   # One directory now covers both vocabularies: protobuf/ is the root of the
