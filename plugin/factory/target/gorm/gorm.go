@@ -102,7 +102,7 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 			// Opt-in: AIP-160 filter / AIP-132 order_by specs per schema, plus the
 			// shared filterx package once for the whole tree (the backend-neutral
 			// core with the chainable Gorm and Hasura engines, and — with the
-			// telemetry opt — an opentelementry Observer adapter).
+			// telemetry opt — an telemetry Observer adapter).
 			if dbFilters(db) && len(s.Tables) > 0 {
 				if view := filtersView(db, s, pkg, fx); view != nil {
 					ff := p.NewGeneratedFile(fmt.Sprintf("%s/%s/filters.go", db.Name, pkg), "")
@@ -122,9 +122,9 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 							}
 						}
 						if dbTelemetry(db) {
-							pf := p.NewGeneratedFile(filterxPkg+"/opentelementry.go", "")
+							pf := p.NewGeneratedFile(filterxPkg+"/telemetry.go", "")
 							if err := telemetry.WriteFilterxObserver(pf, fv); err != nil {
-								return fmt.Errorf("gorm: %s/opentelementry.go: %w", filterxPkg, err)
+								return fmt.Errorf("gorm: %s/telemetry.go: %w", filterxPkg, err)
 							}
 						}
 						filterxEmitted = true
@@ -152,7 +152,7 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 		}
 		// The SDK adapter package, once per tree: the stores' gormx.Telemetry
 		// implementation and the SQL-level gorm plugin Registry.Instrument
-		// installs. The only generated code importing the opentelementry SDK.
+		// installs. The only generated code importing the telemetry SDK.
 		if dbTelemetry(db) && !telemetryEmitted {
 			tf := p.NewGeneratedFile(telemetry.AdapterPath, "")
 			hdr := provenance.Render("//", header.Info{
@@ -202,7 +202,7 @@ func writeReadme(p *protogen.Plugin, db *schema.Database, typeOf types.TypeOf) e
 	}
 	if dbTelemetry(db) {
 		outputs = append(outputs,
-			"`telemetry/telemetry.go` — the first-party opentelementry adapter: `New(o)` wraps an SDK handle as the `gormx.Telemetry` the stores observe through (`WithTelemetry(telemetry.New(o))`), and `Plugin(o)` is the SQL-level gorm plugin. Emitted with the `telemetry` opt; requires `github.com/the-protobuf-project/opentelementry/opentelementry-go`.",
+			"`telemetry/telemetry.go` — the first-party telemetry adapter: `New(o)` wraps an SDK handle as the `gormx.Telemetry` the stores observe through (`WithTelemetry(telemetry.New(o))`), and `Plugin(o)` is the SQL-level gorm plugin. Emitted with the `telemetry` opt; requires `github.com/the-protobuf-project/telemetry/telemetry-go`.",
 			"`Registry.Instrument(db, o)` in `migrate.go` — installs the generated telemetry gorm plugin so every query emits a span (and metric) through the SDK handle.",
 		)
 	}

@@ -22,7 +22,6 @@ import (
 	"github.com/the-protobuf-project/store/examples/generated/gorm/bookstore_db/bookstorev1"
 	"github.com/the-protobuf-project/store/examples/generated/gorm/bookstore_db/inventory"
 
-	"github.com/the-protobuf-project/opentelementry/opentelementry-go"
 	"github.com/the-protobuf-project/store/examples/generated/gorm/telemetry"
 	"gorm.io/gorm"
 )
@@ -98,12 +97,12 @@ var Default = New().Register(
 	&inventory.Shelf{},
 )
 
-// Instrument installs the generated first-party opentelementry GORM plugin on
+// Instrument installs the generated first-party telemetry GORM plugin on
 // db, so every query the application runs emits a span and metric through o.
 // Call it once at startup, after opening the connection and before serving
 // traffic:
 //
-//	o, err := opentelementry.New().WithService("api", "1.0.0").WithOTLP("localhost", 4317).WithTracing().Build()
+//	o, err := telemetry.Build().WithService("api", "1.0.0").WithOTLP("localhost", 4317).WithTracing().Build()
 //	if err != nil {
 //		log.Fatal(err)
 //	}
@@ -111,6 +110,6 @@ var Default = New().Register(
 //	if err := bookstoredb.Default.Instrument(db, o); err != nil {
 //		log.Fatal(err)
 //	}
-func (*Registry) Instrument(db *gorm.DB, o *opentelementry.Opentelementry) error {
+func (*Registry) Instrument(db *gorm.DB, o *telemetry.Handle) error {
 	return db.Use(telemetry.Plugin(o))
 }

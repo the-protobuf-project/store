@@ -20,8 +20,8 @@ import (
 // path without importing the telemetry package for a string.
 const telemetryPkg = telemetry.Package
 
-// opentelementryModule is the SDK the generated (never the plugin) code imports.
-const opentelementryModule = telemetry.Module
+// telemetryModule is the SDK the generated (never the plugin) code imports.
+const telemetryModule = telemetry.Module
 
 // tableTelemetry resolves one table's effective instrumentation.
 func tableTelemetry(tel telemetry.Set, db *schema.Database, s *schema.Schema, t *schema.Table) (enabled, metrics bool, spanPrefix string) {
@@ -29,7 +29,7 @@ func tableTelemetry(tel telemetry.Set, db *schema.Database, s *schema.Schema, t 
 	return r.Enabled, r.Metrics, r.SpanPrefix
 }
 
-// telemetryTag renders a column's opentelementry struct tag, or "" when the
+// telemetryTag renders a column's telemetry struct tag, or "" when the
 // table is not instrumented or the field is not labelled.
 func telemetryTag(tel telemetry.Set, enabled bool, t *schema.Table, col *schema.Column) string {
 	return tel.FieldTag(enabled, t, col)

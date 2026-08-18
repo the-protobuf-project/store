@@ -6,18 +6,17 @@
 // database: v1
 // package:  telemetry
 //
-// First-party opentelementry adapter: the stores' gormx.Telemetry and the SQL-level gorm plugin.
+// First-party telemetry adapter: the stores' gormx.Telemetry and the SQL-level gorm plugin.
 // annotations: entity.v1 (unknown), store.v1 (unknown)
 // engine:      protokit (unknown)
-// runtime:     github.com/the-protobuf-project/opentelementry/opentelementry-go
+// runtime:     github.com/the-protobuf-project/telemetry/telemetry-go
 //
 // store — https://github.com/the-protobuf-project/store
 
-// Package telemetry is the only generated package that imports the
-// opentelementry SDK: it adapts an *opentelementry.Opentelementry handle into
-// the store-level gormx.Telemetry seam and provides a SQL-level gorm plugin,
-// so an application wires observability once and every generated store and
-// query goes through it.
+// Package telemetry is the only generated package that imports the telemetry
+// SDK: it adapts a *Handle into the store-level gormx.Telemetry seam and
+// provides a SQL-level gorm plugin, so an application wires observability once
+// and every generated store and query goes through it.
 package telemetry
 
 import (
@@ -28,28 +27,36 @@ import (
 	"time"
 
 	"example.com/test/gen/gormx"
-	"github.com/the-protobuf-project/opentelementry/opentelementry-go"
+	"github.com/the-protobuf-project/telemetry/telemetry-go"
 	"gorm.io/gorm"
 )
 
+// Handle is the telemetry SDK handle this package adapts. It is an alias rather
+// than a wrapper so a caller passes the *telemetry.Telemetry it built straight
+// in, without importing the SDK alongside this package.
+type Handle = telemetry.Telemetry
+
+// Build returns the telemetry SDK's builder, re-exported so an application wires
+// observability through this package alone and never imports the SDK alongside
+// it — both are named telemetry, so importing both would collide.
+var Build = telemetry.New
+
 // New adapts o into the gormx.Telemetry every generated store observes
 // through (via WithTelemetry). A nil o is a no-op.
-func New(o *opentelementry.Opentelementry) gormx.Telemetry {
+func New(o *Handle) gormx.Telemetry {
 	if o == nil {
 		return gormx.NopTelemetry{}
 	}
 	return adapter{o: o}
 }
 
-type adapter struct {
-	o *opentelementry.Opentelementry
-}
+type adapter struct{ o *Handle }
 
 // Span wraps fn in a trace span; data (the model on writes, nil elsewhere)
-// carries the `opentelementry:"trace:..."`-tagged fields the SDK lifts into
+// carries the `telemetry:"trace:..."`-tagged fields the SDK lifts into
 // span attributes.
 func (a adapter) Span(ctx context.Context, name string, data any, fn func(context.Context) error) error {
-	return a.o.Tracing.Trace(ctx, name, data, func(ctx context.Context, _ *opentelementry.Span) error {
+	return a.o.Tracing.Trace(ctx, name, data, func(ctx context.Context, _ *telemetry.Span) error {
 		return fn(ctx)
 	})
 }
@@ -63,10 +70,10 @@ func (a adapter) RecordOp(ctx context.Context, table, op string, d time.Duration
 		status = "error"
 	}
 	_ = a.o.Metrics.Record(&gormx.OpMetric{Ops: 1, DurationMS: float64(d.Microseconds()) / 1000},
-		opentelementry.WithAttributes(
-			opentelementry.StringAttribute("table", table),
-			opentelementry.StringAttribute("op", op),
-			opentelementry.StringAttribute("status", status),
+		telemetry.WithAttributes(
+			telemetry.StringAttribute("table", table),
+			telemetry.StringAttribute("op", op),
+			telemetry.StringAttribute("status", status),
 		))
 	if err != nil && err != gorm.ErrRecordNotFound {
 		_ = a.o.Logger.WithContext(ctx).Error("store operation failed", map[string]any{
@@ -79,13 +86,11 @@ func (a adapter) RecordOp(ctx context.Context, table, op string, d time.Duration
 // for every query db.Use(Plugin(o)) runs, restoring the SQL-level visibility a
 // generic ORM plugin used to provide. A nil o is a no-op plugin. Wire it via
 // Registry.Instrument(db, o) or directly with db.Use(telemetry.Plugin(o)).
-func Plugin(o *opentelementry.Opentelementry) gorm.Plugin {
+func Plugin(o *Handle) gorm.Plugin {
 	return gormPlugin{o: o}
 }
 
-type gormPlugin struct {
-	o *opentelementry.Opentelementry
-}
+type gormPlugin struct{ o *Handle }
 
 func (gormPlugin) Name() string { return "telemetry" }
 
@@ -145,7 +150,7 @@ func (p gormPlugin) after() func(*gorm.DB) {
 		if !ok {
 			return // before never ran (e.g. a Session(SkipHooks) path)
 		}
-		span := v.(*opentelementry.Span)
+		span := v.(*telemetry.Span)
 		defer span.End()
 
 		if tx.Statement.Table != "" {
@@ -171,15 +176,15 @@ func (p gormPlugin) after() func(*gorm.DB) {
 			d = time.Since(t)
 		}
 		_ = p.o.Metrics.Record(&queryMetric{Queries: 1, DurationMS: float64(d.Microseconds()) / 1000},
-			opentelementry.WithAttributes(
-				opentelementry.StringAttribute("table", tx.Statement.Table),
-				opentelementry.StringAttribute("status", status),
+			telemetry.WithAttributes(
+				telemetry.StringAttribute("table", tx.Statement.Table),
+				telemetry.StringAttribute("status", status),
 			))
 	}
 }
 
 // queryMetric is the per-query measurement Plugin records.
 type queryMetric struct {
-	Queries    int64   `opentelementry:"metric:counter:orm.gorm.queries"`
-	DurationMS float64 `opentelementry:"metric:histogram:orm.gorm.query_duration_ms"`
+	Queries    int64   `telemetry:"metric:counter:orm.gorm.queries"`
+	DurationMS float64 `telemetry:"metric:histogram:orm.gorm.query_duration_ms"`
 }

@@ -26,10 +26,10 @@ version: v2
 # generates its own stubs, rather than importing this repository's Go packages.
 #
 # telemetry.v1 (import "telemetry/v1/*.proto") is no longer a local workspace path —
-# it's published as part of buf.build/the-protobuf-project/opentelementry (see deps:
+# it's published as part of buf.build/the-protobuf-project/telemetry (see deps:
 # below) and resolved like any other BSR dependency. The temporary
 # .telemetry-v1-workspace symlink workaround this repo used before that module was
-# published is gone; store/go.mod's `replace` for the Go-side opentelementry-go module
+# published is gone; store/go.mod's `replace` for the Go-side telemetry-go module
 # is unrelated to this and still applies until that module is published too.
 #
 # Only protobuf/ has a BSR name, so publish with:
@@ -47,7 +47,7 @@ modules:
 
 deps:
   - buf.build/googleapis/googleapis # google.api.resource, field_behavior, resource_reference
-  - buf.build/the-protobuf-project/opentelementry # telemetry.v1 (tracing/metrics annotations)
+  - buf.build/the-protobuf-project/telemetry # telemetry.v1 (tracing/metrics annotations)
 
 lint:
   use:

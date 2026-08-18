@@ -4,7 +4,7 @@ package telemetry
 // instrumented store observes through, and the filterx observer that reports
 // query-engine work.
 //
-// These are the only generated files that import the opentelementry SDK. Keeping
+// These are the only generated files that import the telemetry SDK. Keeping
 // their templates here rather than in the GORM target is what makes the eventual
 // protoc-gen-telemetry a `git mv` — the target asks for the files, it does not
 // know what is in them.
@@ -31,7 +31,7 @@ const AdapterPath = Package + "/" + Package + ".go"
 
 // AdapterNote is the banner note describing what the adapter is, so a caller
 // building the header states the same thing this package would.
-const AdapterNote = "First-party opentelementry adapter: the stores' gormx.Telemetry and the SQL-level gorm plugin."
+const AdapterNote = "First-party telemetry adapter: the stores' gormx.Telemetry and the SQL-level gorm plugin."
 
 // WriteAdapter renders the SDK adapter package for db into w.
 //
@@ -47,13 +47,13 @@ const AdapterNote = "First-party opentelementry adapter: the stores' gormx.Telem
 // the store-level gormx.Telemetry implementation or only the SQL-level plugin.
 func WriteAdapter(w io.Writer, db *schema.Database, header, goModule, gormxPkg string, stores bool) error {
 	return renderGo(w, "telemetry.go.tpl", map[string]any{
-		"Header":               header,
-		"Package":              Package,
-		"Stores":               stores,
-		"Metrics":              Metrics(db),
-		"Logs":                 Logs(db),
-		"OpentelementryImport": Module,
-		"GormxImport":          goModule + "/" + gormxPkg,
+		"Header":             header,
+		"Package":            Package,
+		"Stores":             stores,
+		"Metrics":            Metrics(db),
+		"Logs":               Logs(db),
+		"TelemetrySDKImport": Module,
+		"GormxImport":        goModule + "/" + gormxPkg,
 	})
 }
 

@@ -5,7 +5,7 @@ go 1.26.4
 require (
 	github.com/the-protobuf-project/protokit v1.2.1
 	google.golang.org/genproto/googleapis/api v0.0.0-20260720211330-0afa2a65878a
-	google.golang.org/protobuf v1.36.11
+	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -18,7 +18,7 @@ require (
 require (
 	github.com/agnivade/levenshtein v1.2.1 // indirect
 	github.com/bufbuild/protocompile v0.14.1 // indirect
-	github.com/the-protobuf-project/opentelementry/opentelementry-go v0.0.0-20260722091843-d33763c88e10
+	github.com/the-protobuf-project/telemetry/telemetry-go v0.0.0-20260817061725-884f94d7858d
 	github.com/vektah/gqlparser/v2 v2.5.36 // indirect
 	golang.org/x/sync v0.21.0 // indirect
 )

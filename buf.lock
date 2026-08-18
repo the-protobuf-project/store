@@ -4,6 +4,6 @@ deps:
   - name: buf.build/googleapis/googleapis
     commit: c17df5b2beca46928cc87d5656bd5343
     digest: b5:648a01e0170d4512dea7d564016165decd1ed6e34bef79fe54753e51ad7e27545709ad9157d7551270147d551155c595a2fb0bf5bb33b1c83040ddbce915c604
-  - name: buf.build/the-protobuf-project/opentelementry
-    commit: c51a17a53c2d493c8ddb2a562c98d357
-    digest: b5:5830ff96397e2c0aa0b7c90d56be3004fa9a442bda6b04a603d87d4df118a01d93db32016f718bf800f2a49acbb583f8cd25a303ec89170e81252ee6138fe968
+  - name: buf.build/the-protobuf-project/telemetry
+    commit: 4c408122dc3547e0b517464d5d949a8c
+    digest: b5:3fc41b256969fc494c12eff9ca0c99c61da6c31d4fa92738c4f8f7823ddf275731dd3abd6fe9d9045537e786930be5da18998deeb9624109cd3e92710698996c

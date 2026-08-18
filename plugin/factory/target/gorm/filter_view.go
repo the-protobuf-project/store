@@ -3,7 +3,7 @@ package gorm
 // filter_view.go prepares the template views for the filters feature: the
 // per-schema filters.go spec file and the once-per-tree filterx package
 // (backend-neutral core plus the chainable Gorm and Hasura engines, and — with
-// the telemetry opt — the opentelementry Observer adapter). The planning logic
+// the telemetry opt — the telemetry Observer adapter). The planning logic
 // lives in filterspec.go; the templates are presentation only.
 
 import (
@@ -52,7 +52,7 @@ func filtersView(db *schema.Database, s *schema.Schema, pkg string, fx facets.Se
 }
 
 // filterxView is the shared view for every once-per-tree filterx template
-// (core, gorm engine, hasura engine, opentelementry adapter — one package).
+// (core, gorm engine, hasura engine, telemetry adapter — one package).
 func filterxView(db *schema.Database) map[string]any {
 	return map[string]any{
 		"Header": provenance.Render("//", header.Info{
@@ -63,7 +63,7 @@ func filterxView(db *schema.Database) map[string]any {
 			Schema:        filterxPkg,
 			Notes:         []string{"Shared AIP-160 filter / AIP-132 order_by / paginated-list engines driven by the generated per-schema specs."},
 		}),
-		"GraphQLImport":        graphqlRuntimeModule,
-		"OpentelementryImport": opentelementryModule,
+		"GraphQLImport":      graphqlRuntimeModule,
+		"TelemetrySDKImport": telemetryModule,
 	}
 }

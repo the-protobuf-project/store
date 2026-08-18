@@ -23,7 +23,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
-	"github.com/the-protobuf-project/opentelementry/opentelementry-go/protobuf/telemetry/v1/telemetrypbv1"
+	"github.com/the-protobuf-project/telemetry/telemetry-go/protobuf/telemetry/v1/telemetrypbv1"
 )
 
 const (
@@ -33,7 +33,7 @@ const (
 
 	// Module is the first-party observability SDK the generated adapter imports.
 	// The plugin itself never imports it — only generated consumers do.
-	Module = "github.com/the-protobuf-project/opentelementry/opentelementry-go"
+	Module = "github.com/the-protobuf-project/telemetry/telemetry-go"
 
 	// Package is the name and output directory of the generated adapter, emitted
 	// at <go_module>/telemetry.
@@ -147,7 +147,7 @@ func (s Set) Table(db *schema.Database, sc *schema.Schema, t *schema.Table) Reso
 	return r
 }
 
-// FieldTag renders a column's opentelementry struct tag — a "trace:<name>"
+// FieldTag renders a column's telemetry struct tag — a "trace:<name>"
 // directive the SDK lifts into a span attribute on traced writes. Empty when the
 // table is not instrumented or the field is not labelled.
 func (s Set) FieldTag(enabled bool, t *schema.Table, col *schema.Column) string {
@@ -158,7 +158,7 @@ func (s Set) FieldTag(enabled bool, t *schema.Table, col *schema.Column) string 
 	if !o.GetLabel() {
 		return ""
 	}
-	return `opentelementry:"trace:` + attrName(t, col, o.GetLabelKey()) + `"`
+	return `telemetry:"trace:` + attrName(t, col, o.GetLabelKey()) + `"`
 }
 
 // attrName is the span-attribute name for a field: the explicit override, or
