@@ -25,6 +25,11 @@ import (
 // in, without importing the SDK alongside this package.
 type Handle = telemetry.Telemetry
 
+// Build returns the telemetry SDK's builder, re-exported so an application wires
+// observability through this package alone and never imports the SDK alongside
+// it — both are named telemetry, so importing both would collide.
+var Build = telemetry.New
+
 {{if .Stores}}
 // New adapts o into the gormx.Telemetry every generated store observes
 // through (via WithTelemetry). A nil o is a no-op.

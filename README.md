@@ -411,7 +411,10 @@ generated adapter once and every instrumented store, and the migration
 `Registry`, observe through it:
 
 ```go
-o, err := telemetry.New().
+// telemetry here is the generated adapter package, which re-exports the SDK's
+// builder as Build — so the application imports this one package, not the SDK
+// alongside it (both are named telemetry).
+o, err := telemetry.Build().
     WithService("bookstore-api", "1.0.0").
     WithOTLP("localhost", 4317).
     WithTracing().

@@ -102,7 +102,7 @@ var Default = New().Register(
 // Call it once at startup, after opening the connection and before serving
 // traffic:
 //
-//	o, err := telemetry.New().WithService("api", "1.0.0").WithOTLP("localhost", 4317).WithTracing().Build()
+//	o, err := telemetry.Build().WithService("api", "1.0.0").WithOTLP("localhost", 4317).WithTracing().Build()
 //	if err != nil {
 //		log.Fatal(err)
 //	}
