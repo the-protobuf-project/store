@@ -6,7 +6,7 @@ Generated from Protobuf by protoc-gen-store. Source of truth is the `.proto` fil
 
 | Models | Enums |
 | ---: | ---: |
-| 1 | 1 |
+| 2 | 2 |
 
 ## Entity relationships
 
@@ -14,6 +14,9 @@ Generated from Protobuf by protoc-gen-store. Source of truth is the `.proto` fil
 erDiagram
     direction LR
     Audio {
+        string id PK
+    }
+    Booking {
         string id PK
     }
 ```

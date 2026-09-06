@@ -14,6 +14,10 @@
 
 package oneofv1
 
+import (
+	"time"
+)
+
 // Discriminator for the input oneof of Audio.
 type AudioInputCase string
 
@@ -25,6 +29,17 @@ const (
 	AudioInputCaseUploadPath AudioInputCase = "UPLOAD_PATH"
 	// The live_pipeline_file_path member is set.
 	AudioInputCaseLivePipelineFilePath AudioInputCase = "LIVE_PIPELINE_FILE_PATH"
+)
+
+// Discriminator for the end_form oneof of Booking.
+type BookingEndFormCase string
+
+// BookingEndFormCase values as stored in the database.
+const (
+	// The end member is set.
+	BookingEndFormCaseEnd BookingEndFormCase = "END"
+	// The duration member is set.
+	BookingEndFormCaseDuration BookingEndFormCase = "DURATION"
 )
 
 // Audio exercises oneof integrity: the `input` oneof flattens to independent nullable columns, and store adds a generated input_case discriminator enum recording which member is set so the lost exclusivity invariant is observable.
@@ -46,3 +61,17 @@ type Audio struct {
 }
 
 func (*Audio) TableName() string { return "oneof_v1.audios" }
+
+// Booking pins the RFC 7953 shape: well-known types as oneof members. These have no struct field of their own — protoc-gen-go puts each behind a wrapper on the oneof's interface field — so the converters must emit `out.EndForm = &Booking_Duration{Duration: …}`, not `out.Duration = …`. The enum arm is here for the same reason: it is a value type, so it guards on the zero rather than on nil. Without converters emitted for this message the flat form compiles here and fails only in a consumer's tree.
+type Booking struct {
+	// Unique identifier for the record.
+	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	// Resource name; the AIP identifier.
+	Name     string     `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
+	End      *time.Time `gorm:"column:end;type:timestamptz" json:"end,omitempty"`
+	Duration *string    `gorm:"column:duration" json:"duration,omitempty"`
+	// Discriminator: which end_form oneof member is set (null = none).
+	EndFormCase *BookingEndFormCase `gorm:"column:end_form_case;check:chk_bookings_end_form_case,end_form_case IN ('END','DURATION')" json:"end_form_case,omitempty"`
+}
+
+func (*Booking) TableName() string { return "oneof_v1.bookings" }

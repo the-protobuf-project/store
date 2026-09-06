@@ -17,6 +17,9 @@ CREATE SCHEMA IF NOT EXISTS "oneof_v1";
 -- Discriminator for the input oneof of Audio.
 CREATE TYPE "oneof_v1"."audio_input_case" AS ENUM ('AUDIO_DATA', 'UPLOAD_PATH', 'LIVE_PIPELINE_FILE_PATH');
 
+-- Discriminator for the end_form oneof of Booking.
+CREATE TYPE "oneof_v1"."booking_end_form_case" AS ENUM ('END', 'DURATION');
+
 -- Audio exercises oneof integrity: the `input` oneof flattens to independent nullable columns, and store adds a generated input_case discriminator enum recording which member is set so the lost exclusivity invariant is observable.
 CREATE TABLE "oneof_v1"."audios" (
     -- Unique identifier for the record.
@@ -35,6 +38,18 @@ CREATE TABLE "oneof_v1"."audios" (
     "input_case"  "oneof_v1"."audio_input_case"
 );
 
+-- Booking pins the RFC 7953 shape: well-known types as oneof members. These have no struct field of their own — protoc-gen-go puts each behind a wrapper on the oneof's interface field — so the converters must emit `out.EndForm = &Booking_Duration{Duration: …}`, not `out.Duration = …`. The enum arm is here for the same reason: it is a value type, so it guards on the zero rather than on nil. Without converters emitted for this message the flat form compiles here and fails only in a consumer's tree.
+CREATE TABLE "oneof_v1"."bookings" (
+    -- Unique identifier for the record.
+    "id"  CHAR(26)  NOT NULL  PRIMARY KEY,
+    -- Resource name; the AIP identifier.
+    "name"  VARCHAR(255)  NOT NULL  UNIQUE,
+    "end"  TIMESTAMPTZ,
+    "duration"  INTERVAL,
+    -- Discriminator: which end_form oneof member is set (null = none).
+    "end_form_case"  "oneof_v1"."booking_end_form_case"
+);
+
 
 -- Column and table documentation, persisted to the catalog.
 COMMENT ON TABLE "oneof_v1"."audios" IS 'Audio exercises oneof integrity: the `input` oneof flattens to independent nullable columns, and store adds a generated input_case discriminator enum recording which member is set so the lost exclusivity invariant is observable.';
@@ -45,3 +60,7 @@ COMMENT ON COLUMN "oneof_v1"."audios"."upload_path" IS 'Path to a previously upl
 COMMENT ON COLUMN "oneof_v1"."audios"."live_pipeline_file_path" IS 'Path to a file produced by a live pipeline.';
 COMMENT ON COLUMN "oneof_v1"."audios"."sample_rate" IS 'sample_rate is a plain scalar outside the oneof.';
 COMMENT ON COLUMN "oneof_v1"."audios"."input_case" IS 'Discriminator: which input oneof member is set (null = none).';
+COMMENT ON TABLE "oneof_v1"."bookings" IS 'Booking pins the RFC 7953 shape: well-known types as oneof members. These have no struct field of their own — protoc-gen-go puts each behind a wrapper on the oneof''s interface field — so the converters must emit `out.EndForm = &Booking_Duration{Duration: …}`, not `out.Duration = …`. The enum arm is here for the same reason: it is a value type, so it guards on the zero rather than on nil. Without converters emitted for this message the flat form compiles here and fails only in a consumer''s tree.';
+COMMENT ON COLUMN "oneof_v1"."bookings"."id" IS 'Unique identifier for the record.';
+COMMENT ON COLUMN "oneof_v1"."bookings"."name" IS 'Resource name; the AIP identifier.';
+COMMENT ON COLUMN "oneof_v1"."bookings"."end_form_case" IS 'Discriminator: which end_form oneof member is set (null = none).';

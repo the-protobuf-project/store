@@ -90,4 +90,5 @@ func (*Registry) EnsureSchemas(db *gorm.DB) error {
 //	v1.Default.Register(&MyModel{})
 var Default = New().Register(
 	&oneofv1.Audio{},
+	&oneofv1.Booking{},
 )

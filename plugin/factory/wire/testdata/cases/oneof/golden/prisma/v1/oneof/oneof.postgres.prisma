@@ -29,6 +29,20 @@ enum AudioInputCase {
   @@schema("oneof_v1")
 }
 
+/// Discriminator for the end_form oneof of Booking.
+enum BookingEndFormCase {
+  /// The end member is set.
+  END
+
+  /// The duration member is set.
+  DURATION
+
+  /// Maps the enum to the "booking_end_form_case" type in the database.
+  @@map("booking_end_form_case")
+  /// Maps the enum to the "oneof_v1" schema in the database.
+  @@schema("oneof_v1")
+}
+
 /// Audio exercises oneof integrity: the `input` oneof flattens to independent nullable columns, and store adds a generated input_case discriminator enum recording which member is set so the lost exclusivity invariant is observable.
 model Audio {
   /// Unique identifier for the record.
@@ -54,6 +68,29 @@ model Audio {
 
   /// Maps the model to the "audios" table in the database.
   @@map("audios")
+  /// Maps the model to the "oneof_v1" schema in the database.
+  @@schema("oneof_v1")
+}
+
+/// Booking pins the RFC 7953 shape: well-known types as oneof members. These have no struct field of their own — protoc-gen-go puts each behind a wrapper on the oneof's interface field — so the converters must emit `out.EndForm = &Booking_Duration{Duration: …}`, not `out.Duration = …`. The enum arm is here for the same reason: it is a value type, so it guards on the zero rather than on nil. Without converters emitted for this message the flat form compiles here and fails only in a consumer's tree.
+model Booking {
+  /// Unique identifier for the record.
+  id String @id @default(ulid()) @map("id")
+
+  /// Resource name; the AIP identifier.
+  name String @unique @map("name")
+
+  /// Optional column mapped to "end".
+  end DateTime? @v1.Timestamptz(6) @map("end")
+
+  /// Optional column mapped to "duration".
+  duration String? @map("duration")
+
+  /// Discriminator: which end_form oneof member is set (null = none).
+  endFormCase BookingEndFormCase? @map("end_form_case")
+
+  /// Maps the model to the "bookings" table in the database.
+  @@map("bookings")
   /// Maps the model to the "oneof_v1" schema in the database.
   @@schema("oneof_v1")
 }
