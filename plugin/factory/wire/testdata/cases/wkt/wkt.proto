@@ -5,13 +5,13 @@ syntax = "proto3";
 // the types package unit tests, since AIP-0141 forbids uint fields in APIs.)
 package wkt.v1;
 
+import "entity/v1/annotations.proto";
 import "google/api/field_behavior.proto";
 import "google/api/resource.proto";
 import "google/protobuf/duration.proto";
 import "google/protobuf/field_mask.proto";
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/wrappers.proto";
-import "entity/v1/annotations.proto";
 
 option java_multiple_files = true;
 option java_outer_classname = "WktProto";

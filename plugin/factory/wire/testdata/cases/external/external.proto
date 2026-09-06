@@ -7,10 +7,10 @@ syntax = "proto3";
 // collapsing into an opaque JSONB column.
 package external.v1;
 
+import "entity/v1/annotations.proto";
 import "google/api/field_behavior.proto";
 import "google/api/resource.proto";
 import "money.proto";
-import "entity/v1/annotations.proto";
 
 option go_package = "example.com/test/gen;externalv1";
 option java_multiple_files = true;

@@ -4,10 +4,10 @@ syntax = "proto3";
 // the <domain>.mongodb.prisma fragment extension, and @map("_id") on the PK.
 package mongo.v1;
 
+import "entity/v1/annotations.proto";
 import "google/api/field_behavior.proto";
 import "google/api/resource.proto";
 import "google/protobuf/timestamp.proto";
-import "entity/v1/annotations.proto";
 
 option java_multiple_files = true;
 option java_outer_classname = "MongoProto";

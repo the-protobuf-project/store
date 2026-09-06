@@ -2,9 +2,9 @@ syntax = "proto3";
 
 package licence.v1;
 
+import "entity/v1/annotations.proto";
 import "google/api/field_behavior.proto";
 import "google/api/resource.proto";
-import "entity/v1/annotations.proto";
 
 option go_package = "example.com/test/gen;licencev1";
 option (entity.v1.datasource) = {

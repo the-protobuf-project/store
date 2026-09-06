@@ -9,11 +9,11 @@ syntax = "proto3";
 // have landed in the promocode schema.
 package freebusy.promocode.v1;
 
+import "entity/v1/annotations.proto";
 import "google/api/field_behavior.proto";
 import "google/api/resource.proto";
 import "google/protobuf/timestamp.proto";
 import "money.proto";
-import "entity/v1/annotations.proto";
 
 option (entity.v1.datasource) = {
   database: "freebusy_db"

@@ -45,11 +45,13 @@ message Widget {
     table: "legacy_widgets"
     id: ID_STRATEGY_ULID
     timestamps: true
-    indexes: [{
-      columns: ["display_label"]
-      unique: true
-      index: "idx_widget_label"
-    }]
+    indexes: [
+      {
+        columns: ["display_label"]
+        unique: true
+        index: "idx_widget_label"
+      }
+    ]
   };
 
   string name = 1 [(google.api.field_behavior) = IDENTIFIER];

@@ -5,9 +5,9 @@ syntax = "proto3";
 // column.unique — store must still emit a GetBy<Field> finder for it.
 package promo.v1;
 
+import "entity/v1/annotations.proto";
 import "google/api/field_behavior.proto";
 import "google/api/resource.proto";
-import "entity/v1/annotations.proto";
 
 option (entity.v1.datasource) = {
   database: "promo_db"

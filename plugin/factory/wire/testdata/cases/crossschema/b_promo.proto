@@ -9,9 +9,9 @@ syntax = "proto3";
 package shop.v1;
 
 import "a_ordering.proto";
+import "entity/v1/annotations.proto";
 import "google/api/field_behavior.proto";
 import "google/api/resource.proto";
-import "entity/v1/annotations.proto";
 
 option (entity.v1.datasource) = {
   database: "shop_db"

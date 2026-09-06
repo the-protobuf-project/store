@@ -10,9 +10,9 @@ syntax = "proto3";
 // draining an outbox belongs to a streams generator, not to this one.
 package outbox.v1;
 
+import "entity/v1/annotations.proto";
 import "google/api/field_behavior.proto";
 import "google/api/resource.proto";
-import "entity/v1/annotations.proto";
 import "store/v1/annotations.proto";
 
 option java_multiple_files = true;

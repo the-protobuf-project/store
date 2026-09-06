@@ -7,8 +7,8 @@ syntax = "proto3";
 // the lint rule an error.
 package lintcase.v1;
 
-import "google/api/resource.proto";
 import "entity/v1/annotations.proto";
+import "google/api/resource.proto";
 
 option java_multiple_files = true;
 option java_outer_classname = "SchemaProto";

@@ -2,12 +2,12 @@ syntax = "proto3";
 
 package venue.v1;
 
+import "entity/v1/annotations.proto";
 import "google/api/field_behavior.proto";
 import "google/api/resource.proto";
 import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
 import "google/type/date.proto";
-import "entity/v1/annotations.proto";
 import "store/v1/annotations.proto";
 
 option go_package = "example.com/test/gen;venuev1";

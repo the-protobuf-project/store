@@ -7,10 +7,10 @@ syntax = "proto3";
 // cross-schema from both services.
 package freebusy.billing.v1;
 
+import "entity/v1/annotations.proto";
 import "google/api/field_behavior.proto";
 import "google/api/resource.proto";
 import "money.proto";
-import "entity/v1/annotations.proto";
 
 option (entity.v1.datasource) = {
   database: "freebusy_db"

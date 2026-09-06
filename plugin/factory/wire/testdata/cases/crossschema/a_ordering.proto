@@ -6,9 +6,9 @@ syntax = "proto3";
 // (b_promo.proto) is a cross-schema value-object reference.
 package shop.v1;
 
+import "entity/v1/annotations.proto";
 import "google/api/field_behavior.proto";
 import "google/api/resource.proto";
-import "entity/v1/annotations.proto";
 
 option (entity.v1.datasource) = {
   database: "shop_db"
