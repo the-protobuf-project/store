@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package golang
 
 // resource_filters.go renders the predicate DSL: a field handle per filterable column plus And/Or/Not and relation filters.

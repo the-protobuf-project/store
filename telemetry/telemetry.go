@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package telemetry owns everything this repository knows about telemetry.v1:
 // reading the annotations, resolving what each table's instrumentation should
 // be, and rendering the generated adapter that talks to the SDK.

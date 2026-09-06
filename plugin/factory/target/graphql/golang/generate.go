@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package golang
 
 // generate.go is the generation entrypoint and output plumbing: the Options, the

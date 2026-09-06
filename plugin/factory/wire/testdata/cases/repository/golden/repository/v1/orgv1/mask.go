@@ -9,14 +9,14 @@
 //
 // Field-mask merge functions shared by every adapter of this schema.
 // annotations: entity.v1 (unknown), store.v1 (unknown)
-// engine:      protokit (unknown)
+// engine:      protokit v1.2.1
 //
 // store — https://github.com/the-protobuf-project/store
 
 package orgv1
 
 import (
-	"example.com/test/gen"
+	orgv1 "example.com/test/gen"
 	"example.com/test/gen/repox"
 )
 
@@ -24,7 +24,7 @@ import (
 // mask replaces every mutable field; identity, parentage, timestamps, and etag
 // are repository-managed and never masked. Message-typed fields are replaced
 // wholesale when the mask touches them or any of their subpaths.
-func applyMemberMask(merged, in *gen.Member, paths []string) {
+func applyMemberMask(merged, in *orgv1.Member, paths []string) {
 	if repox.InMask(paths, "name") {
 		merged.Name = in.GetName()
 	}
@@ -49,7 +49,7 @@ func applyMemberMask(merged, in *gen.Member, paths []string) {
 // mask replaces every mutable field; identity, parentage, timestamps, and etag
 // are repository-managed and never masked. Message-typed fields are replaced
 // wholesale when the mask touches them or any of their subpaths.
-func applyOrganisationMask(merged, in *gen.Organisation, paths []string) {
+func applyOrganisationMask(merged, in *orgv1.Organisation, paths []string) {
 	if repox.InMask(paths, "name") {
 		merged.Name = in.GetName()
 	}
@@ -71,7 +71,7 @@ func applyOrganisationMask(merged, in *gen.Organisation, paths []string) {
 // mask replaces every mutable field; identity, parentage, timestamps, and etag
 // are repository-managed and never masked. Message-typed fields are replaced
 // wholesale when the mask touches them or any of their subpaths.
-func applyUserMask(merged, in *gen.User, paths []string) {
+func applyUserMask(merged, in *orgv1.User, paths []string) {
 	if repox.InMask(paths, "name") {
 		merged.Name = in.GetName()
 	}

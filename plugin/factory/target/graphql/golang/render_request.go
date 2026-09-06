@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package golang
 
 // render_request.go classifies operation arguments (classify/argSpec) and renders the

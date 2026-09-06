@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package golang
 
 // write_resources.go emits each resource package: models, predicates, inputs, requests, and handlers.

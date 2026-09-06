@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package graphql is the "graphql" factory Target: it renders a typed GraphQL
 // client from the Model's GraphQL facet. The parsing that produced that facet is
 // language-agnostic (in source/graphql); this Target only picks the per-language

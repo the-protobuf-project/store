@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package repository
 
 // file_views.go assembles the per-file template data for names.go, mask.go,
@@ -51,12 +54,11 @@ func maskView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg string, rs
 // gormFileView prepares gorm.go: the GORM adapters.
 func gormFileView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg string, rs []gormResourceView) map[string]any {
 	imports := map[string]string{
-		"context":                                    "",
-		"gorm.io/gorm":                               "",
-		"google.golang.org/protobuf/proto":           "",
-		dbGoModule(db) + "/" + repoxPkg:              "",
-		dbGormModule(db) + "/filterx":                "",
-		dbGormModule(db) + "/" + db.Name + "/" + pkg: "",
+		"context":                          "",
+		"gorm.io/gorm":                     "",
+		"google.golang.org/protobuf/proto": "",
+		dbGoModule(db) + "/" + repoxPkg:    "",
+		dbGormModule(db) + "/filterx":      "",
 	}
 	for _, r := range rs {
 		if r.Parented {
@@ -67,10 +69,11 @@ func gormFileView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 		}
 	}
 	addPBImports(pb, s, imports)
+	gormPkg := addGormModelsImport(pb, db, s, pkg, imports)
 	return map[string]any{
 		"Header":    fileHeader(db, s, "GORM adapters composing the generated models, stores, converters, and filterx specs."),
 		"Package":   pkg,
-		"GormPkg":   pkg,
+		"GormPkg":   gormPkg,
 		"Imports":   renderImports(imports),
 		"Resources": rs,
 	}
@@ -95,7 +98,7 @@ func addPBEnumImports(pb *pbIndex, s *schema.Schema, imports map[string]string) 
 			for _, f := range m.Fields {
 				if f.Desc.FullName() == c.Source.FullName() && f.Enum != nil {
 					path := string(f.Enum.GoIdent.GoImportPath)
-					imports[path] = goPackageName(path)
+					imports[path] = pb.names.Of(path)
 				}
 			}
 		}
@@ -110,7 +113,42 @@ func addPBImports(pb *pbIndex, s *schema.Schema, imports map[string]string) {
 		}
 		if msg, ok := pb.msgs[t.Source.FullName()]; ok && resourcePattern(t.Source) != "" && !t.ValueObject {
 			path := string(msg.GoIdent.GoImportPath)
-			imports[path] = goPackageName(path)
+			imports[path] = pb.names.Of(path)
 		}
 	}
+}
+
+// gormModelsQual is the identifier the adapters use for schema s's generated
+// gorm models package, and the alias its import carries.
+//
+// That package is named after the schema, and a schema derived from a versioned
+// proto package carries the same name its protos do — schema "resource_v1"
+// yields "resourcev1", exactly what `option go_package = ".../resource/v1;resourcev1"`
+// names the proto package the same file imports. One of the two must step
+// aside, and it cannot be the proto package: that name is protoc-gen-go's, and
+// the .pb.go types are spelled with it. So the models package takes the suffix.
+//
+// Every view that qualifies the models package calls this — the adapter files
+// for their import alias, gormResourceViews for the VO fragments it bakes — so
+// the alias and the fragments cannot disagree.
+func gormModelsQual(pb *pbIndex, s *schema.Schema, pkg string) string {
+	protoPkgs := map[string]string{}
+	addPBImports(pb, s, protoPkgs)
+	addPBEnumImports(pb, s, protoPkgs)
+	for _, name := range protoPkgs {
+		if name == pkg {
+			return pkg + "gorm"
+		}
+	}
+	return pkg
+}
+
+// addGormModelsImport registers s's generated gorm models package under the
+// qualifier gormModelsQual picked, and returns it. renderImports drops the
+// alias again when it matches the path's last segment, so the usual
+// no-collision case still emits a bare import.
+func addGormModelsImport(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg string, imports map[string]string) string {
+	qual := gormModelsQual(pb, s, pkg)
+	imports[dbGormModule(db)+"/"+db.Name+"/"+pkg] = qual
+	return qual
 }

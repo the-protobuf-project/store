@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package golang
 
 // plan.go groups resources into domains and packages and assigns each operation a

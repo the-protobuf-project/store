@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package backend
 
 // layout.go is where this plugin hands protokit the two things that are not its

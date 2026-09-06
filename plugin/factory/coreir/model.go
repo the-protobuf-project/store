@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package coreir is the factory's shared intermediate model. A Source builds a
 // Model; a Target renders from it. The Model deliberately carries the source's
 // native IR as a typed facet rather than flattening everything into one lossy

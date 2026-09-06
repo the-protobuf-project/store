@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package gorm
 
 // render.go runs every generated Go file through gofmt before it is written.

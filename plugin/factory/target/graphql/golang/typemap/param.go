@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package typemap
 
 // param.go resolves IR field types to the native Go value types used for input fields and method parameters.

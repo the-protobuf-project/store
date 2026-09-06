@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Command protoc-gen-store is a protoc plugin that reads proto descriptors
 // annotated with google.api.*, entity.v1.*, and store.v1.* options, then generates database
 // schema artifacts for the requested backend: gorm, sql, or prisma. The generic
@@ -37,6 +40,7 @@ import (
 	"github.com/the-protobuf-project/protokit/graphql/dialect"
 	"github.com/the-protobuf-project/protokit/header"
 	"github.com/the-protobuf-project/store/plugin/factory/config"
+	"github.com/the-protobuf-project/store/plugin/factory/provenance"
 	"github.com/the-protobuf-project/store/plugin/factory/source/proto/backend"
 	"github.com/the-protobuf-project/store/plugin/factory/wire"
 	"google.golang.org/protobuf/compiler/protogen"
@@ -121,11 +125,26 @@ func main() {
 	graphqlModule := flags.String("graphql_module", "",
 		"repository target only: Go import path of the generated GraphQL client the "+
 			"graphql repository adapters compose; empty emits gorm-only repositories")
+	licenseHeader := flags.String("license_header", "",
+		"path to a file whose lines are placed above the banner of every generated "+
+			"file (e.g. a copyright and SPDX-License-Identifier block). Write the lines "+
+			"without comment markers — each target applies its own (\"//\" for Go, Prisma "+
+			"and TypeScript, \"--\" for SQL). Unset stamps no copyright, since generated "+
+			"code belongs to whoever ran the generator")
 
 	protogen.Options{ParamFunc: flags.Set}.Run(func(p *protogen.Plugin) error {
 		// Proto3 `optional` is fully supported (presence is read via field_behavior,
 		// not synthetic oneofs); declare it so buf/protoc don't warn.
 		p.SupportedFeatures = uint64(pluginpb.CodeGeneratorResponse_FEATURE_PROTO3_OPTIONAL)
+
+		// Read before any target runs: every generated file's banner carries it.
+		if *licenseHeader != "" {
+			b, err := os.ReadFile(*licenseHeader)
+			if err != nil {
+				return fmt.Errorf("license_header: %w", err)
+			}
+			provenance.SetLicense(string(b))
+		}
 
 		// The graphql target reads a GraphQL endpoint from store.yaml rather than the
 		// proto descriptors, so it takes its own path — but still runs as part of a

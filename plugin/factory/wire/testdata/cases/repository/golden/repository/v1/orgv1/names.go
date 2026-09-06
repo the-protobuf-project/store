@@ -9,7 +9,7 @@
 //
 // AIP resource-name codecs for this schema's repositories.
 // annotations: entity.v1 (unknown), store.v1 (unknown)
-// engine:      protokit (unknown)
+// engine:      protokit v1.2.1
 //
 // store — https://github.com/the-protobuf-project/store
 

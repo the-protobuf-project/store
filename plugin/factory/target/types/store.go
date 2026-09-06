@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package types is store's projection of the neutral schema.FieldType onto the
 // canonical PostgreSQL type the gorm/sql/prisma targets render from. It is the
 // db-specific half of the type system that used to live in protokit; protokit now

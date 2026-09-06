@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package sql
 
 // templateset.go embeds this target's Go templates and parses them into the set the renderer executes.

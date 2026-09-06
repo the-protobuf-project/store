@@ -9,7 +9,7 @@
 //
 // GORM adapters composing the generated models, stores, converters, and filterx specs.
 // annotations: entity.v1 (unknown), store.v1 (unknown)
-// engine:      protokit (unknown)
+// engine:      protokit v1.2.1
 //
 // store — https://github.com/the-protobuf-project/store
 
@@ -17,10 +17,10 @@ package orgv1
 
 import (
 	"context"
-	"example.com/test/gen"
+	orgv1 "example.com/test/gen"
 	"example.com/test/gen/repox"
 	"example.com/test/gormdb/filterx"
-	"example.com/test/gormdb/v1/orgv1"
+	orgv1gorm "example.com/test/gormdb/v1/orgv1"
 	"fmt"
 	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
@@ -46,7 +46,7 @@ func NewGormMemberRepository(db *gorm.DB) *GormMemberRepository {
 }
 
 // Create persists in under parent and returns the stored record.
-func (r *GormMemberRepository) Create(ctx context.Context, parent string, in *gen.Member) (*gen.Member, error) {
+func (r *GormMemberRepository) Create(ctx context.Context, parent string, in *orgv1.Member) (*orgv1.Member, error) {
 	parentIDs, err := repox.SplitName(parent, "organisations")
 	if err != nil {
 		return nil, err
@@ -64,14 +64,14 @@ func (r *GormMemberRepository) Create(ctx context.Context, parent string, in *ge
 		}
 		id = ids[len(ids)-1]
 	}
-	in = proto.Clone(in).(*gen.Member)
+	in = proto.Clone(in).(*orgv1.Member)
 	in.Name = FormatMemberName(parentIDs[0], id)
 	if h := r.Hooks.BeforeCreate; h != nil {
 		if err := h(ctx, in); err != nil {
 			return nil, err
 		}
 	}
-	m := orgv1.MemberFromProto(in)
+	m := orgv1gorm.MemberFromProto(in)
 	m.ID = id
 	m.Name = in.GetName()
 	m.OrganisationID = parentIDs[0]
@@ -84,26 +84,26 @@ func (r *GormMemberRepository) Create(ctx context.Context, parent string, in *ge
 	m.Etag = repox.Ptr(repox.NewULID())
 	if err := r.DB.Transaction(func(tx *gorm.DB) error {
 		if v := in.GetWindow(); v != nil {
-			vo := orgv1.TimeWindowFromProto(v)
+			vo := orgv1gorm.TimeWindowFromProto(v)
 			vo.ID = repox.NewULID()
 			if err := tx.WithContext(ctx).Create(vo).Error; err != nil {
 				return err
 			}
 			m.WindowID = repox.Ptr(vo.ID)
-			c := orgv1.MemberSpanCaseWindow
+			c := orgv1gorm.MemberSpanCaseWindow
 			m.SpanCase = &c
 		}
 		if v := in.GetDateRange(); v != nil {
-			vo := orgv1.DateStretchFromProto(v)
+			vo := orgv1gorm.DateStretchFromProto(v)
 			vo.ID = repox.NewULID()
 			if err := tx.WithContext(ctx).Create(vo).Error; err != nil {
 				return err
 			}
 			m.DateRangeID = repox.Ptr(vo.ID)
-			c := orgv1.MemberSpanCaseDateRange
+			c := orgv1gorm.MemberSpanCaseDateRange
 			m.SpanCase = &c
 		}
-		return orgv1.NewMemberStore(tx).Create(ctx, m)
+		return orgv1gorm.NewMemberStore(tx).Create(ctx, m)
 	}); err != nil {
 		return nil, repox.MapGormErr(err)
 	}
@@ -111,7 +111,7 @@ func (r *GormMemberRepository) Create(ctx context.Context, parent string, in *ge
 }
 
 // Get returns the record addressed by its resource name.
-func (r *GormMemberRepository) Get(ctx context.Context, name string) (*gen.Member, error) {
+func (r *GormMemberRepository) Get(ctx context.Context, name string) (*orgv1.Member, error) {
 	ids, err := repox.SplitName(name, "organisations", "members")
 	if err != nil {
 		return nil, err
@@ -121,8 +121,8 @@ func (r *GormMemberRepository) Get(ctx context.Context, name string) (*gen.Membe
 
 // get loads by surrogate key — the private read every generated method re-reads
 // through, so Tier-2 overrides of Get never re-enter generated writes.
-func (r *GormMemberRepository) get(ctx context.Context, id string) (*gen.Member, error) {
-	var m orgv1.Member
+func (r *GormMemberRepository) get(ctx context.Context, id string) (*orgv1.Member, error) {
+	var m orgv1gorm.Member
 	if err := r.DB.WithContext(ctx).Preload("Window").Preload("DateRange").First(&m, "id = ?", id).Error; err != nil {
 		return nil, repox.MapGormErr(err)
 	}
@@ -131,8 +131,8 @@ func (r *GormMemberRepository) get(ctx context.Context, id string) (*gen.Member,
 
 // toProto converts a loaded row, decorating reference names and running the
 // AfterRead hook.
-func (r *GormMemberRepository) toProto(ctx context.Context, m *orgv1.Member) (*gen.Member, error) {
-	out := orgv1.MemberToProto(m)
+func (r *GormMemberRepository) toProto(ctx context.Context, m *orgv1gorm.Member) (*orgv1.Member, error) {
+	out := orgv1gorm.MemberToProto(m)
 	if m.UserID != "" {
 		out.User = "users/" + m.UserID
 	}
@@ -148,7 +148,7 @@ func (r *GormMemberRepository) toProto(ctx context.Context, m *orgv1.Member) (*g
 }
 
 // List returns one page of records under parent.
-func (r *GormMemberRepository) List(ctx context.Context, parent string, in repox.ListInput) ([]*gen.Member, string, error) {
+func (r *GormMemberRepository) List(ctx context.Context, parent string, in repox.ListInput) ([]*orgv1.Member, string, error) {
 	parentIDs, err := repox.SplitName(parent, "organisations")
 	if err != nil {
 		return nil, "", err
@@ -157,12 +157,12 @@ func (r *GormMemberRepository) List(ctx context.Context, parent string, in repox
 	return r.list(ctx, scope, in)
 }
 
-func (r *GormMemberRepository) list(ctx context.Context, scope *gorm.DB, in repox.ListInput) ([]*gen.Member, string, error) {
+func (r *GormMemberRepository) list(ctx context.Context, scope *gorm.DB, in repox.ListInput) ([]*orgv1.Member, string, error) {
 	conds, err := filterx.Parse(in.Filter)
 	if err != nil {
 		return nil, "", repox.MapFilterxErr(err)
 	}
-	eng := filterx.Gorm[orgv1.Member](orgv1.MemberFilterSpec)
+	eng := filterx.Gorm[orgv1gorm.Member](orgv1gorm.MemberFilterSpec)
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)
 	}
@@ -175,7 +175,7 @@ func (r *GormMemberRepository) list(ctx context.Context, scope *gorm.DB, in repo
 	if err != nil {
 		return nil, "", repox.MapFilterxErr(err)
 	}
-	items := make([]*gen.Member, 0, len(rows))
+	items := make([]*orgv1.Member, 0, len(rows))
 	for i := range rows {
 		out, err := r.toProto(ctx, &rows[i])
 		if err != nil {
@@ -188,14 +188,14 @@ func (r *GormMemberRepository) list(ctx context.Context, scope *gorm.DB, in repo
 
 // Update persists the masked fields of in; an empty mask replaces every
 // mutable field. The write happens in one transaction guarded by in.Etag.
-func (r *GormMemberRepository) Update(ctx context.Context, in *gen.Member, paths []string) (*gen.Member, error) {
+func (r *GormMemberRepository) Update(ctx context.Context, in *orgv1.Member, paths []string) (*orgv1.Member, error) {
 	ids, err := repox.SplitName(in.GetName(), "organisations", "members")
 	if err != nil {
 		return nil, err
 	}
 	id := ids[len(ids)-1]
 	err = r.DB.Transaction(func(tx *gorm.DB) error {
-		var existing orgv1.Member
+		var existing orgv1gorm.Member
 		if err := tx.WithContext(ctx).Preload("Window").Preload("DateRange").First(&existing, "id = ?", id).Error; err != nil {
 			return err
 		}
@@ -204,7 +204,7 @@ func (r *GormMemberRepository) Update(ctx context.Context, in *gen.Member, paths
 		if in.GetEtag() != "" && existing.Etag != nil && *existing.Etag != in.GetEtag() {
 			return repox.ErrConflict
 		}
-		existingPB := orgv1.MemberToProto(&existing)
+		existingPB := orgv1gorm.MemberToProto(&existing)
 		{
 			m, out := &existing, existingPB
 			if m.UserID != "" {
@@ -214,14 +214,14 @@ func (r *GormMemberRepository) Update(ctx context.Context, in *gen.Member, paths
 				out.Inviter = "users/" + *m.InviterID
 			}
 		}
-		merged := proto.Clone(existingPB).(*gen.Member)
+		merged := proto.Clone(existingPB).(*orgv1.Member)
 		applyMemberMask(merged, in, paths)
 		if h := r.Hooks.BeforeUpdate; h != nil {
 			if err := h(ctx, existingPB, merged, paths); err != nil {
 				return err
 			}
 		}
-		next := orgv1.MemberFromProto(merged)
+		next := orgv1gorm.MemberFromProto(merged)
 		_ = next
 		existing.Name = next.Name
 		existing.Email = next.Email
@@ -243,37 +243,37 @@ func (r *GormMemberRepository) Update(ctx context.Context, in *gen.Member, paths
 			existing.DateRangeID = nil
 			existing.SpanCase = nil
 			if v := merged.GetWindow(); v != nil {
-				vo := orgv1.TimeWindowFromProto(v)
+				vo := orgv1gorm.TimeWindowFromProto(v)
 				vo.ID = repox.NewULID()
 				if err := tx.WithContext(ctx).Create(vo).Error; err != nil {
 					return err
 				}
 				existing.WindowID = repox.Ptr(vo.ID)
-				c := orgv1.MemberSpanCaseWindow
+				c := orgv1gorm.MemberSpanCaseWindow
 				existing.SpanCase = &c
 			}
 			if v := merged.GetDateRange(); v != nil {
-				vo := orgv1.DateStretchFromProto(v)
+				vo := orgv1gorm.DateStretchFromProto(v)
 				vo.ID = repox.NewULID()
 				if err := tx.WithContext(ctx).Create(vo).Error; err != nil {
 					return err
 				}
 				existing.DateRangeID = repox.Ptr(vo.ID)
-				c := orgv1.MemberSpanCaseDateRange
+				c := orgv1gorm.MemberSpanCaseDateRange
 				existing.SpanCase = &c
 			}
 		}
 		existing.Etag = repox.Ptr(repox.NewULID())
-		if err := orgv1.NewMemberStore(tx).Update(ctx, &existing); err != nil {
+		if err := orgv1gorm.NewMemberStore(tx).Update(ctx, &existing); err != nil {
 			return err
 		}
 		if staleWindow != "" {
-			if err := tx.WithContext(ctx).Delete(&orgv1.TimeWindow{}, "id = ?", staleWindow).Error; err != nil {
+			if err := tx.WithContext(ctx).Delete(&orgv1gorm.TimeWindow{}, "id = ?", staleWindow).Error; err != nil {
 				return err
 			}
 		}
 		if staleDateRange != "" {
-			if err := tx.WithContext(ctx).Delete(&orgv1.DateStretch{}, "id = ?", staleDateRange).Error; err != nil {
+			if err := tx.WithContext(ctx).Delete(&orgv1gorm.DateStretch{}, "id = ?", staleDateRange).Error; err != nil {
 				return err
 			}
 		}
@@ -297,21 +297,21 @@ func (r *GormMemberRepository) Delete(ctx context.Context, name string) error {
 		}
 	}
 	id := ids[len(ids)-1]
-	var existing orgv1.Member
+	var existing orgv1gorm.Member
 	if err := r.DB.WithContext(ctx).First(&existing, "id = ?", id).Error; err != nil {
 		return repox.MapGormErr(err)
 	}
 	return repox.MapGormErr(r.DB.Transaction(func(tx *gorm.DB) error {
-		if err := orgv1.NewMemberStore(tx).DeleteByID(ctx, id); err != nil {
+		if err := orgv1gorm.NewMemberStore(tx).DeleteByID(ctx, id); err != nil {
 			return err
 		}
 		if existing.WindowID != nil {
-			if err := tx.WithContext(ctx).Delete(&orgv1.TimeWindow{}, "id = ?", *existing.WindowID).Error; err != nil {
+			if err := tx.WithContext(ctx).Delete(&orgv1gorm.TimeWindow{}, "id = ?", *existing.WindowID).Error; err != nil {
 				return err
 			}
 		}
 		if existing.DateRangeID != nil {
-			if err := tx.WithContext(ctx).Delete(&orgv1.DateStretch{}, "id = ?", *existing.DateRangeID).Error; err != nil {
+			if err := tx.WithContext(ctx).Delete(&orgv1gorm.DateStretch{}, "id = ?", *existing.DateRangeID).Error; err != nil {
 				return err
 			}
 		}
@@ -342,7 +342,7 @@ func NewGormOrganisationRepository(db *gorm.DB) *GormOrganisationRepository {
 }
 
 // Create persists in and returns the stored record.
-func (r *GormOrganisationRepository) Create(ctx context.Context, in *gen.Organisation) (*gen.Organisation, error) {
+func (r *GormOrganisationRepository) Create(ctx context.Context, in *orgv1.Organisation) (*orgv1.Organisation, error) {
 	id := repox.NewULID()
 	if in.GetName() != "" {
 		ids, err := repox.SplitName(in.GetName(), "organisations")
@@ -351,27 +351,27 @@ func (r *GormOrganisationRepository) Create(ctx context.Context, in *gen.Organis
 		}
 		id = ids[len(ids)-1]
 	}
-	in = proto.Clone(in).(*gen.Organisation)
+	in = proto.Clone(in).(*orgv1.Organisation)
 	in.Name = FormatOrganisationName(id)
 	if h := r.Hooks.BeforeCreate; h != nil {
 		if err := h(ctx, in); err != nil {
 			return nil, err
 		}
 	}
-	m := orgv1.OrganisationFromProto(in)
+	m := orgv1gorm.OrganisationFromProto(in)
 	m.ID = id
 	m.Name = in.GetName()
 	m.Etag = repox.Ptr(repox.NewULID())
 	if err := r.DB.Transaction(func(tx *gorm.DB) error {
 		if v := in.GetHq(); v != nil {
-			vo := orgv1.LocationFromProto(v)
+			vo := orgv1gorm.LocationFromProto(v)
 			vo.ID = repox.NewULID()
 			if err := tx.WithContext(ctx).Create(vo).Error; err != nil {
 				return err
 			}
 			m.HqID = repox.Ptr(vo.ID)
 		}
-		return orgv1.NewOrganisationStore(tx).Create(ctx, m)
+		return orgv1gorm.NewOrganisationStore(tx).Create(ctx, m)
 	}); err != nil {
 		return nil, repox.MapGormErr(err)
 	}
@@ -379,7 +379,7 @@ func (r *GormOrganisationRepository) Create(ctx context.Context, in *gen.Organis
 }
 
 // Get returns the record addressed by its resource name.
-func (r *GormOrganisationRepository) Get(ctx context.Context, name string) (*gen.Organisation, error) {
+func (r *GormOrganisationRepository) Get(ctx context.Context, name string) (*orgv1.Organisation, error) {
 	ids, err := repox.SplitName(name, "organisations")
 	if err != nil {
 		return nil, err
@@ -389,8 +389,8 @@ func (r *GormOrganisationRepository) Get(ctx context.Context, name string) (*gen
 
 // get loads by surrogate key — the private read every generated method re-reads
 // through, so Tier-2 overrides of Get never re-enter generated writes.
-func (r *GormOrganisationRepository) get(ctx context.Context, id string) (*gen.Organisation, error) {
-	var m orgv1.Organisation
+func (r *GormOrganisationRepository) get(ctx context.Context, id string) (*orgv1.Organisation, error) {
+	var m orgv1gorm.Organisation
 	if err := r.DB.WithContext(ctx).Preload("Hq").First(&m, "id = ?", id).Error; err != nil {
 		return nil, repox.MapGormErr(err)
 	}
@@ -399,8 +399,8 @@ func (r *GormOrganisationRepository) get(ctx context.Context, id string) (*gen.O
 
 // toProto converts a loaded row, decorating reference names and running the
 // AfterRead hook.
-func (r *GormOrganisationRepository) toProto(ctx context.Context, m *orgv1.Organisation) (*gen.Organisation, error) {
-	out := orgv1.OrganisationToProto(m)
+func (r *GormOrganisationRepository) toProto(ctx context.Context, m *orgv1gorm.Organisation) (*orgv1.Organisation, error) {
+	out := orgv1gorm.OrganisationToProto(m)
 	if h := r.Hooks.AfterRead; h != nil {
 		if err := h(ctx, out); err != nil {
 			return nil, err
@@ -410,16 +410,16 @@ func (r *GormOrganisationRepository) toProto(ctx context.Context, m *orgv1.Organ
 }
 
 // List returns one page of records.
-func (r *GormOrganisationRepository) List(ctx context.Context, in repox.ListInput) ([]*gen.Organisation, string, error) {
+func (r *GormOrganisationRepository) List(ctx context.Context, in repox.ListInput) ([]*orgv1.Organisation, string, error) {
 	return r.list(ctx, r.DB, in)
 }
 
-func (r *GormOrganisationRepository) list(ctx context.Context, scope *gorm.DB, in repox.ListInput) ([]*gen.Organisation, string, error) {
+func (r *GormOrganisationRepository) list(ctx context.Context, scope *gorm.DB, in repox.ListInput) ([]*orgv1.Organisation, string, error) {
 	conds, err := filterx.Parse(in.Filter)
 	if err != nil {
 		return nil, "", repox.MapFilterxErr(err)
 	}
-	eng := filterx.Gorm[orgv1.Organisation](orgv1.OrganisationFilterSpec)
+	eng := filterx.Gorm[orgv1gorm.Organisation](orgv1gorm.OrganisationFilterSpec)
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)
 	}
@@ -432,7 +432,7 @@ func (r *GormOrganisationRepository) list(ctx context.Context, scope *gorm.DB, i
 	if err != nil {
 		return nil, "", repox.MapFilterxErr(err)
 	}
-	items := make([]*gen.Organisation, 0, len(rows))
+	items := make([]*orgv1.Organisation, 0, len(rows))
 	for i := range rows {
 		out, err := r.toProto(ctx, &rows[i])
 		if err != nil {
@@ -445,14 +445,14 @@ func (r *GormOrganisationRepository) list(ctx context.Context, scope *gorm.DB, i
 
 // Update persists the masked fields of in; an empty mask replaces every
 // mutable field. The write happens in one transaction guarded by in.Etag.
-func (r *GormOrganisationRepository) Update(ctx context.Context, in *gen.Organisation, paths []string) (*gen.Organisation, error) {
+func (r *GormOrganisationRepository) Update(ctx context.Context, in *orgv1.Organisation, paths []string) (*orgv1.Organisation, error) {
 	ids, err := repox.SplitName(in.GetName(), "organisations")
 	if err != nil {
 		return nil, err
 	}
 	id := ids[len(ids)-1]
 	err = r.DB.Transaction(func(tx *gorm.DB) error {
-		var existing orgv1.Organisation
+		var existing orgv1gorm.Organisation
 		if err := tx.WithContext(ctx).Preload("Hq").First(&existing, "id = ?", id).Error; err != nil {
 			return err
 		}
@@ -460,15 +460,15 @@ func (r *GormOrganisationRepository) Update(ctx context.Context, in *gen.Organis
 		if in.GetEtag() != "" && existing.Etag != nil && *existing.Etag != in.GetEtag() {
 			return repox.ErrConflict
 		}
-		existingPB := orgv1.OrganisationToProto(&existing)
-		merged := proto.Clone(existingPB).(*gen.Organisation)
+		existingPB := orgv1gorm.OrganisationToProto(&existing)
+		merged := proto.Clone(existingPB).(*orgv1.Organisation)
 		applyOrganisationMask(merged, in, paths)
 		if h := r.Hooks.BeforeUpdate; h != nil {
 			if err := h(ctx, existingPB, merged, paths); err != nil {
 				return err
 			}
 		}
-		next := orgv1.OrganisationFromProto(merged)
+		next := orgv1gorm.OrganisationFromProto(merged)
 		_ = next
 		existing.Name = next.Name
 		existing.DisplayName = next.DisplayName
@@ -480,7 +480,7 @@ func (r *GormOrganisationRepository) Update(ctx context.Context, in *gen.Organis
 			}
 			existing.HqID = nil
 			if v := merged.GetHq(); v != nil {
-				vo := orgv1.LocationFromProto(v)
+				vo := orgv1gorm.LocationFromProto(v)
 				vo.ID = repox.NewULID()
 				if err := tx.WithContext(ctx).Create(vo).Error; err != nil {
 					return err
@@ -489,11 +489,11 @@ func (r *GormOrganisationRepository) Update(ctx context.Context, in *gen.Organis
 			}
 		}
 		existing.Etag = repox.Ptr(repox.NewULID())
-		if err := orgv1.NewOrganisationStore(tx).Update(ctx, &existing); err != nil {
+		if err := orgv1gorm.NewOrganisationStore(tx).Update(ctx, &existing); err != nil {
 			return err
 		}
 		if staleHq != "" {
-			if err := tx.WithContext(ctx).Delete(&orgv1.Location{}, "id = ?", staleHq).Error; err != nil {
+			if err := tx.WithContext(ctx).Delete(&orgv1gorm.Location{}, "id = ?", staleHq).Error; err != nil {
 				return err
 			}
 		}
@@ -517,16 +517,16 @@ func (r *GormOrganisationRepository) Delete(ctx context.Context, name string) er
 		}
 	}
 	id := ids[len(ids)-1]
-	var existing orgv1.Organisation
+	var existing orgv1gorm.Organisation
 	if err := r.DB.WithContext(ctx).First(&existing, "id = ?", id).Error; err != nil {
 		return repox.MapGormErr(err)
 	}
 	return repox.MapGormErr(r.DB.Transaction(func(tx *gorm.DB) error {
-		if err := orgv1.NewOrganisationStore(tx).DeleteByID(ctx, id); err != nil {
+		if err := orgv1gorm.NewOrganisationStore(tx).DeleteByID(ctx, id); err != nil {
 			return err
 		}
 		if existing.HqID != nil {
-			if err := tx.WithContext(ctx).Delete(&orgv1.Location{}, "id = ?", *existing.HqID).Error; err != nil {
+			if err := tx.WithContext(ctx).Delete(&orgv1gorm.Location{}, "id = ?", *existing.HqID).Error; err != nil {
 				return err
 			}
 		}
@@ -557,7 +557,7 @@ func NewGormUserRepository(db *gorm.DB) *GormUserRepository {
 }
 
 // Create persists in and returns the stored record.
-func (r *GormUserRepository) Create(ctx context.Context, in *gen.User) (*gen.User, error) {
+func (r *GormUserRepository) Create(ctx context.Context, in *orgv1.User) (*orgv1.User, error) {
 	id := repox.NewULID()
 	if in.GetName() != "" {
 		ids, err := repox.SplitName(in.GetName(), "users")
@@ -566,25 +566,25 @@ func (r *GormUserRepository) Create(ctx context.Context, in *gen.User) (*gen.Use
 		}
 		id = ids[len(ids)-1]
 	}
-	in = proto.Clone(in).(*gen.User)
+	in = proto.Clone(in).(*orgv1.User)
 	in.Name = FormatUserName(id)
 	if h := r.Hooks.BeforeCreate; h != nil {
 		if err := h(ctx, in); err != nil {
 			return nil, err
 		}
 	}
-	m := orgv1.UserFromProto(in)
+	m := orgv1gorm.UserFromProto(in)
 	m.ID = id
 	m.Name = in.GetName()
 	m.Etag = repox.Ptr(repox.NewULID())
-	if err := orgv1.NewUserStore(r.DB).Create(ctx, m); err != nil {
+	if err := orgv1gorm.NewUserStore(r.DB).Create(ctx, m); err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	return r.get(ctx, id)
 }
 
 // Get returns the record addressed by its resource name.
-func (r *GormUserRepository) Get(ctx context.Context, name string) (*gen.User, error) {
+func (r *GormUserRepository) Get(ctx context.Context, name string) (*orgv1.User, error) {
 	ids, err := repox.SplitName(name, "users")
 	if err != nil {
 		return nil, err
@@ -594,8 +594,8 @@ func (r *GormUserRepository) Get(ctx context.Context, name string) (*gen.User, e
 
 // get loads by surrogate key — the private read every generated method re-reads
 // through, so Tier-2 overrides of Get never re-enter generated writes.
-func (r *GormUserRepository) get(ctx context.Context, id string) (*gen.User, error) {
-	var m orgv1.User
+func (r *GormUserRepository) get(ctx context.Context, id string) (*orgv1.User, error) {
+	var m orgv1gorm.User
 	if err := r.DB.WithContext(ctx).First(&m, "id = ?", id).Error; err != nil {
 		return nil, repox.MapGormErr(err)
 	}
@@ -604,8 +604,8 @@ func (r *GormUserRepository) get(ctx context.Context, id string) (*gen.User, err
 
 // toProto converts a loaded row, decorating reference names and running the
 // AfterRead hook.
-func (r *GormUserRepository) toProto(ctx context.Context, m *orgv1.User) (*gen.User, error) {
-	out := orgv1.UserToProto(m)
+func (r *GormUserRepository) toProto(ctx context.Context, m *orgv1gorm.User) (*orgv1.User, error) {
+	out := orgv1gorm.UserToProto(m)
 	if h := r.Hooks.AfterRead; h != nil {
 		if err := h(ctx, out); err != nil {
 			return nil, err
@@ -615,16 +615,16 @@ func (r *GormUserRepository) toProto(ctx context.Context, m *orgv1.User) (*gen.U
 }
 
 // List returns one page of records.
-func (r *GormUserRepository) List(ctx context.Context, in repox.ListInput) ([]*gen.User, string, error) {
+func (r *GormUserRepository) List(ctx context.Context, in repox.ListInput) ([]*orgv1.User, string, error) {
 	return r.list(ctx, r.DB, in)
 }
 
-func (r *GormUserRepository) list(ctx context.Context, scope *gorm.DB, in repox.ListInput) ([]*gen.User, string, error) {
+func (r *GormUserRepository) list(ctx context.Context, scope *gorm.DB, in repox.ListInput) ([]*orgv1.User, string, error) {
 	conds, err := filterx.Parse(in.Filter)
 	if err != nil {
 		return nil, "", repox.MapFilterxErr(err)
 	}
-	eng := filterx.Gorm[orgv1.User](orgv1.UserFilterSpec)
+	eng := filterx.Gorm[orgv1gorm.User](orgv1gorm.UserFilterSpec)
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)
 	}
@@ -637,7 +637,7 @@ func (r *GormUserRepository) list(ctx context.Context, scope *gorm.DB, in repox.
 	if err != nil {
 		return nil, "", repox.MapFilterxErr(err)
 	}
-	items := make([]*gen.User, 0, len(rows))
+	items := make([]*orgv1.User, 0, len(rows))
 	for i := range rows {
 		out, err := r.toProto(ctx, &rows[i])
 		if err != nil {
@@ -650,34 +650,34 @@ func (r *GormUserRepository) list(ctx context.Context, scope *gorm.DB, in repox.
 
 // Update persists the masked fields of in; an empty mask replaces every
 // mutable field. The write happens in one transaction guarded by in.Etag.
-func (r *GormUserRepository) Update(ctx context.Context, in *gen.User, paths []string) (*gen.User, error) {
+func (r *GormUserRepository) Update(ctx context.Context, in *orgv1.User, paths []string) (*orgv1.User, error) {
 	ids, err := repox.SplitName(in.GetName(), "users")
 	if err != nil {
 		return nil, err
 	}
 	id := ids[len(ids)-1]
 	err = r.DB.Transaction(func(tx *gorm.DB) error {
-		var existing orgv1.User
+		var existing orgv1gorm.User
 		if err := tx.WithContext(ctx).First(&existing, "id = ?", id).Error; err != nil {
 			return err
 		}
 		if in.GetEtag() != "" && existing.Etag != nil && *existing.Etag != in.GetEtag() {
 			return repox.ErrConflict
 		}
-		existingPB := orgv1.UserToProto(&existing)
-		merged := proto.Clone(existingPB).(*gen.User)
+		existingPB := orgv1gorm.UserToProto(&existing)
+		merged := proto.Clone(existingPB).(*orgv1.User)
 		applyUserMask(merged, in, paths)
 		if h := r.Hooks.BeforeUpdate; h != nil {
 			if err := h(ctx, existingPB, merged, paths); err != nil {
 				return err
 			}
 		}
-		next := orgv1.UserFromProto(merged)
+		next := orgv1gorm.UserFromProto(merged)
 		_ = next
 		existing.Name = next.Name
 		existing.DisplayName = next.DisplayName
 		existing.Etag = repox.Ptr(repox.NewULID())
-		return orgv1.NewUserStore(tx).Update(ctx, &existing)
+		return orgv1gorm.NewUserStore(tx).Update(ctx, &existing)
 	})
 	if err != nil {
 		return nil, repox.MapGormErr(err)
@@ -697,11 +697,11 @@ func (r *GormUserRepository) Delete(ctx context.Context, name string) error {
 		}
 	}
 	id := ids[len(ids)-1]
-	var existing orgv1.User
+	var existing orgv1gorm.User
 	if err := r.DB.WithContext(ctx).First(&existing, "id = ?", id).Error; err != nil {
 		return repox.MapGormErr(err)
 	}
-	return repox.MapGormErr(orgv1.NewUserStore(r.DB).DeleteByID(ctx, id))
+	return repox.MapGormErr(orgv1gorm.NewUserStore(r.DB).DeleteByID(ctx, id))
 }
 
 // Compile-time proof the adapter satisfies the interface.

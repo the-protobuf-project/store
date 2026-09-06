@@ -8,7 +8,7 @@
 //
 // Migration aggregator: every model in one factory Registry.
 // annotations: entity.v1 (unknown), store.v1 (unknown)
-// engine:      protokit (unknown)
+// engine:      protokit v1.2.1
 //
 // store — https://github.com/the-protobuf-project/store
 

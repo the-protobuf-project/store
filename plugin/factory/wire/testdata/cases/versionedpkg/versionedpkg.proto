@@ -1,0 +1,71 @@
+syntax = "proto3";
+
+package resource.v1;
+
+import "entity/v1/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "google/protobuf/timestamp.proto";
+
+// The ";name" suffix, not the import path, is what protoc-gen-go names the
+// generated package: this file compiles to `package resourcev1`, and every
+// qualifier in every golden below must be "resourcev1". A generator that reads
+// the name off the path's last segment instead calls it "gen" here (and "v1"
+// for the real-world `.../resource/v1;resourcev1` layout this stands in for —
+// the golden harness pins every case's import path to example.com/test/gen, so
+// the divergence it can express is the name against that path's last segment).
+//
+// The schema this derives, "resource_v1", also yields the Go package name
+// "resourcev1". So the repository adapters import a proto package and a gorm
+// models package that want the same identifier, and only one may stay bare:
+// the proto package keeps the name protoc-gen-go gave it, and the models
+// import takes the alias.
+option go_package = "example.com/test/gen;resourcev1";
+
+// State exercises the enum path, whose qualifier is resolved from the enum's
+// own ident rather than the message's.
+enum State {
+  STATE_UNSPECIFIED = 0;
+  STATE_ACTIVE = 1;
+  STATE_ARCHIVED = 2;
+}
+
+// Window is a value object: it relationalizes to its own table, so converters
+// render a message-typed field's qualifier too.
+message Window {
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
+
+  // Window start.
+  google.protobuf.Timestamp start_time = 1 [(google.api.field_behavior) = REQUIRED];
+
+  // Window end.
+  google.protobuf.Timestamp end_time = 2 [(google.api.field_behavior) = OPTIONAL];
+}
+
+// Event is the resource: it drives both the repository interfaces and the
+// gorm converters, the two targets that qualify proto types.
+message Event {
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
+
+  option (google.api.resource) = {
+    type: "resource.v1/Event"
+    pattern: "events/{event}"
+    singular: "event"
+    plural: "events"
+  };
+
+  // Resource name; the AIP identifier.
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  // Human-friendly name.
+  string display_name = 2 [(google.api.field_behavior) = REQUIRED];
+
+  // Lifecycle state, qualified through the enum's own package.
+  State state = 3 [(google.api.field_behavior) = OPTIONAL];
+
+  // Scheduling window, relationalized to its own table.
+  Window window = 4 [(google.api.field_behavior) = OPTIONAL];
+
+  // Creation timestamp, exercising the well-known-type imports alongside.
+  google.protobuf.Timestamp create_time = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+}

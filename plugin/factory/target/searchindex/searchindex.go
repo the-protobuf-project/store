@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package searchindex plans the GIN indexes a table's query surface needs.
 //
 // The filter engine's containment operators cannot use a B-tree: a leading

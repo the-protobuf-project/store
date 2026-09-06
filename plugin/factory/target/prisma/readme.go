@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package prisma
 
 // readme.go documents the generated Prisma tree. It writes a README.md into

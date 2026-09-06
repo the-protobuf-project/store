@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package backend
 
 // outbox.go synthesizes the companion table that (store.v1.table).outbox asks

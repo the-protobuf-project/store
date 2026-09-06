@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package gorm
 
 // view.go prepares the models.go template view: naming, Go types, struct tags,

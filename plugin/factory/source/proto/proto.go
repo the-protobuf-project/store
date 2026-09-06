@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package proto is the factory Source that reads proto descriptors. It wraps
 // protokit's proto→IR build so the rest of the factory never depends on protoc
 // directly: Build runs protokit.Build with this plugin's facet readers and layout

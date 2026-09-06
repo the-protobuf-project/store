@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package gorm
 
 // opts.go reads the gorm target's render-time knobs off the neutral IR. The orm

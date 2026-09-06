@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package selection renders Go model struct bodies from IR objects.
 //
 // Selection sets are expressed as the nested Go struct shape: scalar/enum fields

@@ -9,7 +9,7 @@
 //
 // AIP-160 filter / AIP-132 order_by specs — data for the shared filterx engines.
 // annotations: entity.v1 (unknown), store.v1 (unknown)
-// engine:      protokit (unknown)
+// engine:      protokit v1.2.1
 //
 // store — https://github.com/the-protobuf-project/store
 

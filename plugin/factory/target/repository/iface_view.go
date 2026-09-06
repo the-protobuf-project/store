@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package repository
 
 // iface_view.go prepares the per-schema repository.go view: one interface per
@@ -13,6 +16,7 @@ import (
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
 	"github.com/the-protobuf-project/store/plugin/factory/provenance"
+	"github.com/the-protobuf-project/store/plugin/factory/target/gopkg"
 )
 
 // resourceView is the template data for one resource's interface + hooks.
@@ -63,7 +67,7 @@ func schemaView(pb *pbIndex, db *schema.Database, s *schema.Schema, resources ma
 			return nil, fmt.Errorf("repository: no generated Go type for %s (is its proto in the codegen request?)", r.Table.ProtoMessage)
 		}
 		pbPkg := string(msg.GoIdent.GoImportPath)
-		pkgName := goPackageName(pbPkg)
+		pkgName := pb.names.Of(pbPkg)
 		imports[pbPkg] = pkgName
 		views = append(views, resourceView{
 			Model:       r.Table.LocalName,
@@ -90,18 +94,9 @@ func schemaView(pb *pbIndex, db *schema.Database, s *schema.Schema, resources ma
 	}, nil
 }
 
-// goPackageName derives the Go package name for a generated pb import path:
-// its last segment (protoc-gen-go's `package foo` matches the final ;name or
-// directory segment, which the GoIdent import path already reflects).
-func goPackageName(path string) string {
-	if i := lastIndexByte(path, '/'); i >= 0 {
-		return path[i+1:]
-	}
-	return path
-}
-
 // renderImports renders sorted import lines, aliasing only when the package
-// name differs from the path's last segment.
+// name differs from the path's last segment — the name a bare import would
+// otherwise bind.
 func renderImports(m map[string]string) []string {
 	paths := make([]string, 0, len(m))
 	for p := range m {
@@ -111,7 +106,7 @@ func renderImports(m map[string]string) []string {
 	lines := make([]string, 0, len(paths))
 	for _, p := range paths {
 		alias := m[p]
-		if alias != "" && alias == goPackageName(p) {
+		if alias != "" && alias == gopkg.LastSegment(p) {
 			alias = ""
 		}
 		if alias != "" {

@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package licence.v1;
+
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "entity/v1/annotations.proto";
+
+option go_package = "example.com/test/gen;licencev1";
+option (entity.v1.datasource) = {
+  database: "licence_db"
+  provider: "postgres"
+  schema: "public"
+};
+
+// Ledger exists to put one table in front of every renderer, so the goldens
+// show the licence block the case's license_header marker sets: above the
+// banner, separated by a blank line, and carried in each target's own comment
+// syntax — "//" for the gorm models and the Prisma schema, "--" for the DDL.
+message Ledger {
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
+
+  option (google.api.resource) = {
+    type: "licence.v1/Ledger"
+    pattern: "ledgers/{ledger}"
+    singular: "ledger"
+    plural: "ledgers"
+  };
+
+  // Ledger name.
+  string name = 1 [(google.api.field_behavior) = REQUIRED];
+
+  // Balance, in minor units.
+  int64 balance = 2 [(google.api.field_behavior) = OPTIONAL];
+}

@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package backend is this plugin's bridge to protokit: the reader that brings
 // store.v1 into protokit's IR, and the layout policy resolved from store.yaml.
 //
