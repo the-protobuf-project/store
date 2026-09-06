@@ -309,6 +309,22 @@ func pbEnumType(pb *pbIndex, c *schema.Column) (string, bool) {
 	return "", false
 }
 
+// gqlOneofOut returns the row-assignment target for a column whose proto field
+// is a oneof member: the oneof struct field, and the wrapper type the value is
+// boxed in. ok is false for a plain field.
+//
+// protoc-gen-go gives a oneof member no struct field of its own — the value
+// lives behind a generated wrapper on the oneof field — so "out.Duration = v"
+// does not compile. This mirrors what the gorm converter does; the two paths
+// hit the same protos and must agree.
+func gqlOneofOut(pb *pbIndex, c *schema.Column) (oneofField, wrapper string, ok bool) {
+	f := pbFieldOf(pb, c)
+	if f == nil || f.Oneof == nil || f.Oneof.Desc.IsSynthetic() {
+		return "", "", false
+	}
+	return f.Oneof.GoName, pb.names.Of(string(f.GoIdent.GoImportPath)) + "." + f.GoIdent.GoName, true
+}
+
 // gqlScalarFragments renders the three fragments for one plain scalar column.
 func gqlScalarFragments(pb *pbIndex, c *schema.Column, rowField string) (inputs, patches, rows []string, needs helperNeeds, ok bool) {
 	field := export(camel(c.Name))
@@ -316,6 +332,16 @@ func gqlScalarFragments(pb *pbIndex, c *schema.Column, rowField string) (inputs,
 	acc := "in.Get" + gof + "()"
 	mAcc := "merged.Get" + gof + "()"
 	outField := "out." + gof
+	// assignRow renders the row->proto assignment. A oneof member has no struct
+	// field of its own, so it is boxed in its wrapper and guarded: an absent
+	// column must leave the oneof unset rather than select an arm holding nil.
+	assignRow := func(expr string) string {
+		oneof, wrapper, isOneof := gqlOneofOut(pb, c)
+		if !isOneof {
+			return fmt.Sprintf("%s = %s", outField, expr)
+		}
+		return fmt.Sprintf("if v := %s; v != nil {\n\t\tout.%s = &%s{%s: v}\n\t}", expr, oneof, wrapper, gof)
+	}
 	rowVal := rowField
 	if c.Optional {
 		rowVal = "repox.Deref(" + rowField + ")"
@@ -334,7 +360,7 @@ func gqlScalarFragments(pb *pbIndex, c *schema.Column, rowField string) (inputs,
 	set := func(inExpr, patchExpr, rowExpr, zero string) {
 		inputs = append(inputs, fmt.Sprintf("ci.%s = %s", field, inExpr))
 		patches = append(patches, gqlPatch(field, patchExpr, zero, c.Optional))
-		rows = append(rows, fmt.Sprintf("%s = %s", outField, rowExpr))
+		rows = append(rows, assignRow(rowExpr))
 	}
 
 	if c.List {
@@ -343,7 +369,7 @@ func gqlScalarFragments(pb *pbIndex, c *schema.Column, rowField string) (inputs,
 			// The client represents text[] with nullable elements ([]*string).
 			inputs = append(inputs, fmt.Sprintf("ci.%s = strSliceToPtrs(%s)", field, acc))
 			patches = append(patches, fmt.Sprintf("patch.%s = graphql.Value(strSliceToPtrs(%s))", field, mAcc))
-			rows = append(rows, fmt.Sprintf("%s = strPtrsToSlice(%s)", outField, rowField))
+			rows = append(rows, assignRow("strPtrsToSlice("+rowField+")"))
 			return inputs, patches, rows, needs, true
 		}
 		return nil, nil, nil, needs, false
@@ -367,47 +393,79 @@ func gqlScalarFragments(pb *pbIndex, c *schema.Column, rowField string) (inputs,
 		}
 		inputs = append(inputs, fmt.Sprintf("if v := %s; v != 0 {\n\t\tci.%s = %s\n\t}", acc, field, toStr(acc)))
 		patches = append(patches, gqlPatch(field, toStr(mAcc), fmt.Sprintf("%q", "UNSPECIFIED"), c.Optional))
-		rows = append(rows, fmt.Sprintf("%s = %s(%s_value[%q+%s])", outField, pbT, pbT, prefix, rowVal))
+		rows = append(rows, assignRow(fmt.Sprintf("%s(%s_value[%q+%s])", pbT, pbT, prefix, rowVal)))
 	case schema.TypeInt32, schema.TypeUint32:
 		set(fmt.Sprintf("int32(%s)", acc), fmt.Sprintf("int32(%s)", mAcc), fmt.Sprintf("%s(%s)", pbCast(pb, c), rowVal), "0")
 	case schema.TypeInt64, schema.TypeUint64:
 		inputs = append(inputs, fmt.Sprintf("ci.%s = graphql.Int64(%s)", field, acc))
 		patches = append(patches, gqlPatch(field, fmt.Sprintf("graphql.Int64(%s)", mAcc), "graphql.Int64(0)", c.Optional))
-		rows = append(rows, fmt.Sprintf("%s = %s(%s)", outField, pbCast(pb, c), rowVal))
+		rows = append(rows, assignRow(fmt.Sprintf("%s(%s)", pbCast(pb, c), rowVal)))
 	case schema.TypeFloat, schema.TypeDouble:
 		set(acc, mAcc, rowVal, "0.0")
 	case schema.TypeDecimal:
 		needs.Decimal = true
 		inputs = append(inputs, fmt.Sprintf("ci.%s = bigdec(%s)", field, acc))
 		patches = append(patches, gqlPatch(field, fmt.Sprintf("bigdec(%s)", mAcc), `graphql.Bigdecimal("")`, c.Optional))
-		rows = append(rows, fmt.Sprintf("%s = fromBigdec(%s)", outField, rowVal))
+		rows = append(rows, assignRow(fmt.Sprintf("fromBigdec(%s)", rowVal)))
 	case schema.TypeBool:
 		set(acc, mAcc, rowVal, "false")
 	case schema.TypeTimestamp:
+		// protokit maps more than one well-known type onto this schema type
+		// (TypeTimestamp covers google.type.DateTime too), and they are different
+		// Go types. Emitting the helper for the wrong one does not compile, so an
+		// unrecognised message is skipped as an unsupported shape — the same guard
+		// the gorm converter applies.
+		if f := pbFieldOf(pb, c); f != nil && f.Message != nil && string(f.Message.Desc.FullName()) != "google.protobuf.Timestamp" {
+			return nil, nil, nil, needs, false
+		}
 		needs.Ts = true
 		inputs = append(inputs, fmt.Sprintf("ci.%s = tsToStr(%s)", field, acc))
 		patches = append(patches, gqlPatch(field, fmt.Sprintf("tsToStr(%s)", mAcc), `""`, c.Optional))
-		rows = append(rows, fmt.Sprintf("%s = strToTs(%s)", outField, rowVal))
+		rows = append(rows, assignRow(fmt.Sprintf("strToTs(%s)", rowVal)))
 	case schema.TypeDate:
+		// protokit maps more than one well-known type onto this schema type
+		// (TypeTimestamp covers google.type.DateTime too), and they are different
+		// Go types. Emitting the helper for the wrong one does not compile, so an
+		// unrecognised message is skipped as an unsupported shape — the same guard
+		// the gorm converter applies.
+		if f := pbFieldOf(pb, c); f != nil && f.Message != nil && string(f.Message.Desc.FullName()) != "google.type.Date" {
+			return nil, nil, nil, needs, false
+		}
 		needs.Date = true
 		inputs = append(inputs, fmt.Sprintf("if v := dateToStr(%s); v != \"\" {\n\t\tci.%s = v\n\t}", acc, field))
 		patches = append(patches, gqlPatch(field, fmt.Sprintf("dateToStr(%s)", mAcc), `""`, c.Optional))
-		rows = append(rows, fmt.Sprintf("%s = strToDate(%s)", outField, rowVal))
+		rows = append(rows, assignRow(fmt.Sprintf("strToDate(%s)", rowVal)))
 	case schema.TypeDuration:
+		// protokit maps more than one well-known type onto this schema type
+		// (TypeTimestamp covers google.type.DateTime too), and they are different
+		// Go types. Emitting the helper for the wrong one does not compile, so an
+		// unrecognised message is skipped as an unsupported shape — the same guard
+		// the gorm converter applies.
+		if f := pbFieldOf(pb, c); f != nil && f.Message != nil && string(f.Message.Desc.FullName()) != "google.protobuf.Duration" {
+			return nil, nil, nil, needs, false
+		}
 		needs.Duration = true
 		inputs = append(inputs, fmt.Sprintf("if v := durToStr(%s); v != \"\" {\n\t\tci.%s = v\n\t}", acc, field))
 		patches = append(patches, gqlPatch(field, fmt.Sprintf("durToStr(%s)", mAcc), `""`, c.Optional))
-		rows = append(rows, fmt.Sprintf("%s = strToDur(%s)", outField, rowVal))
+		rows = append(rows, assignRow(fmt.Sprintf("strToDur(%s)", rowVal)))
 	case schema.TypeJSON:
+		// TypeJSON also covers a proto map field, which is a distinct Go type
+		// (map[string]*T, not *structpb.Struct). Same guard as above.
+		if f := pbFieldOf(pb, c); f != nil && f.Message != nil && string(f.Message.Desc.FullName()) != "google.protobuf.Struct" {
+			return nil, nil, nil, needs, false
+		}
+		if f := pbFieldOf(pb, c); f != nil && f.Desc.IsMap() {
+			return nil, nil, nil, needs, false
+		}
 		needs.Struct = true
 		inputs = append(inputs, fmt.Sprintf("ci.%s = structToJSON(%s)", field, acc))
 		patches = append(patches, fmt.Sprintf("patch.%s = graphql.Value(structToJSON(%s))", field, mAcc))
-		rows = append(rows, fmt.Sprintf("%s = jsonToStruct(%s)", outField, rowField))
+		rows = append(rows, assignRow(fmt.Sprintf("jsonToStruct(%s)", rowField)))
 	case schema.TypeBytes:
 		needs.Bytes = true
 		inputs = append(inputs, fmt.Sprintf("ci.%s = bytesToRaw(%s)", field, acc))
 		patches = append(patches, fmt.Sprintf("patch.%s = graphql.Value(bytesToRaw(%s))", field, mAcc))
-		rows = append(rows, fmt.Sprintf("%s = rawToBytes(%s)", outField, rowField))
+		rows = append(rows, assignRow(fmt.Sprintf("rawToBytes(%s)", rowField)))
 	default:
 		return nil, nil, nil, needs, false
 	}

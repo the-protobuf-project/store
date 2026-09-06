@@ -26,6 +26,7 @@ import (
 	"example.com/test/genql/orgv1ql/timewindowsql"
 	"example.com/test/genql/orgv1ql/usersql"
 	"github.com/the-protobuf-project/runtime-go/network/graphql"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -76,6 +77,25 @@ func jsonToStruct(r *json.RawMessage) *structpb.Struct {
 	return s
 }
 
+// durToStr / strToDur cross the interval boundary as Go duration strings.
+func durToStr(d *durationpb.Duration) string {
+	if d == nil {
+		return ""
+	}
+	return d.AsDuration().String()
+}
+
+func strToDur(s string) *durationpb.Duration {
+	if s == "" {
+		return nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return nil
+	}
+	return durationpb.New(d)
+}
+
 // memberToCreateInput maps the proto onto the client's insert input.
 // Identity (id, name resolution), parentage, audit timestamps, and etag are
 // set by the adapter.
@@ -91,6 +111,9 @@ func memberToCreateInput(in *orgv1.Member) membersql.CreateInput {
 	}
 	if v := in.GetRole(); v != 0 {
 		ci.Role = strings.TrimPrefix(in.GetRole().String(), "MEMBER_ROLE_")
+	}
+	if v := durToStr(in.GetDuration()); v != "" {
+		ci.Duration = v
 	}
 	return ci
 }
@@ -109,6 +132,11 @@ func memberToUpdatePatch(merged *orgv1.Member) membersql.UpdateInput {
 		patch.Inviter = graphql.Null[string]()
 	}
 	patch.Role = graphql.Value(strings.TrimPrefix(merged.GetRole().String(), "MEMBER_ROLE_"))
+	if v := durToStr(merged.GetDuration()); v != "" {
+		patch.Duration = graphql.Value(v)
+	} else {
+		patch.Duration = graphql.Null[string]()
+	}
 	return patch
 }
 
@@ -128,6 +156,9 @@ func memberFromRow(row *membersql.OrgV1Members) *orgv1.Member {
 		out.Inviter = "users/" + v
 	}
 	out.Role = orgv1.MemberRole(orgv1.MemberRole_value["MEMBER_ROLE_"+row.Role])
+	if v := strToDur(repox.Deref(row.Duration)); v != nil {
+		out.Span = &orgv1.Member_Duration{Duration: v}
+	}
 	out.Etag = repox.Deref(row.Etag)
 	out.CreateTime = strToTs(row.CreateTime)
 	out.UpdateTime = strToTs(row.UpdateTime)

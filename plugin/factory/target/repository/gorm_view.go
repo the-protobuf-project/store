@@ -64,6 +64,14 @@ type maskFieldView struct {
 	Path    string // proto field name, e.g. "display_name"
 	GoField string // proto Go field, e.g. "DisplayName"
 	Message bool   // message-typed: matched by GroupTouched (prefix) semantics
+	// Oneof is the Go name of the containing oneof ("EndForm"), empty for a
+	// plain field. A oneof member has no struct field of its own — protoc-gen-go
+	// puts it behind a wrapper on the oneof field — so the mask assigns the
+	// whole oneof rather than the member.
+	Oneof string
+	// Paths lists every arm's proto field name when Oneof is set: touching any
+	// arm replaces the whole oneof, because it holds at most one member.
+	Paths []string
 }
 
 // gormResourceViews builds the adapter views for schema s in table order.
@@ -130,6 +138,12 @@ func gormResourceViews(pb *pbIndex, db *schema.Database, s *schema.Schema, resou
 		v.VODeleteCleanups = vg.DeleteCleanups
 		v.VOMaskLines = vg.MaskLines
 		v.CrossVOPkgs = vg.CrossPkgs
+		// A oneof can mix value objects with inline columns (RFC 7953's span is
+		// a CalendarTime or a Duration). Both paths assign the whole oneof, so
+		// without this the two would emit the same `merged.Span = in.Span`
+		// twice, under different halves of the condition. Fold the inline arms'
+		// paths into the VO group and drop the duplicate entry.
+		v.MaskFields, v.VOMaskLines = mergeOneofMasks(v.MaskFields, v.VOMaskLines, vg.MaskOneofs)
 		out = append(out, v)
 	}
 	return out, nil
@@ -169,6 +183,7 @@ func refFragments(pb *pbIndex, db *schema.Database, resources map[*schema.Table]
 func mutableFragments(pb *pbIndex, db *schema.Database, resources map[*schema.Table]*resource, r *resource) ([]string, []maskFieldView) {
 	var assigns []string
 	var masks []maskFieldView
+	oneofSeen := map[string]int{}
 	for _, c := range r.Cols.Mutable {
 		pf := protoField(c)
 		if c.FKModel != "" {
@@ -186,13 +201,53 @@ func mutableFragments(pb *pbIndex, db *schema.Database, resources map[*schema.Ta
 			field := gormField(c)
 			assigns = append(assigns, fmt.Sprintf("existing.%s = next.%s", field, field))
 		}
-		masks = append(masks, maskFieldView{
+		mv := maskFieldView{
 			Path:    pf,
 			GoField: pbGoField(pb, c),
 			Message: isMessageField(c),
-		})
+			Oneof:   pbOneofField(pb, c),
+		}
+		if mv.Oneof != "" {
+			// One entry per oneof, not per member: the assignment replaces the
+			// whole oneof, so emitting it for each arm would repeat the same
+			// line. The first member seen carries the group and collects every
+			// arm's path into the condition.
+			if i, ok := oneofSeen[mv.Oneof]; ok {
+				masks[i].Paths = append(masks[i].Paths, pf)
+				continue
+			}
+			oneofSeen[mv.Oneof] = len(masks)
+			mv.Paths = []string{pf}
+		}
+		masks = append(masks, mv)
 	}
 	return assigns, masks
+}
+
+// mergeOneofMasks folds inline-column oneof arms into the value-object mask line
+// for the same oneof, so each oneof is assigned exactly once.
+//
+// voOneofs maps a oneof's Go name to the index of its line in voLines. An arm
+// whose oneof has no VO line is left alone — it is a oneof of inline columns
+// only, and its own entry is the only one that will assign it.
+func mergeOneofMasks(masks []maskFieldView, voLines []string, voOneofs map[string]int) ([]maskFieldView, []string) {
+	if len(voOneofs) == 0 {
+		return masks, voLines
+	}
+	kept := masks[:0]
+	for _, m := range masks {
+		i, ok := voOneofs[m.Oneof]
+		if m.Oneof == "" || !ok {
+			kept = append(kept, m)
+			continue
+		}
+		var conds []string
+		for _, p := range m.Paths {
+			conds = append(conds, fmt.Sprintf("repox.GroupTouched(paths, %q)", p))
+		}
+		voLines[i] = strings.Replace(voLines[i], "if ", "if "+strings.Join(conds, " || ")+" || ", 1)
+	}
+	return kept, voLines
 }
 
 // findResourceByModel resolves a reference column's target resource anywhere
@@ -229,6 +284,32 @@ func isMessageField(c *schema.Column) bool {
 // protogen's authoritative GoName (protoc-gen-go does not Go-normalize
 // initialisms: avatar_url → AvatarUrl, never AvatarURL), with a plain
 // per-part capitalization fallback for fields protogen didn't load.
+// pbOneofField returns the Go name of the real oneof containing c's proto
+// field, or "" when the field is not a oneof member.
+//
+// Synthetic oneofs are excluded: proto3 `optional` is modelled as a one-member
+// oneof, but protoc-gen-go still emits a plain pointer field for it, so it is
+// assigned directly like any other column.
+func pbOneofField(pb *pbIndex, c *schema.Column) string {
+	if c.Source == nil {
+		return ""
+	}
+	m, ok := pb.msgs[c.Source.ContainingMessage().FullName()]
+	if !ok {
+		return ""
+	}
+	for _, f := range m.Fields {
+		if f.Desc.FullName() != c.Source.FullName() {
+			continue
+		}
+		if f.Oneof == nil || f.Oneof.Desc.IsSynthetic() {
+			return ""
+		}
+		return f.Oneof.GoName
+	}
+	return ""
+}
+
 func pbGoField(pb *pbIndex, c *schema.Column) string {
 	if c.Source != nil {
 		if m, ok := pb.msgs[c.Source.ContainingMessage().FullName()]; ok {

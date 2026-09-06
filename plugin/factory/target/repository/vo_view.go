@@ -26,6 +26,10 @@ type voGorm struct {
 	DeleteCleanups []string // VO-row removals after the owner row's delete
 	MaskLines      []string // oneof group merges spliced into apply<X>Mask
 	CrossPkgs      []string // gorm packages of cross-schema value objects (imports)
+	// MaskOneofs maps a oneof's Go name to its index in MaskLines, so an inline
+	// arm of the same oneof can fold its condition into that line instead of
+	// emitting a second assignment of the same field.
+	MaskOneofs map[string]int
 }
 
 // voGormFragments renders every VO fragment for r. pkg is the identifier the
@@ -62,6 +66,10 @@ func voGormFragments(pkg string, r *resource) voGorm {
 			for _, v := range grp {
 				conds = append(conds, fmt.Sprintf("repox.GroupTouched(paths, %q)", v.FieldName))
 			}
+			if out.MaskOneofs == nil {
+				out.MaskOneofs = map[string]int{}
+			}
+			out.MaskOneofs[grp[0].Case.OneofGoName] = len(out.MaskLines)
 			out.MaskLines = append(out.MaskLines, fmt.Sprintf(
 				"if %s {\n\t\tmerged.%s = in.%s\n\t}",
 				strings.Join(conds, " || "), grp[0].Case.OneofGoName, grp[0].Case.OneofGoName))

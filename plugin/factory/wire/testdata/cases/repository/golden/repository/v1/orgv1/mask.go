@@ -23,7 +23,8 @@ import (
 // applyMemberMask merges the masked fields of in onto merged. An empty
 // mask replaces every mutable field; identity, parentage, timestamps, and etag
 // are repository-managed and never masked. Message-typed fields are replaced
-// wholesale when the mask touches them or any of their subpaths.
+// wholesale when the mask touches them or any of their subpaths, and a oneof is
+// replaced whole when the mask touches any of its arms — it holds at most one.
 func applyMemberMask(merged, in *orgv1.Member, paths []string) {
 	if repox.InMask(paths, "name") {
 		merged.Name = in.GetName()
@@ -40,7 +41,7 @@ func applyMemberMask(merged, in *orgv1.Member, paths []string) {
 	if repox.InMask(paths, "role") {
 		merged.Role = in.GetRole()
 	}
-	if repox.GroupTouched(paths, "window") || repox.GroupTouched(paths, "date_range") {
+	if repox.GroupTouched(paths, "duration") || repox.GroupTouched(paths, "window") || repox.GroupTouched(paths, "date_range") {
 		merged.Span = in.Span
 	}
 }
@@ -48,7 +49,8 @@ func applyMemberMask(merged, in *orgv1.Member, paths []string) {
 // applyOrganisationMask merges the masked fields of in onto merged. An empty
 // mask replaces every mutable field; identity, parentage, timestamps, and etag
 // are repository-managed and never masked. Message-typed fields are replaced
-// wholesale when the mask touches them or any of their subpaths.
+// wholesale when the mask touches them or any of their subpaths, and a oneof is
+// replaced whole when the mask touches any of its arms — it holds at most one.
 func applyOrganisationMask(merged, in *orgv1.Organisation, paths []string) {
 	if repox.InMask(paths, "name") {
 		merged.Name = in.GetName()
@@ -70,7 +72,8 @@ func applyOrganisationMask(merged, in *orgv1.Organisation, paths []string) {
 // applyUserMask merges the masked fields of in onto merged. An empty
 // mask replaces every mutable field; identity, parentage, timestamps, and etag
 // are repository-managed and never masked. Message-typed fields are replaced
-// wholesale when the mask touches them or any of their subpaths.
+// wholesale when the mask touches them or any of their subpaths, and a oneof is
+// replaced whole when the mask touches any of its arms — it holds at most one.
 func applyUserMask(merged, in *orgv1.User, paths []string) {
 	if repox.InMask(paths, "name") {
 		merged.Name = in.GetName()

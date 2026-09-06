@@ -23,7 +23,8 @@ import (
 // applyEventMask merges the masked fields of in onto merged. An empty
 // mask replaces every mutable field; identity, parentage, timestamps, and etag
 // are repository-managed and never masked. Message-typed fields are replaced
-// wholesale when the mask touches them or any of their subpaths.
+// wholesale when the mask touches them or any of their subpaths, and a oneof is
+// replaced whole when the mask touches any of its arms — it holds at most one.
 func applyEventMask(merged, in *resourcev1.Event, paths []string) {
 	if repox.InMask(paths, "name") {
 		merged.Name = in.GetName()

@@ -43,10 +43,18 @@ func (r *Renderer) ModelBody(obj *ir.Object) string {
 }
 
 // body renders one object's fields at the given remaining depth.
+//
+// used tracks the Go field names already emitted for this struct. Two distinct
+// GraphQL fields can export to the same identifier — a meta field and a column
+// differing only by the leading underscore export() strips, as in an aggregate
+// with both "_count" and a column literally named "count" — and a struct cannot
+// declare the same field twice. Each struct gets a fresh set: nesting renders a
+// separate struct literal, so an inner field never collides with an outer one.
 func (r *Renderer) body(obj *ir.Object, depth int, visited map[string]bool) string {
 	var b strings.Builder
+	used := map[string]bool{}
 	for _, f := range obj.Fields {
-		line, ok := r.field(f, depth, visited)
+		line, ok := r.field(f, depth, visited, used)
 		if ok {
 			b.WriteString(line)
 			b.WriteByte('\n')
@@ -57,7 +65,7 @@ func (r *Renderer) body(obj *ir.Object, depth int, visited map[string]bool) stri
 
 // field renders a single field declaration. The bool result is false when the field
 // is skipped (a relation beyond max depth or on a cyclic path).
-func (r *Renderer) field(f ir.Field, depth int, visited map[string]bool) (string, bool) {
+func (r *Renderer) field(f ir.Field, depth int, visited map[string]bool, used map[string]bool) (string, bool) {
 	tag := fmt.Sprintf("`graphql:%q`", f.Name)
 	// A JSON scalar column decodes to an opaque json.RawMessage. Tag it `scalar`
 	// so the graphql client copies the raw JSON into the field instead of
@@ -67,7 +75,10 @@ func (r *Renderer) field(f ir.Field, depth int, visited map[string]bool) (string
 	if r.mapper.UsesJSON(f.Type.Base) {
 		tag = fmt.Sprintf("`graphql:%q scalar:\"true\"`", f.Name)
 	}
-	goName := export(f.Name)
+	// Reserved through naming.Unique so a second field exporting to the same
+	// identifier becomes Count2 rather than redeclaring Count. The GraphQL tag
+	// still carries the real name, so the wire query is unaffected.
+	goName := naming.Unique(export(f.Name), used)
 	doc := naming.Doc(f.Description)
 	if doc == "" {
 		doc = naming.Doc(fieldDoc(goName, f))

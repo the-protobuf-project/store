@@ -5,6 +5,7 @@ package org.v1;
 import "google/api/field_behavior.proto";
 import "google/api/resource.proto";
 import "google/protobuf/struct.proto";
+import "google/protobuf/duration.proto";
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/wrappers.proto";
 import "entity/v1/annotations.proto";
@@ -188,13 +189,23 @@ message Member {
   // Opaque version for optimistic concurrency.
   string etag = 8;
 
-  // Membership span: a oneof of two value objects, exercising the synthesized
-  // case column and whole-group mask replacement.
+  // Membership span: a oneof mixing value objects with a well-known type,
+  // exercising the synthesized case column and whole-group mask replacement.
+  //
+  // The `duration` arm is the case that regressed: a WKT inside a oneof becomes
+  // an inline column, not a child table, so it never reaches the value-object
+  // path that already handled oneofs. Without it here, the mask emitted
+  // `merged.Duration = in.GetDuration()` for a field protoc-gen-go puts behind
+  // `merged.Span`, and nothing in this suite noticed. RFC 7953's VAVAILABILITY
+  // has exactly this shape (DTEND or DURATION).
   oneof span {
     // Exact time window.
     TimeWindow window = 9;
 
     // Whole-day stretch.
     DateStretch date_range = 10;
+
+    // Relative length, as a well-known type rather than a value object.
+    google.protobuf.Duration duration = 11;
   }
 }

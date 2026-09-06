@@ -232,6 +232,7 @@ func (r *GormMemberRepository) Update(ctx context.Context, in *orgv1.Member, pat
 			existing.InviterID = nil
 		}
 		existing.Role = next.Role
+		existing.Duration = next.Duration
 		if repox.GroupTouched(paths, "window") || repox.GroupTouched(paths, "date_range") {
 			if existing.WindowID != nil {
 				staleWindow = *existing.WindowID
