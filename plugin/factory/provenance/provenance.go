@@ -37,9 +37,10 @@ import (
 // builds the IR, so it stays in the banner on its own line.
 const protokitModule = "github.com/the-protobuf-project/protokit"
 
-// unknown is the sentinel protoc-gen-go uses for a version it cannot determine,
-// reused here so the banner reads consistently.
-const unknown = "(unknown)"
+// Unknown is the sentinel protoc-gen-go uses for a version it cannot determine,
+// reused here so the banner reads consistently. It is exported because the
+// golden tests pin the engine version to it; see SetEngineVersion.
+const Unknown = "(unknown)"
 
 // moduleVersion resolves a dependency's version from the build info the Go
 // toolchain embeds. A test binary, a `go run` build, or a module replaced by a
@@ -48,19 +49,32 @@ const unknown = "(unknown)"
 func moduleVersion(path string) string {
 	bi, ok := debug.ReadBuildInfo()
 	if !ok {
-		return unknown
+		return Unknown
 	}
 	for _, dep := range bi.Deps {
 		if dep.Path == path && dep.Version != "" {
 			return dep.Version
 		}
 	}
-	return unknown
+	return Unknown
 }
 
 // Resolved once per process: build info does not change under a running binary,
-// and every generated file in a run carries the same banner.
+// and every generated file in a run carries the same banner. It is a variable so
+// SetEngineVersion can replace the lookup.
 var protokitVersion = sync.OnceValue(func() string { return moduleVersion(protokitModule) })
+
+// SetEngineVersion pins the engine version stamped into every banner, replacing
+// the build-info lookup.
+//
+// The golden tests call this, because that lookup is not reproducible. What it
+// finds depends on how the build resolved protokit — a module dependency carries
+// its version, a local `replace` carries none — and, for a test binary, on the
+// toolchain: Go 1.27 records dependency versions that Go 1.26 left empty. A
+// byte-for-byte golden generated under one of those answers fails under another,
+// which is a property of the harness rather than of the output, so the tests take
+// the variable out of the comparison instead of encoding one machine's answer.
+func SetEngineVersion(v string) { protokitVersion = func() string { return v } }
 
 // license is the copyright/licence block placed above every generated banner,
 // set once at startup from the license_header opt. It is empty by default, and
@@ -127,7 +141,7 @@ func Render(prefix string, in header.Info, runtimeModules ...string) string {
 // forever now that it is part of the main module rather than a dependency.
 func notes(pluginVersion string, runtimeModules []string) []string {
 	if pluginVersion == "" {
-		pluginVersion = unknown
+		pluginVersion = Unknown
 	}
 	out := []string{
 		"annotations: entity.v1 " + pluginVersion + ", store.v1 " + pluginVersion,

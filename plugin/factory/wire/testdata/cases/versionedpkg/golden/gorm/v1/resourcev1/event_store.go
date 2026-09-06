@@ -8,7 +8,7 @@
 // schema:   resource_v1
 //
 // annotations: entity.v1 (unknown), store.v1 (unknown)
-// engine:      protokit v1.2.1
+// engine:      protokit (unknown)
 // runtime:     gorm.io/gorm
 //
 // store — https://github.com/the-protobuf-project/store

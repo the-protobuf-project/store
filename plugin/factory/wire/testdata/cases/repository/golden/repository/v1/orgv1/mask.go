@@ -9,7 +9,7 @@
 //
 // Field-mask merge functions shared by every adapter of this schema.
 // annotations: entity.v1 (unknown), store.v1 (unknown)
-// engine:      protokit v1.2.1
+// engine:      protokit (unknown)
 //
 // store — https://github.com/the-protobuf-project/store
 

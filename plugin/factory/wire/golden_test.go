@@ -94,6 +94,10 @@ func fileExists(path string) bool {
 // the framework instead).
 func TestMain(m *testing.M) {
 	header.SetTool("protoc-gen-store")
+	// The engine version is read from build info, which answers differently
+	// depending on how protokit was resolved and which toolchain built the test
+	// binary. Pin it so the goldens compare output, not the build environment.
+	provenance.SetEngineVersion(provenance.Unknown)
 	os.Exit(m.Run())
 }
 
