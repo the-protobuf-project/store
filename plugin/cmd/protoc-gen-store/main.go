@@ -126,10 +126,10 @@ func main() {
 		"repository target only: Go import path of the generated GraphQL client the "+
 			"graphql repository adapters compose; empty emits gorm-only repositories")
 	licenseHeader := flags.String("license_header", "",
-		"path to a file whose lines are placed above the banner of every generated "+
-			"file (e.g. a copyright and SPDX-License-Identifier block). Write the lines "+
-			"without comment markers — each target applies its own (\"//\" for Go, Prisma "+
-			"and TypeScript, \"--\" for SQL). Unset stamps no copyright, since generated "+
+		"copyright/licence lines to place above the banner of every generated file, "+
+			"separated by \\n (e.g. \"Copyright 2026 Me.\\nSPDX-License-Identifier: Apache-2.0\"). "+
+			"Write them without comment markers — each target applies its own (\"//\" for Go, "+
+			"Prisma and TypeScript, \"--\" for SQL). Unset stamps no copyright, since generated "+
 			"code belongs to whoever ran the generator")
 
 	protogen.Options{ParamFunc: flags.Set}.Run(func(p *protogen.Plugin) error {
@@ -137,13 +137,10 @@ func main() {
 		// not synthetic oneofs); declare it so buf/protoc don't warn.
 		p.SupportedFeatures = uint64(pluginpb.CodeGeneratorResponse_FEATURE_PROTO3_OPTIONAL)
 
-		// Read before any target runs: every generated file's banner carries it.
+		// Set before any target runs: every generated file's banner carries it.
+		// protoc passes the opt as one line, so \n in the value is the line break.
 		if *licenseHeader != "" {
-			b, err := os.ReadFile(*licenseHeader)
-			if err != nil {
-				return fmt.Errorf("license_header: %w", err)
-			}
-			provenance.SetLicense(string(b))
+			provenance.SetLicense(strings.ReplaceAll(*licenseHeader, `\n`, "\n"))
 		}
 
 		// The graphql target reads a GraphQL endpoint from store.yaml rather than the

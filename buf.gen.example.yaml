@@ -11,12 +11,12 @@ version: v2
 # The M entries supply the Go import-path mapping protogen requires for every
 # .proto it processes, so example protos don't need `option go_package`.
 #
-# license_header points at LICENSE.header, whose lines are placed above every
-# generated file's banner. The file carries no comment markers: each target
-# applies its own ("//" here, "--" for the SQL target), so one file covers the
-# whole tree. It is opt-in precisely because generated code belongs to whoever
-# ran the generator — this repository stamps its own output, and a downstream
-# consumer stamps theirs (or nothing) by leaving the opt off.
+# license_header carries the lines placed above every generated file's banner,
+# \n-separated and without comment markers: each target applies its own ("//"
+# here, "--" for the SQL target), so one value covers the whole tree. It is
+# opt-in precisely because generated code belongs to whoever ran the generator —
+# this repository stamps its own output, and a downstream consumer stamps theirs
+# (or nothing) by leaving the opt off.
 inputs:
   - directory: examples/proto
 
@@ -25,7 +25,7 @@ plugins:
     out: examples/generated/prisma
     opt:
       - target=prisma
-      - license_header=LICENSE.header
+      - 'license_header=Copyright 2026 The Protobuf Project authors.\nSPDX-License-Identifier: Apache-2.0'
       - Mbookstore/v1/bookstore.proto=github.com/the-protobuf-project/store/examples/gen/bookstore/v1
       - Mbookstore/v1/inventory.proto=github.com/the-protobuf-project/store/examples/gen/bookstore/v1
 
@@ -33,7 +33,7 @@ plugins:
     out: examples/generated/gorm
     opt:
       - target=gorm
-      - license_header=LICENSE.header
+      - 'license_header=Copyright 2026 The Protobuf Project authors.\nSPDX-License-Identifier: Apache-2.0'
       # go_module is the import path of the gorm out: directory, so the generated
       # migration aggregator can import each per-schema models package.
       - go_module=github.com/the-protobuf-project/store/examples/generated/gorm
@@ -58,7 +58,7 @@ plugins:
     out: examples/generated/sql
     opt:
       - target=sql
-      - license_header=LICENSE.header
+      - 'license_header=Copyright 2026 The Protobuf Project authors.\nSPDX-License-Identifier: Apache-2.0'
       - Mbookstore/v1/bookstore.proto=github.com/the-protobuf-project/store/examples/gen/bookstore/v1
       - Mbookstore/v1/inventory.proto=github.com/the-protobuf-project/store/examples/gen/bookstore/v1
 
@@ -70,7 +70,7 @@ plugins:
     out: examples/generated/graphql
     opt:
       - target=graphql
-      - license_header=LICENSE.header
+      - 'license_header=Copyright 2026 The Protobuf Project authors.\nSPDX-License-Identifier: Apache-2.0'
       - config=examples/graphql/store.yaml
       # buf hands the .proto input to every plugin entry, and protogen refuses to
       # start without an import path for each file — even though this target

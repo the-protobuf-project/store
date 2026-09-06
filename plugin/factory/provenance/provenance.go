@@ -83,8 +83,8 @@ func SetEngineVersion(v string) { protokitVersion = func() string { return v } }
 // rather than something every downstream tree inherits.
 var license []string
 
-// SetLicense sets the licence block from the contents of the license_header
-// file. Blank input clears it.
+// SetLicense sets the licence block from the license_header opt. Blank input
+// clears it.
 //
 // The lines carry no comment markers. Render applies the target's own prefix, so
 // one header file serves Go, Prisma and TypeScript ("//") and SQL ("--") alike —
