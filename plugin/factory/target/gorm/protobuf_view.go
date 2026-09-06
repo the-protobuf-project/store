@@ -222,6 +222,39 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 			pField := "out." + f.GoName
 			getter := "pb.Get" + f.GoName + "()"
 
+			// assignPB renders the ToProto assignment of expr to this field.
+			//
+			// A oneof member has no struct field of its own: protoc-gen-go puts it
+			// behind a wrapper on the oneof's interface field, so `out.Duration = …`
+			// does not compile where the generated type is
+			// `&Availability_Duration{Duration: …}`. Every branch below assigns
+			// through here rather than writing pField, so a type that gains a oneof
+			// case cannot quietly go back to emitting the flat form — which is how
+			// the well-known types came to, having each returned early before
+			// reaching the oneof handling further down.
+			//
+			// unset is the literal an absent value compares equal to: "nil" for the
+			// pointer-valued well-known types, "0" for an enum. Only a set arm is
+			// assigned, or an unset one would clobber the arm that actually holds the
+			// value. Pass "" when the caller has already guarded expr.
+			assignPB := func(expr, unset string) []string {
+				w := oneofWrap(imports, f)
+				if w == nil {
+					return []string{pField + " = " + expr}
+				}
+				wrap := func(v string) string {
+					return "out." + w.oneofField + " = &" + w.wrapper + "{" + f.GoName + ": " + v + "}"
+				}
+				if unset == "" {
+					return []string{wrap(expr)}
+				}
+				return []string{
+					"if v := " + expr + "; v != " + unset + " {",
+					"\t" + wrap("v"),
+					"}",
+				}
+			}
+
 			// Resource references first: their columns are FKs, not data this
 			// converter can invent. Relationalized sub-rows (message-typed fields)
 			// are handled after the column loop, off the association plan — their
@@ -261,10 +294,10 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 				}
 				if col.Optional {
 					cm.FromLines = append(cm.FromLines, mField+" = "+local+"PtrFromProto("+getter+")")
-					cm.ToLines = append(cm.ToLines, pField+" = "+local+"PtrToProto("+mField+")")
+					cm.ToLines = append(cm.ToLines, assignPB(local+"PtrToProto("+mField+")", "0")...)
 				} else {
 					cm.FromLines = append(cm.FromLines, mField+" = "+local+"FromProto("+getter+")")
-					cm.ToLines = append(cm.ToLines, pField+" = "+local+"ToProto("+mField+")")
+					cm.ToLines = append(cm.ToLines, assignPB(local+"ToProto("+mField+")", "0")...)
 				}
 				continue
 			}
@@ -281,7 +314,7 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 				imports.addStd("time")
 				if col.AutoCreate || col.AutoUpdate {
 					// DB-managed: render out, never set from input.
-					cm.ToLines = append(cm.ToLines, pField+" = "+tsOut(col, mField))
+					cm.ToLines = append(cm.ToLines, assignPB(tsOut(col, mField), "nil")...)
 					continue
 				}
 				if col.Optional {
@@ -289,7 +322,7 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 				} else {
 					cm.FromLines = append(cm.FromLines, mField+" = tsToGoVal("+getter+")")
 				}
-				cm.ToLines = append(cm.ToLines, pField+" = "+tsOut(col, mField))
+				cm.ToLines = append(cm.ToLines, assignPB(tsOut(col, mField), "nil")...)
 				continue
 			case schema.TypeDate:
 				if fullNameOf(f) != "google.type.Date" {
@@ -301,11 +334,11 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 				if col.Optional {
 					needs.Date = true
 					cm.FromLines = append(cm.FromLines, mField+" = dateToGo("+getter+")")
-					cm.ToLines = append(cm.ToLines, pField+" = goToDate("+mField+")")
+					cm.ToLines = append(cm.ToLines, assignPB("goToDate("+mField+")", "nil")...)
 				} else {
 					needs.DateVal = true
 					cm.FromLines = append(cm.FromLines, mField+" = dateToGoVal("+getter+")")
-					cm.ToLines = append(cm.ToLines, pField+" = goValToDate("+mField+")")
+					cm.ToLines = append(cm.ToLines, assignPB("goValToDate("+mField+")", "nil")...)
 				}
 				continue
 			case schema.TypeTimeOfDay:
@@ -318,11 +351,11 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 				if col.Optional {
 					needs.Tod = true
 					cm.FromLines = append(cm.FromLines, mField+" = todToGo("+getter+")")
-					cm.ToLines = append(cm.ToLines, pField+" = goToTod("+mField+")")
+					cm.ToLines = append(cm.ToLines, assignPB("goToTod("+mField+")", "nil")...)
 				} else {
 					needs.TodVal = true
 					cm.FromLines = append(cm.FromLines, mField+" = todToGoVal("+getter+")")
-					cm.ToLines = append(cm.ToLines, pField+" = goValToTod("+mField+")")
+					cm.ToLines = append(cm.ToLines, assignPB("goValToTod("+mField+")", "nil")...)
 				}
 				continue
 			case schema.TypeDuration:
@@ -335,11 +368,11 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 				if col.Optional {
 					needs.Dur = true
 					cm.FromLines = append(cm.FromLines, mField+" = durToGo("+getter+")")
-					cm.ToLines = append(cm.ToLines, pField+" = goToDur("+mField+")")
+					cm.ToLines = append(cm.ToLines, assignPB("goToDur("+mField+")", "nil")...)
 				} else {
 					needs.DurVal = true
 					cm.FromLines = append(cm.FromLines, mField+" = durToGoVal("+getter+")")
-					cm.ToLines = append(cm.ToLines, pField+" = goValToDur("+mField+")")
+					cm.ToLines = append(cm.ToLines, assignPB("goValToDur("+mField+")", "nil")...)
 				}
 				continue
 			case schema.TypeJSON:
@@ -351,7 +384,7 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 				imports.add("google.golang.org/protobuf/types/known/structpb")
 				imports.addStd("encoding/json")
 				cm.FromLines = append(cm.FromLines, mField+" = structToJSON("+getter+")")
-				cm.ToLines = append(cm.ToLines, pField+" = jsonToStruct("+mField+")")
+				cm.ToLines = append(cm.ToLines, assignPB("jsonToStruct("+mField+")", "nil")...)
 				continue
 			case schema.TypeText, schema.TypeDecimal, schema.TypeLatLng, schema.TypeInterval:
 				toSkips, fromSkips = skipBoth(toSkips, fromSkips, col)
@@ -374,7 +407,7 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 					"}")
 				cm.ToLines = append(cm.ToLines,
 					"if "+mField+" != nil {",
-					"\t"+pField+" = wrapperspb."+wrapCtor+"(*"+mField+")",
+					"\t"+assignPB("wrapperspb."+wrapCtor+"(*"+mField+")", "")[0],
 					"}")
 				continue
 			}
@@ -396,7 +429,7 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 					continue
 				}
 				cm.FromLines = append(cm.FromLines, mField+" = pb."+f.GoName)
-				cm.ToLines = append(cm.ToLines, pField+" = "+mField)
+				cm.ToLines = append(cm.ToLines, assignPB(mField, "nil")...)
 				continue
 			}
 			if col.List {
