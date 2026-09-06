@@ -4,6 +4,8 @@ package oneof.v1;
 
 import "google/api/field_behavior.proto";
 import "google/api/resource.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
 
 option go_package = "example.com/test/gen;oneofv1";
 option java_multiple_files = true;
@@ -36,4 +38,29 @@ message Audio {
 
   // sample_rate is a plain scalar outside the oneof.
   int32 sample_rate = 5;
+}
+
+// Booking pins the RFC 7953 shape: well-known types as oneof members. These have
+// no struct field of their own — protoc-gen-go puts each behind a wrapper on the
+// oneof's interface field — so the converters must emit
+// `out.EndForm = &Booking_Duration{Duration: …}`, not `out.Duration = …`. The
+// enum arm is here for the same reason: it is a value type, so it guards on the
+// zero rather than on nil. Without converters emitted for this message the flat
+// form compiles here and fails only in a consumer's tree.
+message Booking {
+  option (google.api.resource) = {
+    type: "oneof.v1/Booking"
+    pattern: "bookings/{booking}"
+    singular: "booking"
+    plural: "bookings"
+  };
+
+  // Resource name; the AIP identifier.
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  // When the booking ends, given either as an instant or as a length.
+  oneof end_form {
+    google.protobuf.Timestamp end = 2;
+    google.protobuf.Duration duration = 3;
+  }
 }

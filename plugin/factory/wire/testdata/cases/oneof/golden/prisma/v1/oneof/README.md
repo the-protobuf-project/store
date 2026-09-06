@@ -6,7 +6,7 @@ Generated from Protobuf by protoc-gen-store. Source of truth is the `.proto` fil
 
 | Models | Enums |
 | ---: | ---: |
-| 1 | 1 |
+| 2 | 2 |
 
 ## Entity relationships
 
@@ -14,6 +14,9 @@ Generated from Protobuf by protoc-gen-store. Source of truth is the `.proto` fil
 erDiagram
     direction LR
     Audio {
+        string id PK
+    }
+    Booking {
         string id PK
     }
 ```
@@ -34,6 +37,19 @@ Audio exercises oneof integrity: the `input` oneof flattens to independent nulla
 | `sample_rate` | `INTEGER` | nullable |
 | `input_case` | `AudioInputCase` | nullable |
 
+### `Booking` → `bookings`
+
+Booking pins the RFC 7953 shape: well-known types as oneof members. These have no struct field of their own — protoc-gen-go puts each behind a wrapper on the oneof's interface field — so the converters must emit `out.EndForm = &Booking_Duration{Duration: …}`, not `out.Duration = …`. The enum arm is here for the same reason: it is a value type, so it guards on the zero rather than on nil. Without converters emitted for this message the flat form compiles here and fails only in a consumer's tree.
+
+| Column | Type | Null |
+| --- | --- | --- |
+| `id` | `CHAR(26)` | not null |
+| `name` | `VARCHAR(255)` | not null |
+| `end` | `TIMESTAMPTZ` | nullable |
+| `duration` | `INTERVAL` | nullable |
+| `end_form_case` | `BookingEndFormCase` | nullable |
+
 ### Enums
 
 - `AudioInputCase`: AUDIO_DATA, UPLOAD_PATH, LIVE_PIPELINE_FILE_PATH
+- `BookingEndFormCase`: END, DURATION
