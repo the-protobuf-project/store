@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package wire_test
 
 // manifest_test.go parses the repo's plugin.yaml through protokit's manifest

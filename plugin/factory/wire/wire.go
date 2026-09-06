@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package wire is the factory's composition root: it assembles the registered
 // sources and targets into one Registry. It lives outside the factory package
 // because it imports the concrete targets (which import factory), which the

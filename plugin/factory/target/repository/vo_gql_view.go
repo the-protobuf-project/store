@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package repository
 
 // vo_gql_view.go renders the value-object fragments for the GraphQL adapters:
@@ -63,7 +66,7 @@ func gqlVOFor(pb *pbIndex, s *schema.Schema, v voField) (gqlVO, bool) {
 		VODomPkg:   identLower(voSchema) + "ql",
 		VORowQual:  rowQual,
 		ConvName:   naming.CamelFirst(domain + v.Target.LocalName),
-		PBType:     goPackageName(string(msg.GoIdent.GoImportPath)) + "." + msg.GoIdent.GoName,
+		PBType:     pb.names.Of(string(msg.GoIdent.GoImportPath)) + "." + msg.GoIdent.GoName,
 		PBImport:   string(msg.GoIdent.GoImportPath),
 		FKInput:    export(camel(v.Col.Name)),
 	}
@@ -126,7 +129,7 @@ func oneofWrapperType(pb *pbIndex, r *resource, v voField) string {
 	}
 	for _, f := range msg.Fields {
 		if string(f.Desc.Name()) == v.FieldName {
-			return goPackageName(string(f.GoIdent.GoImportPath)) + "." + f.GoIdent.GoName
+			return pb.names.Of(string(f.GoIdent.GoImportPath)) + "." + f.GoIdent.GoName
 		}
 	}
 	return ""
@@ -265,7 +268,7 @@ func gqlVOConvs(pb *pbIndex, db *schema.Database, s *schema.Schema, resources ma
 				ResPkgPath: client + "/" + g.VODomPkg + "/" + g.VOResPkg,
 				ResPkgName: g.VOResPkg,
 				PBPath:     g.PBImport,
-				PBName:     goPackageName(g.PBImport),
+				PBName:     pb.names.Of(g.PBImport),
 			}
 			for _, c := range v.Target.Columns {
 				if c.Source == nil || c.Generated != "" {

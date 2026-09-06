@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package golang
 
 // write_types.go writes the shared model (schema) and enum packages and resolves each body's non-schema imports.

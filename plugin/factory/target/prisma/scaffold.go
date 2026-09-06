@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package prisma
 
 // scaffold.go builds the non-fragment files that make a generated database

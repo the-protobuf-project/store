@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package entity
 
 // layout_test.go covers the naming policy directly, which it did not used to be

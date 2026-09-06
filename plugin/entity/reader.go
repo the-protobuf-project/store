@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package entity
 
 // reader.go is the schema.StructureReader over entity.v1 — the neutral half of

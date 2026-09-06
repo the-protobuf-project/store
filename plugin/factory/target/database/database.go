@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package database adapts protokit's proto-bound schema.Target (gorm, sql,
 // prisma) to the factory's source-agnostic factory.Target. One generic wrapper
 // serves all three DB backends: it reads the Model's DBSchema facet and delegates

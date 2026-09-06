@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package backend
 
 // config.go loads the optional store.yaml layout config (passed via the

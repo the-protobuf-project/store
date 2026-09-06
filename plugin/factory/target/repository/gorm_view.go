@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package repository
 
 // gorm_view.go prepares the per-schema names.go / mask.go / gorm.go views. The
@@ -67,6 +70,7 @@ type maskFieldView struct {
 func gormResourceViews(pb *pbIndex, db *schema.Database, s *schema.Schema, resources map[*schema.Table]*resource, ifaceViews []resourceView) ([]gormResourceView, error) {
 	rs := sortedResources(s, resources)
 	out := make([]gormResourceView, 0, len(rs))
+	gormPkg := gormModelsQual(pb, s, naming.GoPackage(s.Name))
 	for i, r := range rs {
 		v := gormResourceView{
 			resourceView: ifaceViews[i],
@@ -116,7 +120,7 @@ func gormResourceViews(pb *pbIndex, db *schema.Database, s *schema.Schema, resou
 			v.RefsToProto = append(v.RefsToProto, ref.toProto)
 		}
 		v.MutableAssigns, v.MaskFields = mutableFragments(pb, db, resources, r)
-		vg := voGormFragments(naming.GoPackage(s.Name), r)
+		vg := voGormFragments(gormPkg, r)
 		v.HasVOs = len(r.VOs) > 0
 		v.Preloads = vg.Preloads
 		v.VOCreates = vg.Creates

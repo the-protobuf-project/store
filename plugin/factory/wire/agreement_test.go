@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package wire_test
 
 // agreement_test.go holds the two protokit harnesses that check properties of a

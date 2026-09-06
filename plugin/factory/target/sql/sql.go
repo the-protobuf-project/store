@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package sql generates PostgreSQL DDL from the store IR.
 //
 // Output layout — one file per schema, mirroring the prisma fragment tree:

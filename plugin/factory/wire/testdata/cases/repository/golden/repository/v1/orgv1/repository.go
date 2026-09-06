@@ -17,7 +17,7 @@ package orgv1
 
 import (
 	"context"
-	"example.com/test/gen"
+	orgv1 "example.com/test/gen"
 	"example.com/test/gen/repox"
 	"example.com/test/genql"
 	"example.com/test/gormdb/filterx"
@@ -29,16 +29,16 @@ import (
 // opaque page tokens, field-mask updates, and etag optimistic concurrency.
 type MemberRepository interface {
 	// Create persists m under parent and returns the stored record.
-	Create(ctx context.Context, parent string, m *gen.Member) (*gen.Member, error)
+	Create(ctx context.Context, parent string, m *orgv1.Member) (*orgv1.Member, error)
 	// Get returns the record addressed by its resource name, or
 	// repox.ErrNotFound.
-	Get(ctx context.Context, name string) (*gen.Member, error)
+	Get(ctx context.Context, name string) (*orgv1.Member, error)
 	// List returns one page of records under parent.
-	List(ctx context.Context, parent string, in repox.ListInput) ([]*gen.Member, string, error)
+	List(ctx context.Context, parent string, in repox.ListInput) ([]*orgv1.Member, string, error)
 	// Update persists the masked fields of m; an empty mask replaces every
 	// mutable field. m.Etag, when set, guards against concurrent writes
 	// (repox.ErrConflict).
-	Update(ctx context.Context, m *gen.Member, paths []string) (*gen.Member, error)
+	Update(ctx context.Context, m *orgv1.Member, paths []string) (*orgv1.Member, error)
 	// Delete removes the record addressed by its resource name.
 	Delete(ctx context.Context, name string) error
 }
@@ -48,13 +48,13 @@ type MemberRepository interface {
 // derived fields after reads, and guards before deletes. Nil funcs are skipped.
 type MemberHooks struct {
 	// BeforeCreate runs after name/id resolution, before the row is written.
-	BeforeCreate func(ctx context.Context, m *gen.Member) error
+	BeforeCreate func(ctx context.Context, m *orgv1.Member) error
 	// AfterRead runs on every record a read returns (Get, List, and the
 	// re-reads writes return).
-	AfterRead func(ctx context.Context, m *gen.Member) error
+	AfterRead func(ctx context.Context, m *orgv1.Member) error
 	// BeforeUpdate runs after the mask is applied to the merged record,
 	// before it is written.
-	BeforeUpdate func(ctx context.Context, existing, merged *gen.Member, paths []string) error
+	BeforeUpdate func(ctx context.Context, existing, merged *orgv1.Member, paths []string) error
 	// BeforeDelete runs before the row is removed; returning an error vetoes.
 	BeforeDelete func(ctx context.Context, name string) error
 }
@@ -64,16 +64,16 @@ type MemberHooks struct {
 // opaque page tokens, field-mask updates, and etag optimistic concurrency.
 type OrganisationRepository interface {
 	// Create persists m and returns the stored record.
-	Create(ctx context.Context, m *gen.Organisation) (*gen.Organisation, error)
+	Create(ctx context.Context, m *orgv1.Organisation) (*orgv1.Organisation, error)
 	// Get returns the record addressed by its resource name, or
 	// repox.ErrNotFound.
-	Get(ctx context.Context, name string) (*gen.Organisation, error)
+	Get(ctx context.Context, name string) (*orgv1.Organisation, error)
 	// List returns one page of records.
-	List(ctx context.Context, in repox.ListInput) ([]*gen.Organisation, string, error)
+	List(ctx context.Context, in repox.ListInput) ([]*orgv1.Organisation, string, error)
 	// Update persists the masked fields of m; an empty mask replaces every
 	// mutable field. m.Etag, when set, guards against concurrent writes
 	// (repox.ErrConflict).
-	Update(ctx context.Context, m *gen.Organisation, paths []string) (*gen.Organisation, error)
+	Update(ctx context.Context, m *orgv1.Organisation, paths []string) (*orgv1.Organisation, error)
 	// Delete removes the record addressed by its resource name.
 	Delete(ctx context.Context, name string) error
 }
@@ -83,13 +83,13 @@ type OrganisationRepository interface {
 // derived fields after reads, and guards before deletes. Nil funcs are skipped.
 type OrganisationHooks struct {
 	// BeforeCreate runs after name/id resolution, before the row is written.
-	BeforeCreate func(ctx context.Context, m *gen.Organisation) error
+	BeforeCreate func(ctx context.Context, m *orgv1.Organisation) error
 	// AfterRead runs on every record a read returns (Get, List, and the
 	// re-reads writes return).
-	AfterRead func(ctx context.Context, m *gen.Organisation) error
+	AfterRead func(ctx context.Context, m *orgv1.Organisation) error
 	// BeforeUpdate runs after the mask is applied to the merged record,
 	// before it is written.
-	BeforeUpdate func(ctx context.Context, existing, merged *gen.Organisation, paths []string) error
+	BeforeUpdate func(ctx context.Context, existing, merged *orgv1.Organisation, paths []string) error
 	// BeforeDelete runs before the row is removed; returning an error vetoes.
 	BeforeDelete func(ctx context.Context, name string) error
 }
@@ -99,16 +99,16 @@ type OrganisationHooks struct {
 // opaque page tokens, field-mask updates, and etag optimistic concurrency.
 type UserRepository interface {
 	// Create persists m and returns the stored record.
-	Create(ctx context.Context, m *gen.User) (*gen.User, error)
+	Create(ctx context.Context, m *orgv1.User) (*orgv1.User, error)
 	// Get returns the record addressed by its resource name, or
 	// repox.ErrNotFound.
-	Get(ctx context.Context, name string) (*gen.User, error)
+	Get(ctx context.Context, name string) (*orgv1.User, error)
 	// List returns one page of records.
-	List(ctx context.Context, in repox.ListInput) ([]*gen.User, string, error)
+	List(ctx context.Context, in repox.ListInput) ([]*orgv1.User, string, error)
 	// Update persists the masked fields of m; an empty mask replaces every
 	// mutable field. m.Etag, when set, guards against concurrent writes
 	// (repox.ErrConflict).
-	Update(ctx context.Context, m *gen.User, paths []string) (*gen.User, error)
+	Update(ctx context.Context, m *orgv1.User, paths []string) (*orgv1.User, error)
 	// Delete removes the record addressed by its resource name.
 	Delete(ctx context.Context, name string) error
 }
@@ -118,13 +118,13 @@ type UserRepository interface {
 // derived fields after reads, and guards before deletes. Nil funcs are skipped.
 type UserHooks struct {
 	// BeforeCreate runs after name/id resolution, before the row is written.
-	BeforeCreate func(ctx context.Context, m *gen.User) error
+	BeforeCreate func(ctx context.Context, m *orgv1.User) error
 	// AfterRead runs on every record a read returns (Get, List, and the
 	// re-reads writes return).
-	AfterRead func(ctx context.Context, m *gen.User) error
+	AfterRead func(ctx context.Context, m *orgv1.User) error
 	// BeforeUpdate runs after the mask is applied to the merged record,
 	// before it is written.
-	BeforeUpdate func(ctx context.Context, existing, merged *gen.User, paths []string) error
+	BeforeUpdate func(ctx context.Context, existing, merged *orgv1.User, paths []string) error
 	// BeforeDelete runs before the row is removed; returning an error vetoes.
 	BeforeDelete func(ctx context.Context, name string) error
 }

@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package config loads and validates store.yaml — the factory's single source of
 // truth. One file configures both the proto/DB side (datasources, telemetry,
 // schema naming, inherited from the backend package) and the GraphQL side (the

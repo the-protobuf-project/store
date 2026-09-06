@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package gorm
 
 // protobuf_view.go prepares the protobuf.go template view: for every table
@@ -29,6 +32,7 @@ import (
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
 	"github.com/the-protobuf-project/store/plugin/factory/provenance"
+	"github.com/the-protobuf-project/store/plugin/factory/target/gopkg"
 	"github.com/the-protobuf-project/store/plugin/factory/target/types"
 )
 
@@ -38,12 +42,14 @@ import (
 type pbIndex struct {
 	msgs  map[protoreflect.FullName]*protogen.Message
 	enums map[protoreflect.FullName]*protogen.Enum
+	names gopkg.Names
 }
 
 func newPbIndex(p *protogen.Plugin) *pbIndex {
 	idx := &pbIndex{
 		msgs:  map[protoreflect.FullName]*protogen.Message{},
 		enums: map[protoreflect.FullName]*protogen.Enum{},
+		names: gopkg.Index(p),
 	}
 	var walk func(msgs []*protogen.Message)
 	walk = func(msgs []*protogen.Message) {
@@ -69,20 +75,21 @@ func newPbIndex(p *protogen.Plugin) *pbIndex {
 type convImports struct {
 	std   map[string]string // path -> alias ("" = none)
 	third map[string]string
+	names gopkg.Names
 }
 
-func newConvImports() *convImports {
-	return &convImports{std: map[string]string{}, third: map[string]string{}}
+func newConvImports(names gopkg.Names) *convImports {
+	return &convImports{std: map[string]string{}, third: map[string]string{}, names: names}
 }
 
 func (ci *convImports) addStd(path string) { ci.std[path] = "" }
-func (ci *convImports) add(path, pkg string) string {
-	alias := ""
-	if seg := path[strings.LastIndex(path, "/")+1:]; seg != pkg {
-		alias = pkg
-	}
-	ci.third[path] = alias
-	return pkg
+
+// add records an import of path and returns the qualifier converter code uses
+// for it — the package name protoc-gen-go declared there, which is the path's
+// last segment only when go_package carried no ";name" suffix.
+func (ci *convImports) add(path string) string {
+	ci.third[path] = ci.names.Alias(path)
+	return ci.names.Of(path)
 }
 
 // render emits the grouped import block (stdlib, then third-party), matching
@@ -152,7 +159,7 @@ type helperNeeds struct {
 // convertView assembles the template data for one schema's convert.go, or nil
 // when no table in the schema maps to a proto message.
 func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string, typeOf types.TypeOf) (map[string]any, error) {
-	imports := newConvImports()
+	imports := newConvImports(idx.names)
 	var needs helperNeeds
 	emittedEnums := map[string]string{} // enum ProtoName -> model LocalName
 
@@ -162,10 +169,9 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 		if pbEnum == nil {
 			continue
 		}
-		parent := fileOf(pbEnum.GoIdent)
 		ce := convEnum{
 			LocalName: e.LocalName,
-			PbType:    imports.add(string(pbEnum.GoIdent.GoImportPath), parent) + "." + pbEnum.GoIdent.GoName,
+			PbType:    imports.add(string(pbEnum.GoIdent.GoImportPath)) + "." + pbEnum.GoIdent.GoName,
 		}
 		for _, ev := range e.Values {
 			pv := matchEnumValue(pbEnum, ev)
@@ -174,7 +180,7 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 			}
 			ce.Pairs = append(ce.Pairs, convEnumPair{
 				ModelConst: e.LocalName + naming.PascalGo(strings.ToLower(ev.Name)),
-				PbConst:    imports.add(string(pv.GoIdent.GoImportPath), parent) + "." + pv.GoIdent.GoName,
+				PbConst:    imports.add(string(pv.GoIdent.GoImportPath)) + "." + pv.GoIdent.GoName,
 			})
 		}
 		if len(ce.Pairs) > 0 {
@@ -192,7 +198,7 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 		if msg == nil {
 			continue
 		}
-		pbPkg := imports.add(string(msg.GoIdent.GoImportPath), goPackageNameOf(msg))
+		pbPkg := imports.add(string(msg.GoIdent.GoImportPath))
 		cm := convModel{
 			Name:   t.LocalName,
 			PbType: pbPkg + "." + msg.GoIdent.GoName,
@@ -239,7 +245,7 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 				needs.EnumCSV = true
 				imports.addStd("fmt")
 				imports.addStd("strings")
-				pbType := imports.add(string(f.Enum.GoIdent.GoImportPath), fileOf(f.Enum.GoIdent)) + "." + f.Enum.GoIdent.GoName
+				pbType := imports.add(string(f.Enum.GoIdent.GoImportPath)) + "." + f.Enum.GoIdent.GoName
 				cm.FromLines = append(cm.FromLines, mField+" = enumsToCSV("+getter+")")
 				cm.ToLines = append(cm.ToLines, pField+" = enumsFromCSV["+pbType+"]("+mField+", "+pbType+"_value)")
 				continue
@@ -271,7 +277,7 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 					continue
 				}
 				needs.Ts = true
-				imports.add("google.golang.org/protobuf/types/known/timestamppb", "timestamppb")
+				imports.add("google.golang.org/protobuf/types/known/timestamppb")
 				imports.addStd("time")
 				if col.AutoCreate || col.AutoUpdate {
 					// DB-managed: render out, never set from input.
@@ -290,7 +296,7 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 					toSkips, fromSkips = skipBoth(toSkips, fromSkips, col)
 					continue
 				}
-				imports.add("google.golang.org/genproto/googleapis/type/date", "date")
+				imports.add("google.golang.org/genproto/googleapis/type/date")
 				imports.addStd("time")
 				if col.Optional {
 					needs.Date = true
@@ -307,7 +313,7 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 					toSkips, fromSkips = skipBoth(toSkips, fromSkips, col)
 					continue
 				}
-				imports.add("google.golang.org/genproto/googleapis/type/timeofday", "timeofday")
+				imports.add("google.golang.org/genproto/googleapis/type/timeofday")
 				imports.addStd("time")
 				if col.Optional {
 					needs.Tod = true
@@ -324,7 +330,7 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 					toSkips, fromSkips = skipBoth(toSkips, fromSkips, col)
 					continue
 				}
-				imports.add("google.golang.org/protobuf/types/known/durationpb", "durationpb")
+				imports.add("google.golang.org/protobuf/types/known/durationpb")
 				imports.addStd("time")
 				if col.Optional {
 					needs.Dur = true
@@ -342,7 +348,7 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 					continue
 				}
 				needs.JSON = true
-				imports.add("google.golang.org/protobuf/types/known/structpb", "structpb")
+				imports.add("google.golang.org/protobuf/types/known/structpb")
 				imports.addStd("encoding/json")
 				cm.FromLines = append(cm.FromLines, mField+" = structToJSON("+getter+")")
 				cm.ToLines = append(cm.ToLines, pField+" = jsonToStruct("+mField+")")
@@ -360,7 +366,7 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 					toSkips, fromSkips = skipBoth(toSkips, fromSkips, col)
 					continue
 				}
-				imports.add("google.golang.org/protobuf/types/known/wrapperspb", "wrapperspb")
+				imports.add("google.golang.org/protobuf/types/known/wrapperspb")
 				cm.FromLines = append(cm.FromLines,
 					"if v := "+getter+"; v != nil {",
 					"\tval := v.GetValue()",
@@ -399,7 +405,7 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 					toSkips, fromSkips = skipBoth(toSkips, fromSkips, col)
 					continue
 				}
-				imports.add("github.com/lib/pq", "pq")
+				imports.add("github.com/lib/pq")
 				if elem == protoGo {
 					cm.FromLines = append(cm.FromLines, mField+" = "+modelType+"("+getter+")")
 					cm.ToLines = append(cm.ToLines, pField+" = []"+elem+"("+mField+")")
@@ -475,7 +481,7 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 			fromSkips = append(fromSkips, fieldName+" (sub-row graph)")
 			qual := bt.Target.LocalName + "ToProto"
 			if bt.CrossPkg != "" {
-				imports.add(dbGoModule(db)+"/"+db.Name+"/"+bt.CrossPkg, bt.CrossPkg)
+				imports.add(dbGoModule(db) + "/" + db.Name + "/" + bt.CrossPkg)
 				qual = bt.CrossPkg + "." + qual
 			}
 			expr := qual + "(m." + bt.Field + ")"
@@ -561,7 +567,7 @@ func oneofWrap(imports *convImports, f *protogen.Field) *oneofRef {
 	if f.Oneof == nil || f.Oneof.Desc.IsSynthetic() {
 		return nil
 	}
-	pkg := imports.add(string(f.GoIdent.GoImportPath), fileOf(f.GoIdent))
+	pkg := imports.add(string(f.GoIdent.GoImportPath))
 	return &oneofRef{
 		oneofField: f.Oneof.GoName,
 		wrapper:    pkg + "." + f.GoIdent.GoName,
@@ -655,19 +661,4 @@ func fullNameOf(f *protogen.Field) string {
 		return ""
 	}
 	return string(f.Message.Desc.FullName())
-}
-
-// goPackageNameOf returns the Go package name of the file declaring msg.
-func goPackageNameOf(msg *protogen.Message) string {
-	// GoIdent import paths end in the package directory; the generated package
-	// name is the last segment for all supported layouts (pb packages and the
-	// genproto WKTs alike).
-	p := string(msg.GoIdent.GoImportPath)
-	return p[strings.LastIndex(p, "/")+1:]
-}
-
-// fileOf mirrors goPackageNameOf for enum idents.
-func fileOf(ident protogen.GoIdent) string {
-	p := string(ident.GoImportPath)
-	return p[strings.LastIndex(p, "/")+1:]
 }

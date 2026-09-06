@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package repository generates provider-agnostic, proto-facing repository
 // layers from the same proto-derived schema the database targets render: one
 // CRUD interface per resource (speaking proto messages and AIP conventions —
@@ -23,6 +26,7 @@ import (
 	"github.com/the-protobuf-project/protokit/schema"
 	"github.com/the-protobuf-project/protokit/templates"
 	"github.com/the-protobuf-project/store/plugin/factory/provenance"
+	"github.com/the-protobuf-project/store/plugin/factory/target/gopkg"
 )
 
 //go:embed templates/*.tpl
@@ -145,29 +149,23 @@ func clientPkgName(module string) string {
 	if module == "" {
 		return ""
 	}
-	if i := lastIndexByte(module, '/'); i >= 0 {
-		return module[i+1:]
-	}
-	return module
-}
-
-func lastIndexByte(s string, b byte) int {
-	for i := len(s) - 1; i >= 0; i-- {
-		if s[i] == b {
-			return i
-		}
-	}
-	return -1
+	return gopkg.LastSegment(module)
 }
 
 // pbIndex resolves proto message descriptors to protogen messages so the
-// generated interfaces name the exact generated Go types.
+// generated interfaces name the exact generated Go types, and carries the
+// package name protoc-gen-go declared at each of their import paths so those
+// types are qualified as the .pb.go files spell them.
 type pbIndex struct {
-	msgs map[protoreflect.FullName]*protogen.Message
+	msgs  map[protoreflect.FullName]*protogen.Message
+	names gopkg.Names
 }
 
 func newPbIndex(p *protogen.Plugin) *pbIndex {
-	idx := &pbIndex{msgs: map[protoreflect.FullName]*protogen.Message{}}
+	idx := &pbIndex{
+		msgs:  map[protoreflect.FullName]*protogen.Message{},
+		names: gopkg.Index(p),
+	}
 	var walk func(msgs []*protogen.Message)
 	walk = func(msgs []*protogen.Message) {
 		for _, m := range msgs {

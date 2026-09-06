@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package golang_test
 
 // Golden test for the GraphQL-client renderer. Each directory under
@@ -21,6 +24,7 @@ import (
 	"github.com/the-protobuf-project/protokit/graphql/introspect"
 	"github.com/the-protobuf-project/protokit/graphql/ir"
 	"github.com/the-protobuf-project/protokit/header"
+	"github.com/the-protobuf-project/store/plugin/factory/provenance"
 	"github.com/the-protobuf-project/store/plugin/factory/target/graphql/golang"
 )
 
@@ -31,6 +35,10 @@ var update = flag.Bool("update", false, "rewrite golden files from current outpu
 // header format and tool stamp).
 func TestMain(m *testing.M) {
 	header.SetTool("protoc-gen-store")
+	// The engine version is read from build info, which answers differently
+	// depending on how protokit was resolved and which toolchain built the test
+	// binary. Pin it so the goldens compare output, not the build environment.
+	provenance.SetEngineVersion(provenance.Unknown)
 	os.Exit(m.Run())
 }
 

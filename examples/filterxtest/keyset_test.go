@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package filterxtest exercises the generated filterx paging engine against the
 // bookstore example's specs. It lives outside the generated tree so it only
 // reaches the engine's exported surface — the same surface a caller uses.

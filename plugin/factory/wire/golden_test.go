@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package wire_test
 
 // Golden-file tests for the database backends. Every directory under
@@ -19,6 +22,7 @@ import (
 	"github.com/the-protobuf-project/protokit"
 	"github.com/the-protobuf-project/protokit/golden"
 	"github.com/the-protobuf-project/protokit/header"
+	"github.com/the-protobuf-project/store/plugin/factory/provenance"
 	"github.com/the-protobuf-project/store/plugin/factory/source/proto/backend"
 	"github.com/the-protobuf-project/store/plugin/factory/wire"
 )
@@ -57,6 +61,14 @@ func ormCasePlugin(dir string) protokit.Plugin {
 	converters := fileExists(filepath.Join(dir, "converters"))
 	filters := fileExists(filepath.Join(dir, "filters"))
 	telemetry := fileExists(filepath.Join(dir, "telemetry"))
+	// The licence block is process-wide state, as the tool name is, and the
+	// binary sets it once from the license_header opt. Every case sets it here
+	// rather than only the cases that ship the marker, so a case without one
+	// clears whatever the case before it left behind. The marker holds the
+	// header text itself — what the binary would have read out of the file the
+	// opt names — so the fixture exercises the same seam without a path in
+	// testdata.
+	provenance.SetLicense(optFile(dir, "license_header"))
 	reader := backend.New(cfg, "example.com/test/gen", stores, telemetry, converters, filters).
 		WithRepositoryModules(optFile(dir, "gorm_module"), optFile(dir, "graphql_module"))
 	return wire.Plugin(backend.Readers(reader), backend.NewLayout(cfg))
@@ -82,6 +94,10 @@ func fileExists(path string) bool {
 // the framework instead).
 func TestMain(m *testing.M) {
 	header.SetTool("protoc-gen-store")
+	// The engine version is read from build info, which answers differently
+	// depending on how protokit was resolved and which toolchain built the test
+	// binary. Pin it so the goldens compare output, not the build environment.
+	provenance.SetEngineVersion(provenance.Unknown)
 	os.Exit(m.Run())
 }
 

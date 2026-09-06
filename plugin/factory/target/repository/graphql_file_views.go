@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package repository
 
 // graphql_file_views.go assembles the template data for graphql.go and
@@ -31,14 +34,13 @@ func graphqlFileView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg str
 	client := dbGraphQLModule(db)
 	domainPkg := identLower(s.Name) + "ql"
 	imports := map[string]string{
-		"context":                                    "",
-		"errors":                                     "",
-		"google.golang.org/protobuf/proto":           "",
-		graphqlDSLModule:                             "graphql",
-		dbGoModule(db) + "/" + repoxPkg:              "",
-		dbGormModule(db) + "/filterx":                "",
-		dbGormModule(db) + "/" + db.Name + "/" + pkg: "",
-		client: clientPkgName(client),
+		"context":                          "",
+		"errors":                           "",
+		"google.golang.org/protobuf/proto": "",
+		graphqlDSLModule:                   "graphql",
+		dbGoModule(db) + "/" + repoxPkg:    "",
+		dbGormModule(db) + "/filterx":      "",
+		client:                             clientPkgName(client),
 	}
 	needTime := false
 	for _, r := range rs {
@@ -55,10 +57,11 @@ func graphqlFileView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg str
 		imports["google.golang.org/protobuf/types/known/timestamppb"] = ""
 	}
 	addPBImports(pb, s, imports)
+	gormPkg := addGormModelsImport(pb, db, s, pkg, imports)
 	return map[string]any{
 		"Header":    fileHeader(db, s, "GraphQL adapters over the generated client — same repository surface as the gorm adapters."),
 		"Package":   pkg,
-		"GormPkg":   pkg,
+		"GormPkg":   gormPkg,
 		"ClientPkg": clientPkgName(client),
 		"Imports":   renderImports(imports),
 		"Resources": rs,

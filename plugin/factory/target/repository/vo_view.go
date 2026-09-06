@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package repository
 
 // vo_view.go renders the value-object fragments the gorm adapter splices into
@@ -25,9 +28,11 @@ type voGorm struct {
 	CrossPkgs      []string // gorm packages of cross-schema value objects (imports)
 }
 
-// voGormFragments renders every VO fragment for r. pkg is the resource
-// schema's gorm package (the same identifier the adapter file imports
-// unaliased); cross-schema value objects qualify through their own package.
+// voGormFragments renders every VO fragment for r. pkg is the identifier the
+// adapter file binds to the resource schema's gorm models package — its last
+// path segment normally, an alias when a proto package in the same file already
+// claims that name (see gormModelsQual); cross-schema value objects qualify
+// through their own package.
 func voGormFragments(pkg string, r *resource) voGorm {
 	var out voGorm
 	if len(r.VOs) == 0 {

@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package telemetry
 
 // render.go emits the generated telemetry packages: the SDK adapter every

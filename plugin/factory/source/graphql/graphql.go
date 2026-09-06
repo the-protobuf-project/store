@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package graphql is the factory Source that reads a GraphQL server: it
 // introspects a live endpoint (or reads a cached GraphQL SDL schema, .graphql),
 // then builds the GraphQL IR under the configured dialect. Unlike the proto Source it runs

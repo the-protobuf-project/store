@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package types
 
 // provider.go is store's datasource-provider model: the backend a datasource

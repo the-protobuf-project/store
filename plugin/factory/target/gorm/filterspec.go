@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package gorm
 
 // filterspec.go plans the per-table AIP-160 filter / AIP-132 order_by specs the

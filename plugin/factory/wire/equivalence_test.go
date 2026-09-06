@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package wire_test
 
 // equivalence_test.go pins the promise MIGRATING.md makes: migrating a proto off

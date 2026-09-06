@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package golang renders a Go client from the IR using an interface/handler
 // architecture grouped by domain. Each resource is its own package exposing
 // Query/Mutation/Subscription interfaces backed by unexported handlers, plus a natural

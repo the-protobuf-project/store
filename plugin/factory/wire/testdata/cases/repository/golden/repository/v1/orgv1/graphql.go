@@ -18,14 +18,14 @@ package orgv1
 import (
 	"context"
 	"errors"
-	"example.com/test/gen"
+	orgv1 "example.com/test/gen"
 	"example.com/test/gen/repox"
 	"example.com/test/genql"
 	"example.com/test/genql/orgv1ql/membersql"
 	"example.com/test/genql/orgv1ql/organisationsql"
 	"example.com/test/genql/orgv1ql/usersql"
 	"example.com/test/gormdb/filterx"
-	"example.com/test/gormdb/v1/orgv1"
+	orgv1gorm "example.com/test/gormdb/v1/orgv1"
 	"fmt"
 	"github.com/the-protobuf-project/runtime-go/network/graphql"
 	"google.golang.org/protobuf/proto"
@@ -61,7 +61,7 @@ func NewGraphQLMemberRepository(svc *genql.Service) *GraphQLMemberRepository {
 }
 
 // Create persists in under parent and returns the stored record.
-func (r *GraphQLMemberRepository) Create(ctx context.Context, parent string, in *gen.Member) (*gen.Member, error) {
+func (r *GraphQLMemberRepository) Create(ctx context.Context, parent string, in *orgv1.Member) (*orgv1.Member, error) {
 	parentIDs, err := repox.SplitName(parent, "organisations")
 	if err != nil {
 		return nil, err
@@ -79,7 +79,7 @@ func (r *GraphQLMemberRepository) Create(ctx context.Context, parent string, in 
 		}
 		id = ids[len(ids)-1]
 	}
-	in = proto.Clone(in).(*gen.Member)
+	in = proto.Clone(in).(*orgv1.Member)
 	in.Name = FormatMemberName(parentIDs[0], id)
 	if h := r.Hooks.BeforeCreate; h != nil {
 		if err := h(ctx, in); err != nil {
@@ -118,7 +118,7 @@ func (r *GraphQLMemberRepository) Create(ctx context.Context, parent string, in 
 }
 
 // Get returns the record addressed by its resource name.
-func (r *GraphQLMemberRepository) Get(ctx context.Context, name string) (*gen.Member, error) {
+func (r *GraphQLMemberRepository) Get(ctx context.Context, name string) (*orgv1.Member, error) {
 	ids, err := repox.SplitName(name, "organisations", "members")
 	if err != nil {
 		return nil, err
@@ -128,7 +128,7 @@ func (r *GraphQLMemberRepository) Get(ctx context.Context, name string) (*gen.Me
 
 // get loads by surrogate key — the private read every generated method
 // re-reads through.
-func (r *GraphQLMemberRepository) get(ctx context.Context, id string) (*gen.Member, error) {
+func (r *GraphQLMemberRepository) get(ctx context.Context, id string) (*orgv1.Member, error) {
 	row, err := r.Svc.Query.OrgV1.Members.Get(ctx, id)
 	if err != nil {
 		return nil, mapGraphQLErr(err)
@@ -141,7 +141,7 @@ func (r *GraphQLMemberRepository) get(ctx context.Context, id string) (*gen.Memb
 
 // toProto converts a loaded row, hydrating value objects through their
 // stored references, and runs the AfterRead hook.
-func (r *GraphQLMemberRepository) toProto(ctx context.Context, row *membersql.OrgV1Members) (*gen.Member, error) {
+func (r *GraphQLMemberRepository) toProto(ctx context.Context, row *membersql.OrgV1Members) (*orgv1.Member, error) {
 	out := memberFromRow(row)
 	if id := repox.Deref(row.WindowId); id != "" {
 		w, err := r.Svc.Query.OrgV1.TimeWindows.Get(ctx, id)
@@ -149,7 +149,7 @@ func (r *GraphQLMemberRepository) toProto(ctx context.Context, row *membersql.Or
 			return nil, mapGraphQLErr(err)
 		}
 		if w != nil {
-			out.Span = &gen.Member_Window{Window: orgV1TimeWindowFromRow(w)}
+			out.Span = &orgv1.Member_Window{Window: orgV1TimeWindowFromRow(w)}
 		}
 	}
 	if id := repox.Deref(row.DateRangeId); id != "" {
@@ -158,7 +158,7 @@ func (r *GraphQLMemberRepository) toProto(ctx context.Context, row *membersql.Or
 			return nil, mapGraphQLErr(err)
 		}
 		if w != nil {
-			out.Span = &gen.Member_DateRange{DateRange: orgV1DateStretchFromRow(w)}
+			out.Span = &orgv1.Member_DateRange{DateRange: orgV1DateStretchFromRow(w)}
 		}
 	}
 	if h := r.Hooks.AfterRead; h != nil {
@@ -170,7 +170,7 @@ func (r *GraphQLMemberRepository) toProto(ctx context.Context, row *membersql.Or
 }
 
 // List returns one page of records under parent.
-func (r *GraphQLMemberRepository) List(ctx context.Context, parent string, in repox.ListInput) ([]*gen.Member, string, error) {
+func (r *GraphQLMemberRepository) List(ctx context.Context, parent string, in repox.ListInput) ([]*orgv1.Member, string, error) {
 	parentIDs, err := repox.SplitName(parent, "organisations")
 	if err != nil {
 		return nil, "", err
@@ -178,12 +178,12 @@ func (r *GraphQLMemberRepository) List(ctx context.Context, parent string, in re
 	return r.list(ctx, in, membersql.OrganisationId.Eq(parentIDs[len(parentIDs)-1]))
 }
 
-func (r *GraphQLMemberRepository) list(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) ([]*gen.Member, string, error) {
+func (r *GraphQLMemberRepository) list(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) ([]*orgv1.Member, string, error) {
 	conds, err := filterx.Parse(in.Filter)
 	if err != nil {
 		return nil, "", repox.MapFilterxErr(err)
 	}
-	eng := filterx.Hasura[membersql.OrgV1Members](orgv1.MemberFilterSpec, r.Svc.Query.OrgV1.Members).Scope(scope...)
+	eng := filterx.Hasura[membersql.OrgV1Members](orgv1gorm.MemberFilterSpec, r.Svc.Query.OrgV1.Members).Scope(scope...)
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)
 	}
@@ -196,7 +196,7 @@ func (r *GraphQLMemberRepository) list(ctx context.Context, in repox.ListInput, 
 	if err != nil {
 		return nil, "", repox.MapFilterxErr(err)
 	}
-	items := make([]*gen.Member, 0, len(rows))
+	items := make([]*orgv1.Member, 0, len(rows))
 	for i := range rows {
 		out, err := r.toProto(ctx, &rows[i])
 		if err != nil {
@@ -210,7 +210,7 @@ func (r *GraphQLMemberRepository) list(ctx context.Context, in repox.ListInput, 
 // Update persists the masked fields of in; an empty mask replaces every
 // mutable field. When in.Etag is set the write is guarded server-side
 // (UpdateIfMatch); a stale etag returns repox.ErrConflict.
-func (r *GraphQLMemberRepository) Update(ctx context.Context, in *gen.Member, paths []string) (*gen.Member, error) {
+func (r *GraphQLMemberRepository) Update(ctx context.Context, in *orgv1.Member, paths []string) (*orgv1.Member, error) {
 	ids, err := repox.SplitName(in.GetName(), "organisations", "members")
 	if err != nil {
 		return nil, err
@@ -226,7 +226,7 @@ func (r *GraphQLMemberRepository) Update(ctx context.Context, in *gen.Member, pa
 	var staleWindow string
 	var staleDateRange string
 	existingPB := memberFromRow(row)
-	merged := proto.Clone(existingPB).(*gen.Member)
+	merged := proto.Clone(existingPB).(*orgv1.Member)
 	applyMemberMask(merged, in, paths)
 	if h := r.Hooks.BeforeUpdate; h != nil {
 		if err := h(ctx, existingPB, merged, paths); err != nil {
@@ -352,7 +352,7 @@ func NewGraphQLOrganisationRepository(svc *genql.Service) *GraphQLOrganisationRe
 }
 
 // Create persists in and returns the stored record.
-func (r *GraphQLOrganisationRepository) Create(ctx context.Context, in *gen.Organisation) (*gen.Organisation, error) {
+func (r *GraphQLOrganisationRepository) Create(ctx context.Context, in *orgv1.Organisation) (*orgv1.Organisation, error) {
 	id := repox.NewULID()
 	if in.GetName() != "" {
 		ids, err := repox.SplitName(in.GetName(), "organisations")
@@ -361,7 +361,7 @@ func (r *GraphQLOrganisationRepository) Create(ctx context.Context, in *gen.Orga
 		}
 		id = ids[len(ids)-1]
 	}
-	in = proto.Clone(in).(*gen.Organisation)
+	in = proto.Clone(in).(*orgv1.Organisation)
 	in.Name = FormatOrganisationName(id)
 	if h := r.Hooks.BeforeCreate; h != nil {
 		if err := h(ctx, in); err != nil {
@@ -389,7 +389,7 @@ func (r *GraphQLOrganisationRepository) Create(ctx context.Context, in *gen.Orga
 }
 
 // Get returns the record addressed by its resource name.
-func (r *GraphQLOrganisationRepository) Get(ctx context.Context, name string) (*gen.Organisation, error) {
+func (r *GraphQLOrganisationRepository) Get(ctx context.Context, name string) (*orgv1.Organisation, error) {
 	ids, err := repox.SplitName(name, "organisations")
 	if err != nil {
 		return nil, err
@@ -399,7 +399,7 @@ func (r *GraphQLOrganisationRepository) Get(ctx context.Context, name string) (*
 
 // get loads by surrogate key — the private read every generated method
 // re-reads through.
-func (r *GraphQLOrganisationRepository) get(ctx context.Context, id string) (*gen.Organisation, error) {
+func (r *GraphQLOrganisationRepository) get(ctx context.Context, id string) (*orgv1.Organisation, error) {
 	row, err := r.Svc.Query.OrgV1.Organisations.Get(ctx, id)
 	if err != nil {
 		return nil, mapGraphQLErr(err)
@@ -412,7 +412,7 @@ func (r *GraphQLOrganisationRepository) get(ctx context.Context, id string) (*ge
 
 // toProto converts a loaded row, hydrating value objects through their
 // stored references, and runs the AfterRead hook.
-func (r *GraphQLOrganisationRepository) toProto(ctx context.Context, row *organisationsql.OrgV1Organisations) (*gen.Organisation, error) {
+func (r *GraphQLOrganisationRepository) toProto(ctx context.Context, row *organisationsql.OrgV1Organisations) (*orgv1.Organisation, error) {
 	out := organisationFromRow(row)
 	if id := repox.Deref(row.HqId); id != "" {
 		w, err := r.Svc.Query.OrgV1.Locations.Get(ctx, id)
@@ -432,16 +432,16 @@ func (r *GraphQLOrganisationRepository) toProto(ctx context.Context, row *organi
 }
 
 // List returns one page of records.
-func (r *GraphQLOrganisationRepository) List(ctx context.Context, in repox.ListInput) ([]*gen.Organisation, string, error) {
+func (r *GraphQLOrganisationRepository) List(ctx context.Context, in repox.ListInput) ([]*orgv1.Organisation, string, error) {
 	return r.list(ctx, in)
 }
 
-func (r *GraphQLOrganisationRepository) list(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) ([]*gen.Organisation, string, error) {
+func (r *GraphQLOrganisationRepository) list(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) ([]*orgv1.Organisation, string, error) {
 	conds, err := filterx.Parse(in.Filter)
 	if err != nil {
 		return nil, "", repox.MapFilterxErr(err)
 	}
-	eng := filterx.Hasura[organisationsql.OrgV1Organisations](orgv1.OrganisationFilterSpec, r.Svc.Query.OrgV1.Organisations).Scope(scope...)
+	eng := filterx.Hasura[organisationsql.OrgV1Organisations](orgv1gorm.OrganisationFilterSpec, r.Svc.Query.OrgV1.Organisations).Scope(scope...)
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)
 	}
@@ -454,7 +454,7 @@ func (r *GraphQLOrganisationRepository) list(ctx context.Context, in repox.ListI
 	if err != nil {
 		return nil, "", repox.MapFilterxErr(err)
 	}
-	items := make([]*gen.Organisation, 0, len(rows))
+	items := make([]*orgv1.Organisation, 0, len(rows))
 	for i := range rows {
 		out, err := r.toProto(ctx, &rows[i])
 		if err != nil {
@@ -468,7 +468,7 @@ func (r *GraphQLOrganisationRepository) list(ctx context.Context, in repox.ListI
 // Update persists the masked fields of in; an empty mask replaces every
 // mutable field. When in.Etag is set the write is guarded server-side
 // (UpdateIfMatch); a stale etag returns repox.ErrConflict.
-func (r *GraphQLOrganisationRepository) Update(ctx context.Context, in *gen.Organisation, paths []string) (*gen.Organisation, error) {
+func (r *GraphQLOrganisationRepository) Update(ctx context.Context, in *orgv1.Organisation, paths []string) (*orgv1.Organisation, error) {
 	ids, err := repox.SplitName(in.GetName(), "organisations")
 	if err != nil {
 		return nil, err
@@ -483,7 +483,7 @@ func (r *GraphQLOrganisationRepository) Update(ctx context.Context, in *gen.Orga
 	}
 	var staleHq string
 	existingPB := organisationFromRow(row)
-	merged := proto.Clone(existingPB).(*gen.Organisation)
+	merged := proto.Clone(existingPB).(*orgv1.Organisation)
 	applyOrganisationMask(merged, in, paths)
 	if h := r.Hooks.BeforeUpdate; h != nil {
 		if err := h(ctx, existingPB, merged, paths); err != nil {
@@ -579,7 +579,7 @@ func NewGraphQLUserRepository(svc *genql.Service) *GraphQLUserRepository {
 }
 
 // Create persists in and returns the stored record.
-func (r *GraphQLUserRepository) Create(ctx context.Context, in *gen.User) (*gen.User, error) {
+func (r *GraphQLUserRepository) Create(ctx context.Context, in *orgv1.User) (*orgv1.User, error) {
 	id := repox.NewULID()
 	if in.GetName() != "" {
 		ids, err := repox.SplitName(in.GetName(), "users")
@@ -588,7 +588,7 @@ func (r *GraphQLUserRepository) Create(ctx context.Context, in *gen.User) (*gen.
 		}
 		id = ids[len(ids)-1]
 	}
-	in = proto.Clone(in).(*gen.User)
+	in = proto.Clone(in).(*orgv1.User)
 	in.Name = FormatUserName(id)
 	if h := r.Hooks.BeforeCreate; h != nil {
 		if err := h(ctx, in); err != nil {
@@ -608,7 +608,7 @@ func (r *GraphQLUserRepository) Create(ctx context.Context, in *gen.User) (*gen.
 }
 
 // Get returns the record addressed by its resource name.
-func (r *GraphQLUserRepository) Get(ctx context.Context, name string) (*gen.User, error) {
+func (r *GraphQLUserRepository) Get(ctx context.Context, name string) (*orgv1.User, error) {
 	ids, err := repox.SplitName(name, "users")
 	if err != nil {
 		return nil, err
@@ -618,7 +618,7 @@ func (r *GraphQLUserRepository) Get(ctx context.Context, name string) (*gen.User
 
 // get loads by surrogate key — the private read every generated method
 // re-reads through.
-func (r *GraphQLUserRepository) get(ctx context.Context, id string) (*gen.User, error) {
+func (r *GraphQLUserRepository) get(ctx context.Context, id string) (*orgv1.User, error) {
 	row, err := r.Svc.Query.OrgV1.Users.Get(ctx, id)
 	if err != nil {
 		return nil, mapGraphQLErr(err)
@@ -631,7 +631,7 @@ func (r *GraphQLUserRepository) get(ctx context.Context, id string) (*gen.User, 
 
 // toProto converts a loaded row, hydrating value objects through their
 // stored references, and runs the AfterRead hook.
-func (r *GraphQLUserRepository) toProto(ctx context.Context, row *usersql.OrgV1Users) (*gen.User, error) {
+func (r *GraphQLUserRepository) toProto(ctx context.Context, row *usersql.OrgV1Users) (*orgv1.User, error) {
 	out := userFromRow(row)
 	if h := r.Hooks.AfterRead; h != nil {
 		if err := h(ctx, out); err != nil {
@@ -642,16 +642,16 @@ func (r *GraphQLUserRepository) toProto(ctx context.Context, row *usersql.OrgV1U
 }
 
 // List returns one page of records.
-func (r *GraphQLUserRepository) List(ctx context.Context, in repox.ListInput) ([]*gen.User, string, error) {
+func (r *GraphQLUserRepository) List(ctx context.Context, in repox.ListInput) ([]*orgv1.User, string, error) {
 	return r.list(ctx, in)
 }
 
-func (r *GraphQLUserRepository) list(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) ([]*gen.User, string, error) {
+func (r *GraphQLUserRepository) list(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) ([]*orgv1.User, string, error) {
 	conds, err := filterx.Parse(in.Filter)
 	if err != nil {
 		return nil, "", repox.MapFilterxErr(err)
 	}
-	eng := filterx.Hasura[usersql.OrgV1Users](orgv1.UserFilterSpec, r.Svc.Query.OrgV1.Users).Scope(scope...)
+	eng := filterx.Hasura[usersql.OrgV1Users](orgv1gorm.UserFilterSpec, r.Svc.Query.OrgV1.Users).Scope(scope...)
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)
 	}
@@ -664,7 +664,7 @@ func (r *GraphQLUserRepository) list(ctx context.Context, in repox.ListInput, sc
 	if err != nil {
 		return nil, "", repox.MapFilterxErr(err)
 	}
-	items := make([]*gen.User, 0, len(rows))
+	items := make([]*orgv1.User, 0, len(rows))
 	for i := range rows {
 		out, err := r.toProto(ctx, &rows[i])
 		if err != nil {
@@ -678,7 +678,7 @@ func (r *GraphQLUserRepository) list(ctx context.Context, in repox.ListInput, sc
 // Update persists the masked fields of in; an empty mask replaces every
 // mutable field. When in.Etag is set the write is guarded server-side
 // (UpdateIfMatch); a stale etag returns repox.ErrConflict.
-func (r *GraphQLUserRepository) Update(ctx context.Context, in *gen.User, paths []string) (*gen.User, error) {
+func (r *GraphQLUserRepository) Update(ctx context.Context, in *orgv1.User, paths []string) (*orgv1.User, error) {
 	ids, err := repox.SplitName(in.GetName(), "users")
 	if err != nil {
 		return nil, err
@@ -692,7 +692,7 @@ func (r *GraphQLUserRepository) Update(ctx context.Context, in *gen.User, paths 
 		return nil, repox.ErrNotFound
 	}
 	existingPB := userFromRow(row)
-	merged := proto.Clone(existingPB).(*gen.User)
+	merged := proto.Clone(existingPB).(*orgv1.User)
 	applyUserMask(merged, in, paths)
 	if h := r.Hooks.BeforeUpdate; h != nil {
 		if err := h(ctx, existingPB, merged, paths); err != nil {

@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package prisma generates a multi-file Prisma schema tree from the store IR,
 // replicating the hand-written layout this repository uses:
 //

@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package repository
 
 // graphql_view.go prepares the per-schema graphql.go / graphql_convert.go
@@ -300,7 +303,7 @@ func pbEnumType(pb *pbIndex, c *schema.Column) (string, bool) {
 	}
 	for _, f := range m.Fields {
 		if f.Desc.FullName() == c.Source.FullName() && f.Enum != nil {
-			return goPackageName(string(f.Enum.GoIdent.GoImportPath)) + "." + f.Enum.GoIdent.GoName, true
+			return pb.names.Of(string(f.Enum.GoIdent.GoImportPath)) + "." + f.Enum.GoIdent.GoName, true
 		}
 	}
 	return "", false

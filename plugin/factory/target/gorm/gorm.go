@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package gorm generates production-ready Go structs with GORM struct tags.
 //
 // Output layout follows Go package conventions — one directory per schema,

@@ -49,10 +49,35 @@ stubs:
 fmt:
     gofmt -w plugin
 
-# Static checks: gofmt diff, go vet, buf lint (mutates nothing).
+# Only hand-written sources are touched. Generated output carries the same block
+# by its own route and is skipped here: protoc-gen-go copies it from the .proto's
+# leading comment into the *.pb.go stubs, and protoc-gen-store renders it from the
+# license_header opt (see buf.gen.example.yaml) in each target's comment syntax.
+# TestSourceFilesCarryLicenseHeader checks every file either way — `just` shows
+# only the last of these lines, so the summary goes last:
+#
+# Prepend LICENSE.header to any tracked Go/proto source missing it.
+headers:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    hdr=$(sed 's|^|// |' LICENSE.header)
+    n=0
+    for f in $(git ls-files '*.go' '*.proto'); do
+        case "$f" in
+            */testdata/*|*.pb.go|examples/generated/*) continue ;;
+        esac
+        head -1 "$f" | grep -q '^// Copyright' && continue
+        # cat, not "$(cat)": command substitution eats the trailing newline.
+        { printf '%s\n\n' "$hdr"; cat "$f"; } > "$f.tmp" && mv "$f.tmp" "$f"
+        n=$((n+1))
+    done
+    echo "added the licence header to $n file(s)"
+
+# Static checks: gofmt diff, go vet, licence headers, buf lint (mutates nothing).
 lint:
     @test -z "$(gofmt -l plugin)" || { echo "unformatted files (run: just fmt):"; gofmt -l plugin; exit 1; }
     go vet ./...
+    go test ./plugin/factory/provenance -run TestSourceFilesCarryLicenseHeader
     buf lint
 
 # Run unit + golden tests.

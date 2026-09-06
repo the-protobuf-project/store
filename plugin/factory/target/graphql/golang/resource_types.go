@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 package golang
 
 // resource_types.go classifies a resource's input types (bool_exp, order_by, insert, update) and renders CreateInput/UpdateInput.

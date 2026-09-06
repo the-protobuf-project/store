@@ -1,3 +1,6 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
 // Package facets is the one place that knows how this plugin's annotation
 // vocabularies are stored on protokit's IR, and the only way its targets read
 // them back.

@@ -17,7 +17,7 @@ package orgv1
 
 import (
 	"encoding/json"
-	"example.com/test/gen"
+	orgv1 "example.com/test/gen"
 	"example.com/test/gen/repox"
 	"example.com/test/genql/orgv1ql/datestretchesql"
 	"example.com/test/genql/orgv1ql/locationsql"
@@ -79,7 +79,7 @@ func jsonToStruct(r *json.RawMessage) *structpb.Struct {
 // memberToCreateInput maps the proto onto the client's insert input.
 // Identity (id, name resolution), parentage, audit timestamps, and etag are
 // set by the adapter.
-func memberToCreateInput(in *gen.Member) membersql.CreateInput {
+func memberToCreateInput(in *orgv1.Member) membersql.CreateInput {
 	var ci membersql.CreateInput
 	ci.Name = in.GetName()
 	ci.Email = in.GetEmail()
@@ -98,7 +98,7 @@ func memberToCreateInput(in *gen.Member) membersql.CreateInput {
 // memberToUpdatePatch maps the merged proto onto a replace-write
 // patch of every mutable column (mask semantics already applied to merged),
 // mirroring the gorm adapter's write-back exactly.
-func memberToUpdatePatch(merged *gen.Member) membersql.UpdateInput {
+func memberToUpdatePatch(merged *orgv1.Member) membersql.UpdateInput {
 	var patch membersql.UpdateInput
 	patch.Name = graphql.Value(merged.GetName())
 	patch.Email = graphql.Value(merged.GetEmail())
@@ -114,11 +114,11 @@ func memberToUpdatePatch(merged *gen.Member) membersql.UpdateInput {
 
 // memberFromRow re-hydrates the proto from a client row, decorating
 // reference names from their stored bare ids.
-func memberFromRow(row *membersql.OrgV1Members) *gen.Member {
+func memberFromRow(row *membersql.OrgV1Members) *orgv1.Member {
 	if row == nil {
 		return nil
 	}
-	out := &gen.Member{}
+	out := &orgv1.Member{}
 	out.Name = row.Name
 	out.Email = row.Email
 	if row.User != "" {
@@ -127,7 +127,7 @@ func memberFromRow(row *membersql.OrgV1Members) *gen.Member {
 	if v := repox.Deref(row.Inviter); v != "" {
 		out.Inviter = "users/" + v
 	}
-	out.Role = gen.MemberRole(gen.MemberRole_value["MEMBER_ROLE_"+row.Role])
+	out.Role = orgv1.MemberRole(orgv1.MemberRole_value["MEMBER_ROLE_"+row.Role])
 	out.Etag = repox.Deref(row.Etag)
 	out.CreateTime = strToTs(row.CreateTime)
 	out.UpdateTime = strToTs(row.UpdateTime)
@@ -137,7 +137,7 @@ func memberFromRow(row *membersql.OrgV1Members) *gen.Member {
 // organisationToCreateInput maps the proto onto the client's insert input.
 // Identity (id, name resolution), parentage, audit timestamps, and etag are
 // set by the adapter.
-func organisationToCreateInput(in *gen.Organisation) organisationsql.CreateInput {
+func organisationToCreateInput(in *orgv1.Organisation) organisationsql.CreateInput {
 	var ci organisationsql.CreateInput
 	ci.Name = in.GetName()
 	ci.DisplayName = in.GetDisplayName()
@@ -149,7 +149,7 @@ func organisationToCreateInput(in *gen.Organisation) organisationsql.CreateInput
 // organisationToUpdatePatch maps the merged proto onto a replace-write
 // patch of every mutable column (mask semantics already applied to merged),
 // mirroring the gorm adapter's write-back exactly.
-func organisationToUpdatePatch(merged *gen.Organisation) organisationsql.UpdateInput {
+func organisationToUpdatePatch(merged *orgv1.Organisation) organisationsql.UpdateInput {
 	var patch organisationsql.UpdateInput
 	patch.Name = graphql.Value(merged.GetName())
 	patch.DisplayName = graphql.Value(merged.GetDisplayName())
@@ -164,11 +164,11 @@ func organisationToUpdatePatch(merged *gen.Organisation) organisationsql.UpdateI
 
 // organisationFromRow re-hydrates the proto from a client row, decorating
 // reference names from their stored bare ids.
-func organisationFromRow(row *organisationsql.OrgV1Organisations) *gen.Organisation {
+func organisationFromRow(row *organisationsql.OrgV1Organisations) *orgv1.Organisation {
 	if row == nil {
 		return nil
 	}
-	out := &gen.Organisation{}
+	out := &orgv1.Organisation{}
 	out.Name = row.Name
 	out.DisplayName = row.DisplayName
 	out.Slug = repox.Deref(row.Slug)
@@ -176,14 +176,14 @@ func organisationFromRow(row *organisationsql.OrgV1Organisations) *gen.Organisat
 	out.Etag = repox.Deref(row.Etag)
 	out.CreateTime = strToTs(row.CreateTime)
 	out.UpdateTime = strToTs(row.UpdateTime)
-	out.State = gen.OrgState(gen.OrgState_value["ORG_STATE_"+repox.Deref(row.State)])
+	out.State = orgv1.OrgState(orgv1.OrgState_value["ORG_STATE_"+repox.Deref(row.State)])
 	return out
 }
 
 // userToCreateInput maps the proto onto the client's insert input.
 // Identity (id, name resolution), parentage, audit timestamps, and etag are
 // set by the adapter.
-func userToCreateInput(in *gen.User) usersql.CreateInput {
+func userToCreateInput(in *orgv1.User) usersql.CreateInput {
 	var ci usersql.CreateInput
 	ci.Name = in.GetName()
 	ci.DisplayName = in.GetDisplayName()
@@ -193,7 +193,7 @@ func userToCreateInput(in *gen.User) usersql.CreateInput {
 // userToUpdatePatch maps the merged proto onto a replace-write
 // patch of every mutable column (mask semantics already applied to merged),
 // mirroring the gorm adapter's write-back exactly.
-func userToUpdatePatch(merged *gen.User) usersql.UpdateInput {
+func userToUpdatePatch(merged *orgv1.User) usersql.UpdateInput {
 	var patch usersql.UpdateInput
 	patch.Name = graphql.Value(merged.GetName())
 	patch.DisplayName = graphql.Value(merged.GetDisplayName())
@@ -202,11 +202,11 @@ func userToUpdatePatch(merged *gen.User) usersql.UpdateInput {
 
 // userFromRow re-hydrates the proto from a client row, decorating
 // reference names from their stored bare ids.
-func userFromRow(row *usersql.OrgV1Users) *gen.User {
+func userFromRow(row *usersql.OrgV1Users) *orgv1.User {
 	if row == nil {
 		return nil
 	}
-	out := &gen.User{}
+	out := &orgv1.User{}
 	out.Name = row.Name
 	out.DisplayName = row.DisplayName
 	out.Etag = repox.Deref(row.Etag)
@@ -217,7 +217,7 @@ func userFromRow(row *usersql.OrgV1Users) *gen.User {
 
 // orgV1TimeWindowToCreateInput maps the value-object proto onto its client
 // insert input; the adapter mints the id and wires the reference.
-func orgV1TimeWindowToCreateInput(in *gen.TimeWindow) timewindowsql.CreateInput {
+func orgV1TimeWindowToCreateInput(in *orgv1.TimeWindow) timewindowsql.CreateInput {
 	var ci timewindowsql.CreateInput
 	ci.StartTime = tsToStr(in.GetStartTime())
 	ci.EndTime = tsToStr(in.GetEndTime())
@@ -225,11 +225,11 @@ func orgV1TimeWindowToCreateInput(in *gen.TimeWindow) timewindowsql.CreateInput 
 }
 
 // orgV1TimeWindowFromRow re-hydrates the value-object proto from a client row.
-func orgV1TimeWindowFromRow(row *timewindowsql.OrgV1TimeWindows) *gen.TimeWindow {
+func orgV1TimeWindowFromRow(row *timewindowsql.OrgV1TimeWindows) *orgv1.TimeWindow {
 	if row == nil {
 		return nil
 	}
-	out := &gen.TimeWindow{}
+	out := &orgv1.TimeWindow{}
 	out.StartTime = strToTs(row.StartTime)
 	out.EndTime = strToTs(row.EndTime)
 	return out
@@ -237,7 +237,7 @@ func orgV1TimeWindowFromRow(row *timewindowsql.OrgV1TimeWindows) *gen.TimeWindow
 
 // orgV1DateStretchToCreateInput maps the value-object proto onto its client
 // insert input; the adapter mints the id and wires the reference.
-func orgV1DateStretchToCreateInput(in *gen.DateStretch) datestretchesql.CreateInput {
+func orgV1DateStretchToCreateInput(in *orgv1.DateStretch) datestretchesql.CreateInput {
 	var ci datestretchesql.CreateInput
 	ci.StartDay = in.GetStartDay()
 	ci.EndDay = in.GetEndDay()
@@ -248,11 +248,11 @@ func orgV1DateStretchToCreateInput(in *gen.DateStretch) datestretchesql.CreateIn
 }
 
 // orgV1DateStretchFromRow re-hydrates the value-object proto from a client row.
-func orgV1DateStretchFromRow(row *datestretchesql.OrgV1DateStretches) *gen.DateStretch {
+func orgV1DateStretchFromRow(row *datestretchesql.OrgV1DateStretches) *orgv1.DateStretch {
 	if row == nil {
 		return nil
 	}
-	out := &gen.DateStretch{}
+	out := &orgv1.DateStretch{}
 	out.StartDay = row.StartDay
 	out.EndDay = repox.Deref(row.EndDay)
 	if row.MaxNights != nil {
@@ -263,7 +263,7 @@ func orgV1DateStretchFromRow(row *datestretchesql.OrgV1DateStretches) *gen.DateS
 
 // orgV1LocationToCreateInput maps the value-object proto onto its client
 // insert input; the adapter mints the id and wires the reference.
-func orgV1LocationToCreateInput(in *gen.Location) locationsql.CreateInput {
+func orgV1LocationToCreateInput(in *orgv1.Location) locationsql.CreateInput {
 	var ci locationsql.CreateInput
 	ci.Line1 = in.GetLine1()
 	ci.City = in.GetCity()
@@ -272,11 +272,11 @@ func orgV1LocationToCreateInput(in *gen.Location) locationsql.CreateInput {
 }
 
 // orgV1LocationFromRow re-hydrates the value-object proto from a client row.
-func orgV1LocationFromRow(row *locationsql.OrgV1Locations) *gen.Location {
+func orgV1LocationFromRow(row *locationsql.OrgV1Locations) *orgv1.Location {
 	if row == nil {
 		return nil
 	}
-	out := &gen.Location{}
+	out := &orgv1.Location{}
 	out.Line1 = row.Line1
 	out.City = repox.Deref(row.City)
 	out.Floor = int32(repox.Deref(row.Floor))
