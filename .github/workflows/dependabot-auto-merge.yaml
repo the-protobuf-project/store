@@ -1,0 +1,62 @@
+name: Dependabot auto-merge
+
+# Merges Dependabot's patch and minor updates once the whole CI suite is green,
+# and leaves major bumps open for review.
+#
+# The gate is GitHub's own, not this workflow's. `gh pr merge --auto` does not
+# merge anything: it marks the PR to merge later, and branch protection on main
+# holds it until every required check passes. So the guarantee lives in the
+# branch rules (Test (Go), the six Build matrix jobs, Lint (Go), Lint (Proto)) —
+# a check added there is enforced here for free, and one removed there stops
+# gating. If auto-merge or those required checks are ever turned off, this
+# workflow degrades to merging as soon as it runs, so the two settings belong
+# together.
+#
+# Major updates are deliberately excluded. A breaking change can pass a suite
+# that does not happen to exercise it, and the version number is the only signal
+# that arrives before the breakage does.
+
+on: pull_request
+
+# Dependabot-triggered runs get a read-only GITHUB_TOKEN by default; enabling
+# auto-merge and commenting need it raised explicitly. Both scopes are the
+# minimum for that — no `actions:` or `checks:` access is required, since the
+# checks are evaluated by branch protection rather than read here.
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    name: Auto-merge
+    runs-on: ubuntu-latest
+    # Every PR triggers this workflow; only Dependabot's may merge themselves.
+    # The actor check is what keeps that true — a branch named to look like
+    # Dependabot's is not enough to satisfy it.
+    if: github.actor == 'dependabot[bot]'
+    steps:
+      - name: Read the update's semver bump
+        id: metadata
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Enable auto-merge (patch and minor)
+        if: steps.metadata.outputs.update-type != 'version-update:semver-major'
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Explain why a major update was left open
+        if: steps.metadata.outputs.update-type == 'version-update:semver-major'
+        run: |
+          gh pr comment "$PR_URL" --body \
+            "Not auto-merged: this is a **major** update (\`${DEP}\` → \`${VERSION}\`).
+          Patch and minor updates merge themselves once CI is green; majors are held so
+          the change can be read before it lands. Merge it by hand when you're happy with it."
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          DEP: ${{ steps.metadata.outputs.dependency-names }}
+          VERSION: ${{ steps.metadata.outputs.new-version }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
