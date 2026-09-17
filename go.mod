@@ -20,5 +20,5 @@ require (
 	github.com/bufbuild/protocompile v0.14.1 // indirect
 	github.com/the-protobuf-project/telemetry/telemetry-go v0.0.0-20260817061725-884f94d7858d
 	github.com/vektah/gqlparser/v2 v2.5.36 // indirect
-	golang.org/x/sync v0.21.0 // indirect
+	golang.org/x/sync v0.22.0 // indirect
 )
