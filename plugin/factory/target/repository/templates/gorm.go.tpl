@@ -73,7 +73,17 @@ func (r *Gorm{{.Model}}Repository) Create(ctx context.Context, parent string, in
 		{{- range .VOCreates}}
 		{{.}}
 		{{- end}}
+		{{- if .DeepAfterCreates}}
+		if err := {{$.GormPkg}}.{{.Store}}(tx).Create(ctx, m); err != nil {
+			return err
+		}
+		{{- range .DeepAfterCreates}}
+		{{.}}
+		{{- end}}
+		return nil
+		{{- else}}
 		return {{$.GormPkg}}.{{.Store}}(tx).Create(ctx, m)
+		{{- end}}
 	}); err != nil {
 		return nil, repox.MapGormErr(err)
 	}
@@ -116,7 +126,17 @@ func (r *Gorm{{.Model}}Repository) Create(ctx context.Context, in *{{.PB}}) (*{{
 		{{- range .VOCreates}}
 		{{.}}
 		{{- end}}
+		{{- if .DeepAfterCreates}}
+		if err := {{$.GormPkg}}.{{.Store}}(tx).Create(ctx, m); err != nil {
+			return err
+		}
+		{{- range .DeepAfterCreates}}
+		{{.}}
+		{{- end}}
+		return nil
+		{{- else}}
 		return {{$.GormPkg}}.{{.Store}}(tx).Create(ctx, m)
+		{{- end}}
 	}); err != nil {
 		return nil, repox.MapGormErr(err)
 	}
@@ -254,6 +274,9 @@ func (r *Gorm{{.Model}}Repository) Update(ctx context.Context, in *{{.PB}}, path
 		{{- range .VOUpdates}}
 		{{.}}
 		{{- end}}
+		{{- range .DeepDetach}}
+		{{.}}
+		{{- end}}
 		{{- if .HasEtag}}
 		existing.{{.EtagField}} = {{if .EtagPtr}}repox.Ptr(repox.NewULID()){{else}}repox.NewULID(){{end}}
 		{{- end}}
@@ -288,7 +311,7 @@ func (r *Gorm{{.Model}}Repository) Delete(ctx context.Context, name string) erro
 	}
 	id := ids[len(ids)-1]
 	var existing {{$.GormPkg}}.{{.Model}}
-	if err := r.DB.WithContext(ctx).First(&existing, "id = ?", id).Error; err != nil {
+	if err := r.DB.WithContext(ctx){{.DeletePreloads}}.First(&existing, "id = ?", id).Error; err != nil {
 		return repox.MapGormErr(err)
 	}
 	{{- if .HasVOs}}

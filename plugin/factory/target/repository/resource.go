@@ -47,8 +47,13 @@ type resource struct {
 	Cols columnPlan
 
 	// VOs are the single-level belongs-to value objects the adapters
-	// materialize (see planVOFields); deep graphs stay Tier-2.
+	// materialize (see planVOFields).
 	VOs []voField
+
+	// Graph are the deeper value-object edges planVOFields leaves out --
+	// nested value objects, has-many children, owner columns, natural keys
+	// (see planGraph).
+	Graph []*gEdge
 }
 
 // voField is one generated belongs-to value object: a message field
@@ -158,6 +163,8 @@ func planResources(pb *pbIndex, db *schema.Database) (map[*schema.Table]*resourc
 	// the parent FK is never mistaken for a value-object FK).
 	for _, r := range byTable {
 		r.VOs = planVOFields(pb, db, r)
+		r.Graph = planGraph(pb, db, r)
+		debugGraph(r)
 	}
 	return byTable, nil
 }

@@ -57,6 +57,13 @@ type gormResourceView struct {
 	VODeleteCleanups []string // VO-row removals inside the delete transaction
 	VOMaskLines      []string // VO merge lines spliced into apply<X>Mask
 	CrossVOPkgs      []string // cross-schema gorm packages the fragments reference
+
+	// Deep value-object graphs (graph.go); empty for resources without one, so
+	// their output is unchanged.
+	DeepAfterCreates []string // has-many writes after the resource insert
+	DeepDetach       []string // association clears before the row update
+	DeletePreloads   string   // .Preload chain Delete needs to walk the graph
+	NeedsClause      bool     // fragments use gorm.io/gorm/clause
 }
 
 // maskFieldView is one mutable proto field in the generated mask-apply.
@@ -129,8 +136,9 @@ func gormResourceViews(pb *pbIndex, db *schema.Database, s *schema.Schema, resou
 		}
 		v.MutableAssigns, v.MaskFields = mutableFragments(pb, db, resources, r)
 		vg := voGormFragments(gormPkg, r)
-		v.HasVOs = len(r.VOs) > 0
-		v.Preloads = vg.Preloads
+		gg := graphGormFragments(gormPkg, r)
+		v.HasVOs = len(r.VOs) > 0 || len(r.Graph) > 0
+		v.Preloads = vg.Preloads + gg.Preloads
 		v.VOCreates = vg.Creates
 		v.VOStaleVars = vg.StaleVars
 		v.VOUpdates = vg.Updates
@@ -143,7 +151,27 @@ func gormResourceViews(pb *pbIndex, db *schema.Database, s *schema.Schema, resou
 		// without this the two would emit the same `merged.Span = in.Span`
 		// twice, under different halves of the condition. Fold the inline arms'
 		// paths into the VO group and drop the duplicate entry.
-		v.MaskFields, v.VOMaskLines = mergeOneofMasks(v.MaskFields, v.VOMaskLines, vg.MaskOneofs)
+		oneofs := vg.MaskOneofs
+		for k, i := range gg.MaskOneofs {
+			if oneofs == nil {
+				oneofs = map[string]int{}
+			}
+			oneofs[k] = len(vg.MaskLines) + i
+		}
+		v.VOCreates = append(v.VOCreates, gg.BeforeCreates...)
+		v.VOStaleVars = append(v.VOStaleVars, gg.StaleVars...)
+		v.VOUpdates = append(v.VOUpdates, gg.Updates...)
+		v.VOStaleDels = append(v.VOStaleDels, gg.StaleDels...)
+		v.VODeleteCleanups = append(v.VODeleteCleanups, gg.DeleteCleanups...)
+		v.VOMaskLines = append(v.VOMaskLines, gg.MaskLines...)
+		v.CrossVOPkgs = append(v.CrossVOPkgs, gg.CrossPkgs...)
+		v.DeepAfterCreates = gg.AfterCreates
+		v.DeepDetach = gg.Detach
+		if len(r.Graph) > 0 {
+			v.DeletePreloads = v.Preloads
+		}
+		v.NeedsClause = gg.NeedsClause
+		v.MaskFields, v.VOMaskLines = mergeOneofMasks(v.MaskFields, v.VOMaskLines, oneofs)
 		out = append(out, v)
 	}
 	return out, nil

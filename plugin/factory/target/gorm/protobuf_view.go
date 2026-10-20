@@ -528,6 +528,17 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 			}
 		}
 
+		// Has-many value objects (repeated message fields stored as child rows):
+		// rendered ToProto from the preloaded association, in its loaded order.
+		// FromProto leaves them to the caller like every sub-row graph.
+		for _, e := range HasManyEdges(db, s, t, msg) {
+			fromSkips = append(fromSkips, string(e.PBField.Desc.Name())+" (sub-row graph)")
+			cm.ToLines = append(cm.ToLines,
+				"for i := range m."+e.Field+" {",
+				"\tout."+e.PBField.GoName+" = append(out."+e.PBField.GoName+", "+e.Child.LocalName+"ToProto(&m."+e.Field+"[i]))",
+				"}")
+		}
+
 		if len(toSkips) > 0 {
 			cm.ToSkip = "// not mapped here: " + strings.Join(toSkips, ", ")
 		}

@@ -67,6 +67,9 @@ func gormFileView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 		for _, cp := range r.CrossVOPkgs {
 			imports[dbGormModule(db)+"/"+db.Name+"/"+cp] = ""
 		}
+		if r.NeedsClause {
+			imports["gorm.io/gorm/clause"] = ""
+		}
 	}
 	addPBImports(pb, s, imports)
 	gormPkg := addGormModelsImport(pb, db, s, pkg, imports)
