@@ -120,6 +120,50 @@ func goValToTs(t time.Time) *timestamppb.Timestamp {
 	}
 	return timestamppb.New(t)
 }
+{{end}}{{if .Needs.DT}}
+// dtToGo maps a google.type.DateTime onto a nullable TIMESTAMPTZ instant. A
+// time zone resolves through the IANA database and a UTC offset as a fixed
+// zone; a floating value (neither) has no instant of its own and is read as
+// UTC.
+func dtToGo(d *datetime.DateTime) *time.Time {
+	if d == nil {
+		return nil
+	}
+	t := dtToGoVal(d)
+	return &t
+}
+
+// dtToGoVal is dtToGo for a NOT NULL column.
+func dtToGoVal(d *datetime.DateTime) time.Time {
+	if d == nil {
+		return time.Time{}
+	}
+	loc := time.UTC
+	switch {
+	case d.GetTimeZone().GetId() != "":
+		if l, err := time.LoadLocation(d.GetTimeZone().GetId()); err == nil {
+			loc = l
+		}
+	case d.GetUtcOffset() != nil:
+		loc = time.FixedZone("", int(d.GetUtcOffset().AsDuration()/time.Second))
+	}
+	return time.Date(int(d.GetYear()), time.Month(d.GetMonth()), int(d.GetDay()),
+		int(d.GetHours()), int(d.GetMinutes()), int(d.GetSeconds()), int(d.GetNanos()), loc)
+}
+
+// goToDt maps a TIMESTAMPTZ instant back onto a DateTime, in UTC: the stored
+// instant is what survives, not the zone it was written in.
+func goToDt(t *time.Time) *datetime.DateTime {
+	if t == nil || t.IsZero() {
+		return nil
+	}
+	u := t.UTC()
+	return &datetime.DateTime{
+		Year: int32(u.Year()), Month: int32(u.Month()), Day: int32(u.Day()),
+		Hours: int32(u.Hour()), Minutes: int32(u.Minute()), Seconds: int32(u.Second()), Nanos: int32(u.Nanosecond()),
+		TimeOffset: &datetime.DateTime_UtcOffset{UtcOffset: durationpb.New(0)},
+	}
+}
 {{end}}{{if .Needs.Date}}
 // dateToGo maps a proto date onto a nullable DATE value (UTC midnight).
 func dateToGo(d *date.Date) *time.Time {

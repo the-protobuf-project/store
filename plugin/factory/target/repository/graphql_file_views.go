@@ -8,6 +8,7 @@ package repository
 
 import (
 	"github.com/the-protobuf-project/protokit/schema"
+	"strings"
 )
 
 // graphqlDSLModule is the predicate/scalar DSL package of the generated
@@ -51,6 +52,13 @@ func graphqlFileView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg str
 		if r.CreateTimeField != "" || r.UpdateTimeField != "" {
 			needTime = true
 		}
+		for _, p := range r.DeepPkgs {
+			parts := strings.Split(p, "/")
+			imports[client+"/"+p] = parts[len(parts)-1]
+		}
+		for _, p := range r.DeepPBImports {
+			imports[p] = pb.names.Of(p)
+		}
 	}
 	if needTime {
 		imports["time"] = ""
@@ -81,6 +89,9 @@ func graphqlConvertView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg 
 	for _, c := range voConvs {
 		imports[c.ResPkgPath] = c.ResPkgName
 		imports[c.PBPath] = c.PBName
+		for _, p := range c.EnumPaths {
+			imports[p] = pb.names.Of(p)
+		}
 	}
 	if needs.Wrappers {
 		imports["google.golang.org/protobuf/types/known/wrapperspb"] = "wrapperspb"
@@ -90,6 +101,11 @@ func graphqlConvertView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg 
 	if needs.Ts {
 		imports["time"] = ""
 		imports["google.golang.org/protobuf/types/known/timestamppb"] = ""
+	}
+	if needs.DT {
+		imports["time"] = ""
+		imports["google.golang.org/genproto/googleapis/type/datetime"] = ""
+		imports["google.golang.org/protobuf/types/known/durationpb"] = ""
 	}
 	if needs.Date {
 		imports["fmt"] = ""

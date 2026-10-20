@@ -30,6 +30,46 @@ func strToTs(s string) *timestamppb.Timestamp {
 	return nil
 }
 {{- end}}
+{{- if .Needs.DT}}
+
+// dtToStr / strToDt cross the timestamptz boundary for a google.type.DateTime:
+// written as the instant it denotes (a time zone through the IANA database, a
+// UTC offset as a fixed zone, a floating value as UTC), read back in UTC.
+func dtToStr(d *datetime.DateTime) string {
+	if d == nil {
+		return ""
+	}
+	loc := time.UTC
+	switch {
+	case d.GetTimeZone().GetId() != "":
+		if l, err := time.LoadLocation(d.GetTimeZone().GetId()); err == nil {
+			loc = l
+		}
+	case d.GetUtcOffset() != nil:
+		loc = time.FixedZone("", int(d.GetUtcOffset().AsDuration()/time.Second))
+	}
+	return time.Date(int(d.GetYear()), time.Month(d.GetMonth()), int(d.GetDay()),
+		int(d.GetHours()), int(d.GetMinutes()), int(d.GetSeconds()), int(d.GetNanos()), loc).
+		UTC().Format(time.RFC3339Nano)
+}
+
+func strToDt(s string) *datetime.DateTime {
+	if s == "" {
+		return nil
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02T15:04:05.999999Z07:00", "2006-01-02T15:04:05"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			u := t.UTC()
+			return &datetime.DateTime{
+				Year: int32(u.Year()), Month: int32(u.Month()), Day: int32(u.Day()),
+				Hours: int32(u.Hour()), Minutes: int32(u.Minute()), Seconds: int32(u.Second()), Nanos: int32(u.Nanosecond()),
+				TimeOffset: &datetime.DateTime_UtcOffset{UtcOffset: durationpb.New(0)},
+			}
+		}
+	}
+	return nil
+}
+{{- end}}
 {{- if .Needs.Date}}
 
 // dateToStr / strToDate cross the date boundary as "2006-01-02" strings.

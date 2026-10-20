@@ -100,6 +100,7 @@ func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 					return err
 				}
 				voConvs := gqlVOConvs(pb, db, s, resources, &needs)
+				voConvs = gqlNodeConvs(pb, db, s, resources, voConvs, &needs)
 				view.HasGraphQL = true
 				view.ClientPkg = clientPkgName(dbGraphQLModule(db))
 				view.GQLResources = gqlViews

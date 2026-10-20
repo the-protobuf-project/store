@@ -50,16 +50,29 @@ type gqlResourceView struct {
 	GQLVOUpdates        []string // masked replacements on the patch
 	GQLVOStaleDels      []string // stale-row deletions after a successful update
 	GQLVODeleteCleanups []string // VO-row removals after the owner row's delete
+
+	// Deep value-object graph fragments (graph_gql.go); empty without one.
+	HasDeep             bool
+	InsertResp          string   // the resource's insert response type, for its queued insert
+	GQLDeepCreates      []string // queued before the resource insert
+	GQLDeepAfterCreates []string // queued after it
+	GQLDeepStale        []string // captures at the top of Update
+	GQLDeepUpdates      []string // replacement ops on the patch / after-tx
+	GQLDeepDeletes      []string // subtree removal after the resource delete
+	DeepPkgs            []string // client resource packages the fragments use
+	DeepPBImports       []string // proto packages of oneof wrappers
 }
 
 // helperNeeds tracks which scalar helpers graphql_convert.go must include.
 // Wrappers marks google.protobuf wrapper fields (wrapperspb import).
 type helperNeeds struct {
 	Ts, Date, Struct, Bytes, Duration, StrSlice, Decimal, Enum, Wrappers bool
+	DT                                                                   bool // google.type.DateTime
 }
 
 func (h *helperNeeds) or(o helperNeeds) {
 	h.Ts = h.Ts || o.Ts
+	h.DT = h.DT || o.DT
 	h.Date = h.Date || o.Date
 	h.Struct = h.Struct || o.Struct
 	h.Bytes = h.Bytes || o.Bytes
@@ -140,9 +153,85 @@ func gqlResourceViews(pb *pbIndex, db *schema.Database, s *schema.Schema, resour
 		v.GQLVOUpdates = vp.Updates
 		v.GQLVOStaleDels = vp.StaleDels
 		v.GQLVODeleteCleanups = vp.DeleteCleanups
+		gg := graphGQLFragments(pb, r)
+		if len(r.Graph) > 0 {
+			v.HasDeep = true
+			v.InsertResp = v.ResPkg + ".Insert" + model + "Response"
+			v.GQLDeepCreates = gg.Creates
+			v.GQLDeepAfterCreates = gg.AfterCreates
+			v.GQLDeepStale = gg.Stale
+			v.GQLDeepUpdates = gg.Updates
+			v.GQLDeepDeletes = gg.Deletes
+			v.GQLVOHydrates = append(v.GQLVOHydrates, gg.Hydrates...)
+			for _, n := range gg.Nodes {
+				if n.NaturalPB != "" {
+					continue // reached only through the client service: no package reference
+				}
+				nm := gqlNamesOf(n.Table)
+				v.DeepPkgs = append(v.DeepPkgs, nm.DomPkg+"/"+nm.ResPkg)
+			}
+			for p := range gg.PBImports {
+				v.DeepPBImports = append(v.DeepPBImports, p)
+			}
+		}
 		out = append(out, v)
 	}
 	return out, needs, nil
+}
+
+// gqlNodeConvs extends convs with a converter pair for every deep-graph node
+// table not already covered, accumulating helper needs.
+func gqlNodeConvs(pb *pbIndex, db *schema.Database, s *schema.Schema, resources map[*schema.Table]*resource, convs []gqlVOConv, needs *helperNeeds) []gqlVOConv {
+	client := dbGraphQLModule(db)
+	have := map[string]bool{}
+	for _, c := range convs {
+		have[c.ConvName] = true
+	}
+	var walk func(es []*gEdge)
+	walk = func(es []*gEdge) {
+		for _, e := range es {
+			t := e.Child.Table
+			nm := gqlNamesOf(t)
+			if !have[nm.ConvName] {
+				have[nm.ConvName] = true
+				if msg, ok := pb.msgs[t.Source.FullName()]; ok {
+					pbImport := string(msg.GoIdent.GoImportPath)
+					conv := gqlVOConv{
+						ConvName:   nm.ConvName,
+						PBType:     pb.names.Of(pbImport) + "." + msg.GoIdent.GoName,
+						InputType:  nm.ResPkg + ".CreateInput",
+						RowType:    nm.Row,
+						ResPkgPath: client + "/" + nm.DomPkg + "/" + nm.ResPkg,
+						ResPkgName: nm.ResPkg,
+						PBPath:     pbImport,
+						PBName:     pb.names.Of(pbImport),
+					}
+					for _, c := range t.Columns {
+						if c.Source == nil || (c.Generated != "") {
+							continue
+						}
+						in, _, row, n, ok := gqlScalarFragments(pb, c, "row."+export(camel(c.Name)))
+						if !ok {
+							conv.InputAssigns = append(conv.InputAssigns, "// not mapped here: "+c.Name+" (unsupported scalar shape)")
+							continue
+						}
+						if f := pbFieldOf(pb, c); f != nil && f.Enum != nil {
+							conv.EnumPaths = append(conv.EnumPaths, string(f.Enum.GoIdent.GoImportPath))
+						}
+						needs.or(n)
+						conv.InputAssigns = append(conv.InputAssigns, in...)
+						conv.RowToProto = append(conv.RowToProto, row...)
+					}
+					convs = append(convs, conv)
+				}
+			}
+			walk(e.Child.Edges)
+		}
+	}
+	for _, r := range sortedResources(s, resources) {
+		walk(r.Graph)
+	}
+	return convs
 }
 
 // clientModelName is the DDN model name the graphql client uses for a table:
@@ -340,6 +429,17 @@ func gqlScalarFragments(pb *pbIndex, c *schema.Column, rowField string) (inputs,
 		if !isOneof {
 			return fmt.Sprintf("%s = %s", outField, expr)
 		}
+		// A scalar arm (a string, a number) cannot be compared to nil; its
+		// nullable column says whether the arm is set by being non-NULL.
+		scalar := false
+		switch c.Type {
+		case schema.TypeString, schema.TypeText, schema.TypeEnum, schema.TypeInt32, schema.TypeUint32,
+			schema.TypeInt64, schema.TypeUint64, schema.TypeFloat, schema.TypeDouble, schema.TypeBool, schema.TypeDecimal:
+			scalar = true
+		}
+		if scalar && c.Optional {
+			return fmt.Sprintf("if %s != nil {\n\t\tout.%s = &%s{%s: %s}\n\t}", rowField, oneof, wrapper, gof, expr)
+		}
 		return fmt.Sprintf("if v := %s; v != nil {\n\t\tout.%s = &%s{%s: v}\n\t}", expr, oneof, wrapper, gof)
 	}
 	rowVal := rowField
@@ -415,6 +515,15 @@ func gqlScalarFragments(pb *pbIndex, c *schema.Column, rowField string) (inputs,
 		// Go types. Emitting the helper for the wrong one does not compile, so an
 		// unrecognised message is skipped as an unsupported shape — the same guard
 		// the gorm converter applies.
+		if f := pbFieldOf(pb, c); f != nil && f.Message != nil && string(f.Message.Desc.FullName()) == "google.type.DateTime" {
+			// A civil time with a zone or offset, stored as the instant it
+			// denotes; same mapping as the gorm converter.
+			needs.DT = true
+			inputs = append(inputs, fmt.Sprintf("if v := dtToStr(%s); v != \"\" {\n\t\tci.%s = v\n\t}", acc, field))
+			patches = append(patches, gqlPatch(field, fmt.Sprintf("dtToStr(%s)", mAcc), `""`, c.Optional))
+			rows = append(rows, assignRow(fmt.Sprintf("strToDt(%s)", rowVal)))
+			return inputs, patches, rows, needs, true
+		}
 		if f := pbFieldOf(pb, c); f != nil && f.Message != nil && string(f.Message.Desc.FullName()) != "google.protobuf.Timestamp" {
 			return nil, nil, nil, needs, false
 		}

@@ -85,9 +85,24 @@ func (r *GraphQL{{.Model}}Repository) Create(ctx context.Context, parent string,
 	{{- range .GQLVOCreates}}
 	{{.}}
 	{{- end}}
+	{{- if .HasDeep}}
+	// One transaction: the graph lands whole or not at all.
+	gtx := r.Svc.Mutation.Tx()
+	{{- range .GQLDeepCreates}}
+	{{.}}
+	{{- end}}
+	gtx.Add(r.Svc.Mutation.{{.Domain}}.{{.Resource}}.CreateOp(ci, new({{.InsertResp}})))
+	{{- range .GQLDeepAfterCreates}}
+	{{.}}
+	{{- end}}
+	if err := gtx.Commit(ctx); err != nil {
+		return nil, mapGraphQLErr(err)
+	}
+	{{- else}}
 	if _, err := r.Svc.Mutation.{{.Domain}}.{{.Resource}}.Create(ctx, ci); err != nil {
 		return nil, mapGraphQLErr(err)
 	}
+	{{- end}}
 	return r.get(ctx, id)
 }
 {{else}}
@@ -125,9 +140,24 @@ func (r *GraphQL{{.Model}}Repository) Create(ctx context.Context, in *{{.PB}}) (
 	{{- range .GQLVOCreates}}
 	{{.}}
 	{{- end}}
+	{{- if .HasDeep}}
+	// One transaction: the graph lands whole or not at all.
+	gtx := r.Svc.Mutation.Tx()
+	{{- range .GQLDeepCreates}}
+	{{.}}
+	{{- end}}
+	gtx.Add(r.Svc.Mutation.{{.Domain}}.{{.Resource}}.CreateOp(ci, new({{.InsertResp}})))
+	{{- range .GQLDeepAfterCreates}}
+	{{.}}
+	{{- end}}
+	if err := gtx.Commit(ctx); err != nil {
+		return nil, mapGraphQLErr(err)
+	}
+	{{- else}}
 	if _, err := r.Svc.Mutation.{{.Domain}}.{{.Resource}}.Create(ctx, ci); err != nil {
 		return nil, mapGraphQLErr(err)
 	}
+	{{- end}}
 	return r.get(ctx, id)
 }
 {{end}}
@@ -233,6 +263,9 @@ func (r *GraphQL{{.Model}}Repository) Update(ctx context.Context, in *{{.PB}}, p
 	{{- range .GQLVOStaleVars}}
 	{{.}}
 	{{- end}}
+	{{- range .GQLDeepStale}}
+	{{.}}
+	{{- end}}
 	existingPB := {{.LowerModelV}}FromRow(row)
 	merged := proto.Clone(existingPB).(*{{.PB}})
 	apply{{.Model}}Mask(merged, in, paths)
@@ -251,6 +284,19 @@ func (r *GraphQL{{.Model}}Repository) Update(ctx context.Context, in *{{.PB}}, p
 	{{- range .GQLVOUpdates}}
 	{{.}}
 	{{- end}}
+	{{- if .HasDeep}}
+	// New singular value objects land before the guarded row update (a lost
+	// race leaves them unreferenced); new list rows and the removal of
+	// replaced subtrees land only after it succeeds (atx).
+	utx := r.Svc.Mutation.Tx()
+	atx := r.Svc.Mutation.Tx()
+	{{- range .GQLDeepUpdates}}
+	{{.}}
+	{{- end}}
+	if err := utx.Commit(ctx); err != nil {
+		return nil, mapGraphQLErr(err)
+	}
+	{{- end}}
 	{{- if .HasEtag}}
 	if in.GetEtag() != "" {
 		if _, err := r.Svc.Mutation.{{.Domain}}.{{.Resource}}.UpdateIfMatch(ctx, id, patch, {{.EtagPred}}.Eq(in.GetEtag())); err != nil {
@@ -258,6 +304,11 @@ func (r *GraphQL{{.Model}}Repository) Update(ctx context.Context, in *{{.PB}}, p
 		}
 		{{- range .GQLVOStaleDels}}
 		{{.}}
+		{{- end}}
+		{{- if .HasDeep}}
+		if err := atx.Commit(ctx); err != nil {
+			return nil, mapGraphQLErr(err)
+		}
 		{{- end}}
 		return r.get(ctx, id)
 	}
@@ -271,6 +322,11 @@ func (r *GraphQL{{.Model}}Repository) Update(ctx context.Context, in *{{.PB}}, p
 	}
 	{{- range .GQLVOStaleDels}}
 	{{.}}
+	{{- end}}
+	{{- if .HasDeep}}
+	if err := atx.Commit(ctx); err != nil {
+		return nil, mapGraphQLErr(err)
+	}
 	{{- end}}
 	return r.get(ctx, id)
 }
@@ -296,6 +352,15 @@ func (r *GraphQL{{.Model}}Repository) Delete(ctx context.Context, name string) e
 	}
 	{{- range .GQLVODeleteCleanups}}
 	{{.}}
+	{{- end}}
+	{{- if .HasDeep}}
+	dtx := r.Svc.Mutation.Tx()
+	{{- range .GQLDeepDeletes}}
+	{{.}}
+	{{- end}}
+	if err := dtx.Commit(ctx); err != nil {
+		return mapGraphQLErr(err)
+	}
 	{{- end}}
 	return nil
 }

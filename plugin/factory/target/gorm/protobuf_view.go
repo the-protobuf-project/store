@@ -153,6 +153,7 @@ type convModel struct {
 // repeated-enum ↔ comma-joined-names codec.
 type helperNeeds struct {
 	Ptr, Ts, Date, Tod, Dur, JSON    bool
+	DT                               bool // google.type.DateTime <-> TIMESTAMPTZ
 	DateVal, TodVal, DurVal, EnumCSV bool
 }
 
@@ -305,6 +306,22 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 			// Message-mapped temporals and JSON.
 			switch col.Type {
 			case schema.TypeTimestamp:
+				// A google.type.DateTime (a civil time with a zone or offset)
+				// is stored as the instant it denotes.
+				if fullNameOf(f) == "google.type.DateTime" && !col.AutoCreate && !col.AutoUpdate {
+					needs.DT = true
+					imports.add("google.golang.org/genproto/googleapis/type/datetime")
+					imports.add("google.golang.org/protobuf/types/known/durationpb")
+					imports.addStd("time")
+					if col.Optional {
+						cm.FromLines = append(cm.FromLines, mField+" = dtToGo("+getter+")")
+						cm.ToLines = append(cm.ToLines, assignPB("goToDt("+mField+")", "nil")...)
+					} else {
+						cm.FromLines = append(cm.FromLines, mField+" = dtToGoVal("+getter+")")
+						cm.ToLines = append(cm.ToLines, assignPB("goToDt(&"+mField+")", "nil")...)
+					}
+					continue
+				}
 				if fullNameOf(f) != "google.protobuf.Timestamp" {
 					toSkips, fromSkips = skipBoth(toSkips, fromSkips, col)
 					continue

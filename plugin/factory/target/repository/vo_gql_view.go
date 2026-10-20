@@ -242,6 +242,9 @@ type gqlVOConv struct {
 	ResPkgName string
 	PBPath     string // VO proto package import
 	PBName     string
+	// EnumPaths are proto packages of enums the converters name (e.g.
+	// google.type.DayOfWeek), imported alongside the VO's own package.
+	EnumPaths []string
 }
 
 // gqlVOConvs builds the deduplicated converter list for every VO the schema's
