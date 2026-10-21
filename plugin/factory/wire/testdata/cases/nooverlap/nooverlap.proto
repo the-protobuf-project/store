@@ -67,7 +67,7 @@ message Closure {
     no_overlap: {
       start: "begins"
       end: "ends"
-      name: "one_closure_at_a_time"
+      constraint: "one_closure_at_a_time"
     }
   };
 

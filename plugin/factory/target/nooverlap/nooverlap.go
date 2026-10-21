@@ -92,7 +92,7 @@ func plans(s *schema.Schema, t *schema.Table, fx facets.Set) ([]Plan, error) {
 			}
 			*bound.into = c.Name
 		}
-		p.Name = rule.GetName()
+		p.Name = rule.GetConstraint()
 		if p.Name == "" {
 			p.Name = truncate(strings.Join(append([]string{t.Name}, p.Key...), "_") + "_no_overlap")
 		}

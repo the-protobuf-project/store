@@ -68,7 +68,7 @@ message NoOverlap {
   // end is the google.protobuf.Timestamp field where it ends, exclusive.
   string end = 3;
 
-  // name is the constraint's name. Generated as <table>_<key...>_no_overlap
-  // when empty.
-  string name = 4;
+  // constraint is the constraint's name. Generated as
+  // <table>_<key...>_no_overlap when empty.
+  string constraint = 4;
 }

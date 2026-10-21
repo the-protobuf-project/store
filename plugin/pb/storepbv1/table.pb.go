@@ -126,9 +126,9 @@ type NoOverlap struct {
 	Start string `protobuf:"bytes,2,opt,name=start,proto3" json:"start,omitempty"`
 	// end is the google.protobuf.Timestamp field where it ends, exclusive.
 	End string `protobuf:"bytes,3,opt,name=end,proto3" json:"end,omitempty"`
-	// name is the constraint's name. Generated as <table>_<key...>_no_overlap
-	// when empty.
-	Name          string `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
+	// constraint is the constraint's name. Generated as
+	// <table>_<key...>_no_overlap when empty.
+	Constraint    string `protobuf:"bytes,4,opt,name=constraint,proto3" json:"constraint,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -184,9 +184,9 @@ func (x *NoOverlap) GetEnd() string {
 	return ""
 }
 
-func (x *NoOverlap) GetName() string {
+func (x *NoOverlap) GetConstraint() string {
 	if x != nil {
-		return x.Name
+		return x.Constraint
 	}
 	return ""
 }
@@ -199,12 +199,14 @@ const file_store_v1_table_proto_rawDesc = "" +
 	"\fTableOptions\x12\x16\n" +
 	"\x06outbox\x18\x01 \x01(\bR\x06outbox\x122\n" +
 	"\n" +
-	"no_overlap\x18\x02 \x03(\v2\x13.store.v1.NoOverlapR\tnoOverlap\"Y\n" +
+	"no_overlap\x18\x02 \x03(\v2\x13.store.v1.NoOverlapR\tnoOverlap\"e\n" +
 	"\tNoOverlap\x12\x10\n" +
 	"\x03key\x18\x01 \x03(\tR\x03key\x12\x14\n" +
 	"\x05start\x18\x02 \x01(\tR\x05start\x12\x10\n" +
-	"\x03end\x18\x03 \x01(\tR\x03end\x12\x12\n" +
-	"\x04name\x18\x04 \x01(\tR\x04nameB\xa0\x01\n" +
+	"\x03end\x18\x03 \x01(\tR\x03end\x12\x1e\n" +
+	"\n" +
+	"constraint\x18\x04 \x01(\tR\n" +
+	"constraintB\xa0\x01\n" +
 	"\fcom.store.v1B\n" +
 	"TableProtoP\x01ZCgithub.com/the-protobuf-project/store/plugin/pb/storepbv1;storepbv1\xa2\x02\x03SXX\xaa\x02\bStore.V1\xca\x02\bStore\\V1\xe2\x02\x14Store\\V1\\GPBMetadata\xea\x02\tStore::V1b\x06proto3"
 
