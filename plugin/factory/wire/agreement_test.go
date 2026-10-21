@@ -56,16 +56,18 @@ func TestIRAgreement(t *testing.T) {
 	}
 }
 
-// synthesizesTables names the cases where this plugin deliberately adds a table
-// that is not in the protos, so a bare protokit build cannot have it and the
-// comparison is not meaningful.
+// synthesizesTables names the cases where this plugin deliberately adds storage
+// that is not in the protos -- a table, or a column -- so a bare protokit build
+// cannot have it and the comparison is not meaningful.
 //
-// The outbox is the only one, and its absence from a bare build is correct
-// rather than a leak: the companion table is a storage decision this plugin
-// makes from (store.v1.table).outbox. A streams generator that needs to find it
-// reads the same annotation and derives the same table — which is composition
-// working, not the two disagreeing about what the protos say.
-var synthesizesTables = map[string]bool{"outbox": true}
+// Its absence from a bare build is correct rather than a leak in both cases:
+// the outbox's companion table is a storage decision this plugin makes from
+// (store.v1.table).outbox, and a google.type.DateTime's "<column>_zone"
+// companion (package dtzone) is how this plugin stores the zone a TIMESTAMPTZ
+// instant cannot hold. Neither renames anything the protos name; a generator
+// that needs either derives it the same way -- which is composition working,
+// not the two disagreeing about what the protos say.
+var synthesizesTables = map[string]bool{"outbox": true, "datetimezone": true}
 
 // TestDeterminism requires two builds of the same case to produce byte-identical
 // output. Map iteration and unordered facet collection are the usual sources of

@@ -33,7 +33,7 @@ func filtersView(db *schema.Database, s *schema.Schema, pkg string, fx facets.Se
 	var tables []filterTableView
 	nested := nestedRefs(db)
 	for _, t := range s.Tables {
-		if v, ok := buildFilterTable(s, t, fx, nested); ok {
+		if v, ok := buildFilterTable(db, s, t, fx, nested); ok {
 			tables = append(tables, v)
 		}
 	}

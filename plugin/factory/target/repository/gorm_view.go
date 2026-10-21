@@ -13,6 +13,7 @@ import (
 
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
+	"github.com/the-protobuf-project/store/plugin/factory/target/dtzone"
 )
 
 // gormResourceView is the adapter-facing view of one resource, embedding the
@@ -142,8 +143,13 @@ func gormResourceViews(pb *pbIndex, db *schema.Database, s *schema.Schema, resou
 		v.MutableAssigns, v.MaskFields = mutableFragments(pb, db, resources, r)
 		for _, c := range serverOwned(r) {
 			f := gormField(c)
+			line := fmt.Sprintf("existing.%s = next.%s", f, f)
+			if zc := dtzone.Of(r.Table, c); dtzone.Is(c) && zc != nil {
+				z := gormField(zc)
+				line += fmt.Sprintf("\n\t\t\texisting.%s = next.%s", z, z)
+			}
 			v.OutputAssigns = append(v.OutputAssigns,
-				fmt.Sprintf("if repox.InMask(paths, %q) {\n\t\t\texisting.%s = next.%s\n\t\t}", protoField(c), f, f))
+				fmt.Sprintf("if repox.InMask(paths, %q) {\n\t\t\t%s\n\t\t}", protoField(c), line))
 		}
 		if msg := pb.msgs[r.Table.Source.FullName()]; msg != nil {
 			for _, c := range oneofCases(pb, r.Table, msg) {
@@ -263,6 +269,11 @@ func mutableFragments(pb *pbIndex, db *schema.Database, resources map[*schema.Ta
 		} else {
 			field := gormField(c)
 			assigns = append(assigns, fmt.Sprintf("existing.%s = next.%s", field, field))
+			if zc := dtzone.Of(r.Table, c); dtzone.Is(c) && zc != nil {
+				// The zone the DateTime was written in travels with it.
+				z := gormField(zc)
+				assigns = append(assigns, fmt.Sprintf("existing.%s = next.%s", z, z))
+			}
 		}
 		mv := maskFieldView{
 			Path:    pf,

@@ -598,7 +598,19 @@ GORM and a GraphQL adapter behind one interface. Besides `Create`, `Get`, `List`
 - **Typed list conditions.** `ListInput.Where` takes `filterx.Condition`s,
   which are ANDed with the AIP-160 `Filter`. This adds `filterx.In` for
   batched reads, and `OpLt`/`OpGt` for strict bounds, which the filter grammar
-  now also parses as `<` and `>`.
+  now also parses as `<` and `>`. `filterx.Or(...)` matches any of its
+  alternatives, and `filterx.IsNull(field, null)` tests a column or reference
+  for NULL.
+- **Value-object fields in filters.** A value object the row points at (an
+  event's `start`, its `recurrence`) is a filter field under its own name,
+  which supports `IsNull`. Each of its filterable columns is a field under a
+  dotted path (`start.date_time`). The GORM engine matches a dotted field with
+  `ref_id IN (SELECT key FROM <object table> WHERE ...)`. The Hasura engine
+  rejects a dotted field with `ErrInvalid`, because DDN metadata has no
+  relationships to traverse. A condition wrapped in `filterx.AsHint` is
+  skipped on a backend that can't apply it. Use hints only to narrow a read
+  whose results the caller checks again in code: GORM then reads fewer rows,
+  and both backends return the same results.
 - **Cross-parent reads (AIP-159).** `List` under a `-` parent
   (`"calendars/-"`) reads across every parent. Each parent is exposed as a
   filter field named after it (`calendar`), so the read can be narrowed with
@@ -612,6 +624,11 @@ GORM and a GraphQL adapter behind one interface. Besides `Create`, `Get`, `List`
   - each oneof's `<oneof>_case` discriminator is written from whichever arm is
     set, scalar arms included;
   - `OUTPUT_ONLY` scalars are read back on GraphQL;
+  - a `google.type.DateTime` keeps its zone in a synthesized `<col>_zone`
+    text column. The column holds an IANA id, a `+hh:mm[:ss]` offset or
+    `floating`, and both adapters write and read it, so a zoned DATE-TIME
+    round-trips losslessly. Rows written before the column existed have it
+    NULL and read back as UTC;
   - proto3 `optional` scalars keep their presence on both adapters.
 - **Error mapping.** On GORM:
   - SQLSTATE 23505 maps to `ErrAlreadyExists`;

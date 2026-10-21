@@ -84,11 +84,13 @@ func (e *HasuraEngine[M]) Predicate(conds []Condition) (graphql.Predicate, bool,
 			preds = append(preds, p)
 			continue
 		}
-		p, err := gqlCondition(e.spec, c)
+		p, ok, err := gqlConditionOrHint(e.spec, c)
 		if err != nil {
 			return graphql.Predicate{}, false, err
 		}
-		preds = append(preds, p)
+		if ok {
+			preds = append(preds, p)
+		}
 	}
 	switch len(preds) {
 	case 0:
@@ -339,6 +341,17 @@ func (e *HasuraEngine[M]) List(ctx context.Context, in ListInput) ([]M, string, 
 
 // gqlCondition translates one spec-listed condition.
 func gqlCondition(spec Spec, c Condition) (graphql.Predicate, error) {
+	if c.Op == OpOr {
+		preds := make([]graphql.Predicate, 0, len(c.Any))
+		for _, alt := range c.Any {
+			p, err := gqlCondition(spec, alt)
+			if err != nil {
+				return graphql.Predicate{}, err
+			}
+			preds = append(preds, p)
+		}
+		return graphql.Or(preds...), nil
+	}
 	if c.Field == "" {
 		return gqlSearchPredicate(spec, c)
 	}
@@ -346,7 +359,17 @@ func gqlCondition(spec Spec, c Condition) (graphql.Predicate, error) {
 	if !ok {
 		return graphql.Predicate{}, fmt.Errorf("%w: cannot filter by %q", ErrInvalid, c.Field)
 	}
+	if f.Via != nil {
+		return graphql.Predicate{}, fmt.Errorf("%w: %q is a value-object field, which this GraphQL schema cannot reach", ErrInvalid, c.Field)
+	}
 	col := CamelCase(f.Column)
+	if c.Op == OpNull {
+		null, err := ParseBool(c.Value)
+		if err != nil {
+			return graphql.Predicate{}, err
+		}
+		return graphql.StringField{Col: col}.IsNull(null), nil
+	}
 	if c.Op == OpIn {
 		return gqlIn(f, col, c)
 	}
@@ -505,4 +528,32 @@ func gqlOrderedPred(f graphql.StringField, op Op, v string) (graphql.Predicate, 
 	default:
 		return graphql.Predicate{}, false
 	}
+}
+
+// gqlConditionOrHint translates c, or reports ok=false for a hint this engine
+// cannot follow. The generated GraphQL schema has no relationships between a
+// row and its value objects, so a value-object path is out of reach here; as
+// a hint it is left out (the caller filters the result itself), anything else
+// is an error.
+func gqlConditionOrHint(spec Spec, c Condition) (graphql.Predicate, bool, error) {
+	if c.Hint && reachesVia(spec, c) {
+		return graphql.Predicate{}, false, nil
+	}
+	p, err := gqlCondition(spec, c)
+	return p, err == nil, err
+}
+
+// reachesVia reports whether c, or any of its alternatives, names a
+// value-object field.
+func reachesVia(spec Spec, c Condition) bool {
+	if c.Op == OpOr {
+		for _, alt := range c.Any {
+			if reachesVia(spec, alt) {
+				return true
+			}
+		}
+		return false
+	}
+	f, ok := spec.Fields[c.Field]
+	return ok && f.Via != nil
 }

@@ -17,6 +17,7 @@ import (
 
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
+	"github.com/the-protobuf-project/store/plugin/factory/target/dtzone"
 )
 
 // gqlResourceView is the graphql-adapter view of one resource.
@@ -611,9 +612,14 @@ func gqlScalarFragments(pb *pbIndex, c *schema.Column, rowField string) (inputs,
 			// A civil time with a zone or offset, stored as the instant it
 			// denotes; same mapping as the gorm converter.
 			needs.DT = true
-			inputs = append(inputs, fmt.Sprintf("if v := dtToStr(%s); v != \"\" {\n\t\tci.%s = v\n\t}", acc, field))
-			patches = append(patches, patch(fmt.Sprintf("dtToStr(%s)", mAcc), `""`))
-			rows = append(rows, assignRow(fmt.Sprintf("strToDt(%s)", rowVal)))
+			// The zone it was written in rides in the companion column the
+			// IR adds beside every DateTime (package dtzone).
+			zone := export(camel(dtzone.Name(c)))
+			inputs = append(inputs, fmt.Sprintf("if v := dtToStr(%s); v != \"\" {\n\t\tci.%s = v\n\t}", acc, field),
+				fmt.Sprintf("if z := dtZoneOf(%s); z != nil {\n\t\tci.%s = *z\n\t}", acc, zone))
+			patches = append(patches, patch(fmt.Sprintf("dtToStr(%s)", mAcc), `""`),
+				fmt.Sprintf("if z := dtZoneOf(%s); z != nil {\n\t\tpatch.%s = graphql.Value(*z)\n\t} else {\n\t\tpatch.%s = graphql.Null[string]()\n\t}", mAcc, zone, zone))
+			rows = append(rows, assignRow(fmt.Sprintf("strToDt(%s, row.%s)", rowVal, zone)))
 			return inputs, patches, rows, needs, true
 		}
 		if f := pbFieldOf(pb, c); f != nil && f.Message != nil && string(f.Message.Desc.FullName()) != "google.protobuf.Timestamp" {

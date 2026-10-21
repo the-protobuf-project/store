@@ -48,6 +48,11 @@ const (
 	// OpIn matches any of Condition.Values. AIP-160 has no list syntax, so it
 	// is built in code (ListInput.Where) rather than parsed from a filter.
 	OpIn
+	// OpNull matches a field that is unset (Value "true") or set ("false"). For
+	// a reference to a value object it asks whether the object exists.
+	OpNull
+	// OpOr matches when any of Condition.Any does. Built in code only.
+	OpOr
 )
 
 // Condition is one parsed term of a filter expression. A condition with an
@@ -59,6 +64,31 @@ type Condition struct {
 	Value string
 	// Values are OpIn's alternatives; every other Op reads Value.
 	Values []string
+	// Any are OpOr's alternatives.
+	Any []Condition
+	// Hint marks a condition that only narrows: an engine that can evaluate
+	// it does, one that cannot leaves it out, so the caller must not rely on
+	// it for correctness and filters the result itself. It is how a read
+	// pushes a window down where the backend can follow a value-object path
+	// and stays correct where it cannot.
+	Hint bool
+}
+
+// Or is the condition "any of these", e.g. a start given as a date or a
+// date-time.
+func Or(alternatives ...Condition) Condition {
+	return Condition{Op: OpOr, Any: alternatives}
+}
+
+// IsNull is the condition "field is unset" (null) or "is set" (!null).
+func IsNull(field string, null bool) Condition {
+	return Condition{Field: field, Op: OpNull, Value: strconv.FormatBool(null)}
+}
+
+// AsHint returns c marked as a hint (see Condition.Hint).
+func AsHint(c Condition) Condition {
+	c.Hint = true
+	return c
 }
 
 // In is the condition "field is any of values", for callers batching a read
@@ -100,6 +130,18 @@ type FieldSpec struct {
 	Column     string
 	Kind       Kind
 	EnumPrefix string
+	// Via is set for a field of a value object the row points at -- an
+	// event's "start.date_time" -- which is matched through the reference
+	// rather than on the row itself.
+	Via *Via
+}
+
+// Via locates a value-object field: the row's reference column (FieldSpec's
+// Column) names a key of Table, whose Column holds the value.
+type Via struct {
+	Table  string // quoted, schema-qualified value-object table
+	Key    string // its key column
+	Column string // the value column
 }
 
 // Spec is one table's filter/order surface. Instances are generated per schema

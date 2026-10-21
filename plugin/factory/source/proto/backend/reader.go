@@ -25,6 +25,7 @@ import (
 	"github.com/the-protobuf-project/protokit"
 	"github.com/the-protobuf-project/protokit/schema"
 	"github.com/the-protobuf-project/store/plugin/factory/facets"
+	"github.com/the-protobuf-project/store/plugin/factory/target/dtzone"
 	"github.com/the-protobuf-project/store/plugin/pb/storepbv1"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -174,6 +175,16 @@ func (r Reader) Enrich(ir *protokit.IR) error {
 	// enriched like any other table, and before index finalization so their
 	// declared index is named and ordered alongside every other one.
 	appendOutboxTables(ir, fx)
+
+	// A DateTime keeps its zone in a companion column (see package dtzone),
+	// synthesized here so every target emits and migrates it like any other.
+	for _, db := range ir.Databases {
+		for _, s := range db.Schemas {
+			for _, t := range s.Tables {
+				dtzone.Add(t)
+			}
+		}
+	}
 
 	for _, db := range ir.Databases {
 		for _, s := range db.Schemas {

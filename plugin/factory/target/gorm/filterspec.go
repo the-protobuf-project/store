@@ -30,6 +30,10 @@ type filterFieldView struct {
 	Column     string // physical snake_case column
 	Kind       string // filterx kind const name, e.g. "KindText"
 	EnumPrefix string // proto enum value prefix ("UNIT_TYPE_"), enum kinds only
+	// Via* locate a value-object field ("start.date_time"): Column is the
+	// row's reference to the object, these name the object's table, key and
+	// value column. Empty for a field of the row itself.
+	ViaTable, ViaKey, ViaColumn string
 }
 
 // filterSortView is one sortable field in a table spec. Kind travels with the
@@ -64,7 +68,7 @@ type filterTableView struct {
 
 // buildFilterTable plans one table's spec. Returns ok=false when nothing on the
 // table is filterable or sortable (the spec would be empty).
-func buildFilterTable(s *schema.Schema, t *schema.Table, fx facets.Set, nested map[*schema.Column]bool) (filterTableView, bool) {
+func buildFilterTable(db *schema.Database, s *schema.Schema, t *schema.Table, fx facets.Set, nested map[*schema.Column]bool) (filterTableView, bool) {
 	v := filterTableView{
 		SpecVar: t.LocalName + "FilterSpec",
 		Model:   t.LocalName,
@@ -145,6 +149,45 @@ func buildFilterTable(s *schema.Schema, t *schema.Table, fx facets.Set, nested m
 		}
 		taken[field] = true
 		v.Fields = append(v.Fields, filterFieldView{Field: field, Column: c.Name, Kind: "KindRef"})
+	}
+	// A value object the row points at -- an event's start, a recurrence --
+	// is reachable too: its presence under the reference's own name ("end",
+	// matched with IS NULL), and each of its filterable columns under a dotted
+	// path ("start.date_time"), matched through the reference.
+	bts, _ := AssocPlan(db, s, t)
+	for _, bt := range bts {
+		tgt := bt.Target
+		if tgt == nil || !tgt.ValueObject || tgt.Source == nil || bt.Col.Source != nil {
+			continue
+		}
+		name := naming.StripIDSuffix(bt.Col.Name)
+		if name == bt.Col.Name || taken[name] {
+			continue
+		}
+		taken[name] = true
+		v.Fields = append(v.Fields, filterFieldView{Field: name, Column: bt.Col.Name, Kind: "KindRef"})
+		ts := schemaOfTable(db, tgt)
+		key := keyColumn(tgt)
+		if ts == nil || key == "" {
+			continue
+		}
+		for _, vc := range tgt.Columns {
+			if vc.Source == nil {
+				continue
+			}
+			kind, _, ok := classifyFilterColumn(vc, nested)
+			if !ok || kind == "KindTags" {
+				continue
+			}
+			ff := filterFieldView{
+				Field: name + "." + string(vc.Source.Name()), Column: bt.Col.Name, Kind: kind,
+				ViaTable: fmt.Sprintf("%q.%q", ts.Name, tgt.Name), ViaKey: key, ViaColumn: vc.Name,
+			}
+			if kind == "KindEnum" && vc.Enum != nil {
+				ff.EnumPrefix = naming.ScreamingSnake(vc.Enum.LocalName) + "_"
+			}
+			v.Fields = append(v.Fields, ff)
+		}
 	}
 	sort.Slice(v.Fields, func(i, j int) bool { return v.Fields[i].Field < v.Fields[j].Field })
 	sort.Slice(v.Sort, func(i, j int) bool { return v.Sort[i].Field < v.Sort[j].Field })
@@ -232,4 +275,29 @@ func nestedRefs(db *schema.Database) map[*schema.Column]bool {
 		}
 	}
 	return out
+}
+
+// schemaOfTable finds the schema holding t.
+func schemaOfTable(db *schema.Database, t *schema.Table) *schema.Schema {
+	for _, s := range db.Schemas {
+		for _, x := range s.Tables {
+			if x == t {
+				return s
+			}
+		}
+	}
+	return nil
+}
+
+// keyColumn is t's primary-key column name, or "" when it has none.
+func keyColumn(t *schema.Table) string {
+	if t.PKColumn != "" {
+		return t.PKColumn
+	}
+	for _, c := range t.Columns {
+		if c.PrimaryKey {
+			return c.Name
+		}
+	}
+	return ""
 }

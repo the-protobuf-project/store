@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+// Package dtz.v1 exercises the DateTime zone companion: a google.type.DateTime
+// column is stored as the instant it denotes, with "<column>_zone" beside it
+// recording the zone it was written in, so it reads back in that zone.
+package dtz.v1;
+
+import "entity/v1/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "google/type/datetime.proto";
+
+option go_package = "example.com/test/gen;dtzv1";
+option java_multiple_files = true;
+option java_outer_classname = "DatetimezoneProto";
+option java_package = "com.dtz.v1";
+
+// Session has a caller-set DateTime and a server-set one.
+message Session {
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
+  option (google.api.resource) = {
+    type: "dtz.v1/Session"
+    pattern: "sessions/{session}"
+    singular: "session"
+    plural: "sessions"
+  };
+
+  // Resource name.
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  // When it starts, in whatever zone the caller wrote it.
+  google.type.DateTime starts = 2 [(google.api.field_behavior) = REQUIRED];
+
+  // When the server last checked it.
+  google.type.DateTime checked = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // Etag.
+  string etag = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+}

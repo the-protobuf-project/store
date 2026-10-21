@@ -123,6 +123,8 @@ func graphqlConvertView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg 
 		imports["google.golang.org/protobuf/types/known/timestamppb"] = ""
 	}
 	if needs.DT {
+		imports["fmt"] = ""
+		imports["strings"] = ""
 		imports["time"] = ""
 		imports["google.golang.org/genproto/googleapis/type/datetime"] = ""
 		imports["google.golang.org/protobuf/types/known/durationpb"] = ""

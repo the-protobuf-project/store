@@ -32,6 +32,7 @@ import (
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
 	"github.com/the-protobuf-project/store/plugin/factory/provenance"
+	"github.com/the-protobuf-project/store/plugin/factory/target/dtzone"
 	"github.com/the-protobuf-project/store/plugin/factory/target/gopkg"
 	"github.com/the-protobuf-project/store/plugin/factory/target/types"
 )
@@ -314,12 +315,21 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 					imports.add("google.golang.org/genproto/googleapis/type/datetime")
 					imports.add("google.golang.org/protobuf/types/known/durationpb")
 					imports.addStd("time")
+					imports.addStd("strings")
+					imports.addStd("fmt")
+					// The zone it was written in rides in the companion column
+					// (package dtzone); without one, the instant reads as UTC.
+					zone := "nil"
+					if zc := dtzone.Of(t, col); zc != nil {
+						zone = "m." + gormFieldName(zc)
+						cm.FromLines = append(cm.FromLines, zone+" = dtZoneOf("+getter+")")
+					}
 					if col.Optional {
 						cm.FromLines = append(cm.FromLines, mField+" = dtToGo("+getter+")")
-						cm.ToLines = append(cm.ToLines, assignPB("goToDt("+mField+")", "nil")...)
+						cm.ToLines = append(cm.ToLines, assignPB("goToDt("+mField+", "+zone+")", "nil")...)
 					} else {
 						cm.FromLines = append(cm.FromLines, mField+" = dtToGoVal("+getter+")")
-						cm.ToLines = append(cm.ToLines, assignPB("goToDt(&"+mField+")", "nil")...)
+						cm.ToLines = append(cm.ToLines, assignPB("goToDt(&"+mField+", "+zone+")", "nil")...)
 					}
 					continue
 				}

@@ -34,7 +34,8 @@ func strToTs(s string) *timestamppb.Timestamp {
 
 // dtToStr / strToDt cross the timestamptz boundary for a google.type.DateTime:
 // written as the instant it denotes (a time zone through the IANA database, a
-// UTC offset as a fixed zone, a floating value as UTC), read back in UTC.
+// UTC offset as a fixed zone, a floating value as UTC), read back in the zone
+// its companion column recorded (dtZoneOf), or UTC for a row with none.
 func dtToStr(d *datetime.DateTime) string {
 	if d == nil {
 		return ""
@@ -53,21 +54,82 @@ func dtToStr(d *datetime.DateTime) string {
 		UTC().Format(time.RFC3339Nano)
 }
 
-func strToDt(s string) *datetime.DateTime {
+func strToDt(s string, zone *string) *datetime.DateTime {
 	if s == "" {
 		return nil
 	}
 	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02T15:04:05.999999Z07:00", "2006-01-02T15:04:05"} {
-		if t, err := time.Parse(layout, s); err == nil {
-			u := t.UTC()
+		t, err := time.Parse(layout, s)
+		if err != nil {
+			continue
+		}
+		civil := func(u time.Time) *datetime.DateTime {
 			return &datetime.DateTime{
 				Year: int32(u.Year()), Month: int32(u.Month()), Day: int32(u.Day()),
 				Hours: int32(u.Hour()), Minutes: int32(u.Minute()), Seconds: int32(u.Second()), Nanos: int32(u.Nanosecond()),
-				TimeOffset: &datetime.DateTime_UtcOffset{UtcOffset: durationpb.New(0)},
 			}
 		}
+		z := ""
+		if zone != nil {
+			z = *zone
+		}
+		if z == "floating" {
+			return civil(t.UTC())
+		}
+		if z != "" && z[0] != '+' && z[0] != '-' {
+			if loc, err := time.LoadLocation(z); err == nil {
+				d := civil(t.In(loc))
+				d.TimeOffset = &datetime.DateTime_TimeZone{TimeZone: &datetime.TimeZone{Id: z}}
+				return d
+			}
+		}
+		off := dtParseOffset(z)
+		d := civil(t.In(time.FixedZone("", int(off/time.Second))))
+		d.TimeOffset = &datetime.DateTime_UtcOffset{UtcOffset: durationpb.New(off)}
+		return d
 	}
 	return nil
+}
+
+// dtZoneOf is the zone a DateTime was written in, for its companion column:
+// an IANA zone, a "+hh:mm" offset, or "floating". nil for an absent DateTime.
+func dtZoneOf(d *datetime.DateTime) *string {
+	if d == nil {
+		return nil
+	}
+	z := "floating"
+	switch {
+	case d.GetTimeZone().GetId() != "":
+		z = d.GetTimeZone().GetId()
+	case d.GetUtcOffset() != nil:
+		secs := int(d.GetUtcOffset().AsDuration() / time.Second)
+		sign := "+"
+		if secs < 0 {
+			sign, secs = "-", -secs
+		}
+		z = fmt.Sprintf("%s%02d:%02d", sign, secs/3600, secs%3600/60)
+		if sec := secs % 60; sec != 0 {
+			z += fmt.Sprintf(":%02d", sec)
+		}
+	}
+	return &z
+}
+
+// dtParseOffset reads dtZoneOf's "+hh:mm[:ss]"; anything else is zero (UTC),
+// which is also how a row written before zones were kept reads.
+func dtParseOffset(z string) time.Duration {
+	if z == "" || (z[0] != '+' && z[0] != '-') {
+		return 0
+	}
+	var h, m, sec int
+	if n, _ := fmt.Sscanf(strings.ReplaceAll(z[1:], ":", " "), "%d %d %d", &h, &m, &sec); n < 2 {
+		return 0
+	}
+	d := time.Duration(h)*time.Hour + time.Duration(m)*time.Minute + time.Duration(sec)*time.Second
+	if z[0] == '-' {
+		d = -d
+	}
+	return d
 }
 {{- end}}
 {{- if .Needs.Date}}

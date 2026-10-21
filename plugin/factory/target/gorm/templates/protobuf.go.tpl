@@ -151,18 +151,77 @@ func dtToGoVal(d *datetime.DateTime) time.Time {
 		int(d.GetHours()), int(d.GetMinutes()), int(d.GetSeconds()), int(d.GetNanos()), loc)
 }
 
-// goToDt maps a TIMESTAMPTZ instant back onto a DateTime, in UTC: the stored
-// instant is what survives, not the zone it was written in.
-func goToDt(t *time.Time) *datetime.DateTime {
+// dtZoneOf is the zone a DateTime was written in, for its companion column:
+// an IANA zone, a "+hh:mm" offset, or "floating". nil for an absent DateTime.
+func dtZoneOf(d *datetime.DateTime) *string {
+	if d == nil {
+		return nil
+	}
+	z := "floating"
+	switch {
+	case d.GetTimeZone().GetId() != "":
+		z = d.GetTimeZone().GetId()
+	case d.GetUtcOffset() != nil:
+		secs := int(d.GetUtcOffset().AsDuration() / time.Second)
+		sign := "+"
+		if secs < 0 {
+			sign, secs = "-", -secs
+		}
+		z = fmt.Sprintf("%s%02d:%02d", sign, secs/3600, secs%3600/60)
+		if s := secs % 60; s != 0 {
+			z += fmt.Sprintf(":%02d", s)
+		}
+	}
+	return &z
+}
+
+// goToDt maps a TIMESTAMPTZ instant back onto a DateTime in the zone it was
+// written in (dtZoneOf). A row with no zone recorded reads as UTC, as it was
+// stored before the zone was kept.
+func goToDt(t *time.Time, zone *string) *datetime.DateTime {
 	if t == nil || t.IsZero() {
 		return nil
 	}
-	u := t.UTC()
-	return &datetime.DateTime{
-		Year: int32(u.Year()), Month: int32(u.Month()), Day: int32(u.Day()),
-		Hours: int32(u.Hour()), Minutes: int32(u.Minute()), Seconds: int32(u.Second()), Nanos: int32(u.Nanosecond()),
-		TimeOffset: &datetime.DateTime_UtcOffset{UtcOffset: durationpb.New(0)},
+	civil := func(u time.Time) *datetime.DateTime {
+		return &datetime.DateTime{
+			Year: int32(u.Year()), Month: int32(u.Month()), Day: int32(u.Day()),
+			Hours: int32(u.Hour()), Minutes: int32(u.Minute()), Seconds: int32(u.Second()), Nanos: int32(u.Nanosecond()),
+		}
 	}
+	z := ""
+	if zone != nil {
+		z = *zone
+	}
+	if z == "floating" {
+		return civil(t.UTC())
+	}
+	if z != "" && z[0] != '+' && z[0] != '-' {
+		if loc, err := time.LoadLocation(z); err == nil {
+			d := civil(t.In(loc))
+			d.TimeOffset = &datetime.DateTime_TimeZone{TimeZone: &datetime.TimeZone{Id: z}}
+			return d
+		}
+	}
+	off, _ := dtParseOffset(z)
+	d := civil(t.In(time.FixedZone("", int(off/time.Second))))
+	d.TimeOffset = &datetime.DateTime_UtcOffset{UtcOffset: durationpb.New(off)}
+	return d
+}
+
+// dtParseOffset reads dtZoneOf's "+hh:mm[:ss]"; anything else is zero (UTC).
+func dtParseOffset(z string) (time.Duration, bool) {
+	if z == "" || (z[0] != '+' && z[0] != '-') {
+		return 0, false
+	}
+	var h, m, sec int
+	if n, _ := fmt.Sscanf(strings.ReplaceAll(z[1:], ":", " "), "%d %d %d", &h, &m, &sec); n < 2 {
+		return 0, false
+	}
+	d := time.Duration(h)*time.Hour + time.Duration(m)*time.Minute + time.Duration(sec)*time.Second
+	if z[0] == '-' {
+		d = -d
+	}
+	return d, true
 }
 {{end}}{{if .Needs.Interval}}
 

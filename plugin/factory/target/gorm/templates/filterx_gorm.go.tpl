@@ -81,6 +81,24 @@ func (e *GormEngine[M]) Where(conds []Condition) (string, []any, error) {
 	return strings.Join(clauses, " AND "), args, nil
 }
 
+// sqlAny translates an OpOr condition: its alternatives ORed. An empty one
+// matches nothing.
+func sqlAny(spec Spec, c Condition) (string, []any, error) {
+	if len(c.Any) == 0 {
+		return "FALSE", nil, nil
+	}
+	parts := make([]string, 0, len(c.Any))
+	var args []any
+	for _, alt := range c.Any {
+		cl, a, err := sqlCondition(spec, alt)
+		if err != nil {
+			return "", nil, err
+		}
+		parts, args = append(parts, cl), append(args, a...)
+	}
+	return "(" + strings.Join(parts, " OR ") + ")", args, nil
+}
+
 // OrderClause resolves an order_by string into a safe "col DIR, ..." clause
 // via the spec's sort allowlist. Empty order_by still yields the spec's
 // primary-key clause, which [OrderTerms] appends to keep paging stable.
@@ -282,6 +300,9 @@ func (e *GormEngine[M]) List(ctx context.Context, q *gorm.DB, in ListInput) ([]M
 
 // sqlCondition translates one spec-listed condition.
 func sqlCondition(spec Spec, c Condition) (string, []any, error) {
+	if c.Op == OpOr {
+		return sqlAny(spec, c)
+	}
 	if c.Field == "" {
 		return sqlSearchCondition(spec, c)
 	}
@@ -290,6 +311,27 @@ func sqlCondition(spec Spec, c Condition) (string, []any, error) {
 		return "", nil, fmt.Errorf("%w: cannot filter by %q", ErrInvalid, c.Field)
 	}
 	col := spec.Table + `."` + f.Column + `"`
+	if c.Op == OpNull {
+		null, err := ParseBool(c.Value)
+		if err != nil {
+			return "", nil, err
+		}
+		if null {
+			return col + " IS NULL", nil, nil
+		}
+		return col + " IS NOT NULL", nil, nil
+	}
+	if f.Via != nil {
+		// A value-object field: match the referenced row, then point at it.
+		inner := Spec{Table: f.Via.Table, Fields: map[string]FieldSpec{
+			c.Field: {Column: f.Via.Column, Kind: f.Kind, EnumPrefix: f.EnumPrefix},
+		}}
+		cl, a, err := sqlCondition(inner, c)
+		if err != nil {
+			return "", nil, err
+		}
+		return col + ` IN (SELECT ` + f.Via.Table + `."` + f.Via.Key + `" FROM ` + f.Via.Table + ` WHERE ` + cl + `)`, a, nil
+	}
 	if c.Op == OpIn {
 		return sqlIn(f, col, c)
 	}
