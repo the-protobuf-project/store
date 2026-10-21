@@ -192,6 +192,9 @@ func organisationToCreateInput(in *orgv1.Organisation) organisationsql.CreateInp
 	ci.DisplayName = in.GetDisplayName()
 	ci.Slug = in.GetSlug()
 	ci.Settings = structToJSON(in.GetSettings())
+	if v := in.GetState(); v != 0 {
+		ci.State = strings.TrimPrefix(in.GetState().String(), "ORG_STATE_")
+	}
 	return ci
 }
 
@@ -208,6 +211,20 @@ func organisationToUpdatePatch(merged *orgv1.Organisation) organisationsql.Updat
 		patch.Slug = graphql.Null[string]()
 	}
 	patch.Settings = graphql.Value(structToJSON(merged.GetSettings()))
+	return patch
+}
+
+// organisationToOutputPatch maps the server-owned fields paths names onto
+// a patch, for UpdateOutputOnly: every other column is left as it is.
+func organisationToOutputPatch(merged *orgv1.Organisation, paths []string) organisationsql.UpdateInput {
+	var patch organisationsql.UpdateInput
+	if repox.InMask(paths, "state") {
+		if v := strings.TrimPrefix(merged.GetState().String(), "ORG_STATE_"); v != "UNSPECIFIED" {
+			patch.State = graphql.Value(v)
+		} else {
+			patch.State = graphql.Null[string]()
+		}
+	}
 	return patch
 }
 

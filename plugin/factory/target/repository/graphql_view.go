@@ -23,17 +23,17 @@ import (
 type gqlResourceView struct {
 	gormResourceView
 
-	Domain      string // client domain field, e.g. "Organisation"
-	Resource    string // client resource field, e.g. "Members"
-	ResPkg      string // client resource package name, e.g. "membersql"
-	Row         string // qualified row type, e.g. "membersql.OrganisationMembers"
-	ParentPred  string // parent scope predicate field, e.g. "membersql.OrganisationId"
-	EtagPred    string // etag predicate, e.g. "membersql.Etag" (HasEtag only)
+	Domain     string // client domain field, e.g. "Organisation"
+	Resource   string // client resource field, e.g. "Members"
+	ResPkg     string // client resource package name, e.g. "membersql"
+	Row        string // qualified row type, e.g. "membersql.OrganisationMembers"
+	ParentPred string // parent scope predicate field, e.g. "membersql.OrganisationId"
+	EtagPred   string // etag predicate, e.g. "membersql.Etag" (HasEtag only)
 	// DeleteTimePred and DeleteTimeInputField address the soft-delete column
 	// (SoftDelete only), e.g. "membersql.DeleteTime" and "DeleteTime".
 	DeleteTimePred       string
 	DeleteTimeInputField string
-	LowerModelV string // camelCase model for converter func names
+	LowerModelV          string // camelCase model for converter func names
 
 	ParentInputField string // CreateInput parent FK field, e.g. "OrganisationId"
 	EtagInputField   string // CreateInput/UpdateInput etag field ("" = none)
@@ -43,8 +43,11 @@ type gqlResourceView struct {
 	// Rendered fragments.
 	InputAssigns []string // CreateInput field assignments from the incoming proto
 	PatchAssigns []string // UpdateInput (Nullable) assignments from the merged proto
-	RowToProto   []string // proto field assignments from the row
-	NeedsHelpers helperNeeds
+	// OutputPatchAssigns are UpdateOutputOnly's patch lines, each guarded by
+	// the mask: only the server-owned fields a call names are written.
+	OutputPatchAssigns []string
+	RowToProto         []string // proto field assignments from the row
+	NeedsHelpers       helperNeeds
 
 	// Value-object fragments (see vo_gql_view.go). Named apart from the
 	// embedded gorm fragments, which speak tx/gorm and must not leak here.
@@ -58,6 +61,8 @@ type gqlResourceView struct {
 	// Deep value-object graph fragments (graph_gql.go); empty without one.
 	HasDeep             bool
 	InsertResp          string   // the resource's insert response type, for its queued insert
+	UpdateResp          string   // its update-by-id response type, for a Batch
+	DeleteResp          string   // its delete-by-id response type, for a Batch
 	GQLDeepCreates      []string // queued before the resource insert
 	GQLDeepAfterCreates []string // queued after it
 	GQLDeepStale        []string // captures at the top of Update
@@ -71,6 +76,7 @@ type gqlResourceView struct {
 // Wrappers marks google.protobuf wrapper fields (wrapperspb import).
 type helperNeeds struct {
 	Ts, Date, Struct, Bytes, Duration, StrSlice, Decimal, Enum, Wrappers bool
+	Interval                                                             bool // google.type.Interval
 	DT                                                                   bool // google.type.DateTime
 }
 
@@ -85,6 +91,7 @@ func (h *helperNeeds) or(o helperNeeds) {
 	h.Decimal = h.Decimal || o.Decimal
 	h.Enum = h.Enum || o.Enum
 	h.Wrappers = h.Wrappers || o.Wrappers
+	h.Interval = h.Interval || o.Interval
 }
 
 // export uppercases the first letter of each underscore part without Go
@@ -122,6 +129,9 @@ func gqlResourceViews(pb *pbIndex, db *schema.Database, s *schema.Schema, resour
 			Row:              clientPkgIdent(rest) + "." + model,
 			LowerModelV:      naming.CamelFirst(r.Table.LocalName),
 		}
+		v.InsertResp = v.ResPkg + ".Insert" + model + "Response"
+		v.UpdateResp = v.ResPkg + ".Update" + model + "ByIdResponse"
+		v.DeleteResp = v.ResPkg + ".Delete" + model + "ByIdResponse"
 		if v.Parented {
 			v.ParentPred = v.ResPkg + "." + export(camel(r.ParentFK))
 			v.ParentInputField = export(camel(r.ParentFK))
@@ -152,6 +162,19 @@ func gqlResourceViews(pb *pbIndex, db *schema.Database, s *schema.Schema, resour
 		}
 		var rn helperNeeds
 		v.InputAssigns, v.PatchAssigns, v.RowToProto, rn = gqlColumnFragments(pb, db, resources, r)
+		// Server-owned columns are written at create too, as the gorm converter
+		// writes every column: a service creating a record sets its state or
+		// expiry there, and an API create has already cleared them.
+		for _, c := range serverOwned(r) {
+			in, patch, _, n, ok := gqlScalarFragments(pb, c, "row."+export(camel(c.Name)))
+			if !ok {
+				continue
+			}
+			rn.or(n)
+			v.InputAssigns = append(v.InputAssigns, in...)
+			v.OutputPatchAssigns = append(v.OutputPatchAssigns,
+				fmt.Sprintf("if repox.InMask(paths, %q) {\n\t%s\n\t}", protoField(c), strings.Join(patch, "\n\t")))
+		}
 		if msg := pb.msgs[r.Table.Source.FullName()]; msg != nil {
 			for _, c := range oneofCases(pb, r.Table, msg) {
 				v.InputAssigns = append(v.InputAssigns, gqlCaseInput("in", c))
@@ -299,11 +322,27 @@ func gqlColumnFragments(pb *pbIndex, db *schema.Database, resources map[*schema.
 
 	for _, c := range r.Cols.Mutable {
 		rowField := "row." + export(camel(c.Name))
-		if c.FKModel != "" {
-			target := findResourceByModel(db, resources, c.FKModel)
-			if target == nil || len(target.Segments) != 1 {
-				continue // nested-resource reference: Tier-2
+		target := findResourceByModel(db, resources, c.FKModel)
+		if c.FKModel != "" && target == nil {
+			continue
+		}
+		if c.FKModel != "" && len(target.Segments) > 1 {
+			// A nested resource's name cannot be rebuilt from its last id, so
+			// it is stored whole, as written, and crosses unchanged.
+			inField := export(camel(c.Name))
+			acc := "in.Get" + pbGoField(pb, c) + "()"
+			mAcc := "merged.Get" + pbGoField(pb, c) + "()"
+			outField := "out." + pbGoField(pb, c)
+			inputs = append(inputs, fmt.Sprintf("if v := %s; v != \"\" {\n\t\tci.%s = v\n\t}", acc, inField))
+			patches = append(patches, gqlPatch(inField, mAcc, `""`, c.Optional))
+			if c.Optional {
+				addRow(fmt.Sprintf("%s = repox.Deref(%s)", outField, rowField))
+			} else {
+				addRow(fmt.Sprintf("%s = %s", outField, rowField))
 			}
+			continue
+		}
+		if c.FKModel != "" {
 			collection := target.Segments[0].Collection
 			inField := export(camel(c.Name)) // e.g. UserId (bare-id column)
 			acc := "in.Get" + pbGoField(pb, c) + "()"
@@ -597,6 +636,16 @@ func gqlScalarFragments(pb *pbIndex, c *schema.Column, rowField string) (inputs,
 		inputs = append(inputs, fmt.Sprintf("if v := dateToStr(%s); v != \"\" {\n\t\tci.%s = v\n\t}", acc, field))
 		patches = append(patches, patch(fmt.Sprintf("dateToStr(%s)", mAcc), `""`))
 		rows = append(rows, assignRow(fmt.Sprintf("strToDate(%s)", rowVal)))
+	case schema.TypeInterval:
+		// A google.type.Interval crosses as the same "start/end" text the gorm
+		// converter stores, so both adapters read each other's rows.
+		if f := pbFieldOf(pb, c); f == nil || f.Message == nil || string(f.Message.Desc.FullName()) != "google.type.Interval" {
+			return nil, nil, nil, needs, false
+		}
+		needs.Interval = true
+		inputs = append(inputs, fmt.Sprintf("if v := intervalToStr(%s); v != \"\" {\n\t\tci.%s = v\n\t}", acc, field))
+		patches = append(patches, patch(fmt.Sprintf("intervalToStr(%s)", mAcc), `""`))
+		rows = append(rows, assignRow(fmt.Sprintf("strToInterval(%s)", rowVal)))
 	case schema.TypeDuration:
 		// protokit maps more than one well-known type onto this schema type
 		// (TypeTimestamp covers google.type.DateTime too), and they are different

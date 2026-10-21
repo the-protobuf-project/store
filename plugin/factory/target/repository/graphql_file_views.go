@@ -37,6 +37,8 @@ func graphqlFileView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg str
 	imports := map[string]string{
 		"context":                          "",
 		"errors":                           "",
+		"fmt":                              "",
+		"strings":                          "",
 		"google.golang.org/protobuf/proto": "",
 		graphqlDSLModule:                   "graphql",
 		dbGoModule(db) + "/" + repoxPkg:    "",
@@ -68,6 +70,13 @@ func graphqlFileView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg str
 		imports["time"] = ""
 		imports["google.golang.org/protobuf/types/known/timestamppb"] = ""
 	}
+	hasBatch := false
+	for _, r := range rs {
+		hasBatch = hasBatch || r.Flat
+	}
+	if hasBatch {
+		imports[graphqlRuntimeModule] = ""
+	}
 	addPBImports(pb, s, imports)
 	gormPkg := addGormModelsImport(pb, db, s, pkg, imports)
 	return map[string]any{
@@ -77,6 +86,7 @@ func graphqlFileView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg str
 		"ClientPkg": clientPkgName(client),
 		"Imports":   renderImports(imports),
 		"Resources": rs,
+		"HasBatch":  hasBatch,
 	}
 }
 
@@ -104,6 +114,12 @@ func graphqlConvertView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg 
 	imports[graphqlDSLModule] = "graphql"
 	if needs.Ts {
 		imports["time"] = ""
+		imports["google.golang.org/protobuf/types/known/timestamppb"] = ""
+	}
+	if needs.Interval {
+		imports["strings"] = ""
+		imports["time"] = ""
+		imports["google.golang.org/genproto/googleapis/type/interval"] = ""
 		imports["google.golang.org/protobuf/types/known/timestamppb"] = ""
 	}
 	if needs.DT {
@@ -147,3 +163,6 @@ func graphqlConvertView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg 
 		"Needs":     needs,
 	}
 }
+
+// graphqlRuntimeModule holds runtime.Tx, the mutation batch a Batch commits.
+const graphqlRuntimeModule = "github.com/the-protobuf-project/runtime-go/network/runtime"

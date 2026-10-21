@@ -18,6 +18,7 @@ import (
 	"github.com/the-protobuf-project/protokit/schema"
 	"github.com/the-protobuf-project/store/plugin/factory/facets"
 	"github.com/the-protobuf-project/store/plugin/factory/provenance"
+	"github.com/the-protobuf-project/store/plugin/factory/target/nooverlap"
 	"github.com/the-protobuf-project/store/plugin/factory/target/searchindex"
 )
 
@@ -45,6 +46,7 @@ func aggregateView(db *schema.Database, fx facets.Set) map[string]any {
 	var models []string
 	seen := map[string]bool{}
 	var extensions []string
+	var constraints []string
 	var schemaNames []string
 
 	for _, s := range db.Schemas {
@@ -63,6 +65,11 @@ func aggregateView(db *schema.Database, fx facets.Set) map[string]any {
 			}
 			models = append(models, pkg+"."+t.LocalName)
 			extensions = append(extensions, searchindex.Extensions(searchindex.For(t, fx))...)
+			plans := nooverlap.For(s, t, fx)
+			extensions = append(extensions, nooverlap.Extensions(plans)...)
+			for _, p := range plans {
+				constraints = append(constraints, p.DDL())
+			}
 		}
 	}
 	slices.Sort(extensions)
@@ -83,6 +90,7 @@ func aggregateView(db *schema.Database, fx facets.Set) map[string]any {
 		"Models":           models,
 		"Schemas":          schemaNames,
 		"Extensions":       extensions,
+		"Constraints":      constraints,
 		"Telemetry":        dbTelemetry(db),
 		"TelemetryMetrics": dbTelemetryMetrics(db),
 		"TelemetryImport":  dbGoModule(db) + "/" + telemetryPkg,

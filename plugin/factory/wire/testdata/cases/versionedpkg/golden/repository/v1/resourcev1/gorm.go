@@ -121,6 +121,7 @@ func (r *GormEventRepository) list(ctx context.Context, scope *gorm.DB, in repox
 	if err != nil {
 		return nil, "", repox.MapFilterxErr(err)
 	}
+	conds = append(conds, in.Where...)
 	eng := filterx.Gorm[resourcev1gorm.Event](resourcev1gorm.EventFilterSpec)
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)

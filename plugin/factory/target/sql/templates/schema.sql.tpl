@@ -1,7 +1,7 @@
 {{.Header}}
 {{- if .Extensions}}
 
--- Extensions (operator classes the search indexes below are built with).
+-- Extensions (operator classes the indexes and constraints below are built with).
 -- Database-wide, not schema-scoped: creating one twice is a no-op.
 {{range .Extensions}}CREATE EXTENSION IF NOT EXISTS "{{.}}";
 {{end}}

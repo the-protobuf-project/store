@@ -568,6 +568,60 @@ re-apply**. The per-schema files remain as clean, readable reference DDL.
 psql "$BOOKSTORE_DB_DATABASE_URL" -f generated/sql/bookstore_db/migrate.sql
 ```
 
+### Repositories (`target=repository`)
+
+The repository target generates a proto-facing CRUD surface per resource, with a
+GORM and a GraphQL adapter behind one interface. Besides `Create`, `Get`, `List`,
+`Update` and `Delete`, it generates:
+
+- **Soft delete (AIP-164).** For a resource with an `OUTPUT_ONLY`
+  `google.protobuf.Timestamp delete_time`:
+  - `Delete` sets `delete_time` and leaves the row in place;
+  - `Undelete` clears it;
+  - `Purge` removes the row;
+  - `List` skips deleted rows unless `ListInput.ShowDeleted` is set.
+- **`UpdateOutputOnly(ctx, m, paths)`.** Writes the server-owned (`OUTPUT_ONLY`)
+  fields `paths` names, such as a state, an expiry or a computed list. `Update`
+  refuses those fields because a client may not set them; this method is for
+  the service that owns them. `m.Etag`, when set, guards the write as it does
+  in `Update`.
+- **`Batch` (`NewBatch(conn)`).** Queues creates, `UpdateOutputOnly` calls and
+  deletes across a schema's single-row resources, then applies them together:
+  - on GORM, `Commit` runs everything in one transaction;
+  - on GraphQL, `Commit` first applies the etag-guarded updates one by one,
+    returning `repox.ErrConflict` before anything else is written, then
+    commits the rest as one atomic mutation batch.
+
+  GraphQL needs the guarded updates separate because the engine reports a
+  failed precheck by touching no row, and that cannot abort a batch. Batch
+  deletes are idempotent, and hooks don't run for queued writes.
+- **Typed list conditions.** `ListInput.Where` takes `filterx.Condition`s,
+  which are ANDed with the AIP-160 `Filter`. This adds `filterx.In` for
+  batched reads, and `OpLt`/`OpGt` for strict bounds, which the filter grammar
+  now also parses as `<` and `>`.
+- **Cross-parent reads (AIP-159).** `List` under a `-` parent
+  (`"calendars/-"`) reads across every parent. Each parent is exposed as a
+  filter field named after it (`calendar`), so the read can be narrowed with
+  `filterx.In("calendar", ...)`.
+- **References to nested resources.** These are stored as the full resource
+  name, because `parents/{p}/children/{c}` can't be rebuilt from its last id,
+  and they match as text in filters. A reference to a top-level resource still
+  stores the bare id.
+- **Conversions:**
+  - `google.type.Interval` is stored as `start/end` RFC 3339 text;
+  - each oneof's `<oneof>_case` discriminator is written from whichever arm is
+    set, scalar arms included;
+  - `OUTPUT_ONLY` scalars are read back on GraphQL;
+  - proto3 `optional` scalars keep their presence on both adapters.
+- **Error mapping.** On GORM:
+  - SQLSTATE 23505 maps to `ErrAlreadyExists`;
+  - 23P01 (exclusion) maps to `ErrConflict`;
+  - 40P01 (deadlock) and 40001 (serialization failure) map to `ErrConflict`,
+    since they mean another writer won and a retry is meaningful.
+
+  The GraphQL adapter maps the engine's "violates exclusion constraint" and
+  "violates unique constraint" messages the same way.
+
 ## GraphQL client SDK
 
 The same `protoc-gen-store` binary also generates a **typed Go GraphQL client** from
@@ -724,6 +778,7 @@ and queried, which no other plugin needs to agree with.
 | Field | Description |
 | --- | --- |
 | `outbox` | Emit a companion `<table>_outbox` table — id, `aggregate_id`, `event_type`, `payload`, `created_at`, `published_at` — so a change event can be written in the same transaction as the row it describes. The table only: draining it belongs to a streams generator. Off by default. |
+| `no_overlap` | Forbid two rows that share `key` from covering overlapping time, as a PostgreSQL exclusion constraint: `EXCLUDE USING gist (key WITH =, tstzrange(start, end, '[)') WITH &&)`. `start` and `end` name `google.protobuf.Timestamp` fields, and ranges are half-open, so back-to-back rows don't overlap. The SQL target writes the constraint, and the gorm `Registry.Migrate` adds it after AutoMigrate (with `btree_gist` installed by `EnsureSchemas`). A write that would overlap fails with SQLSTATE 23P01, which the repositories report as `repox.ErrConflict`. A misspelt field or a non-Timestamp bound fails generation. |
 
 ### `(store.v1.query)` — field level
 

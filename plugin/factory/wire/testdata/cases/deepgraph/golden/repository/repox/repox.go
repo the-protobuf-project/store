@@ -59,6 +59,11 @@ type ListInput struct {
 	// ShowDeleted includes soft-deleted records (AIP-164 show_deleted); it
 	// has no effect on resources without soft delete.
 	ShowDeleted bool
+	// Where are typed conditions ANDed with Filter, for a service building a
+	// query in code rather than passing a caller's filter through: a batched
+	// read (filterx.In), or a strict bound AIP-160 text would also express.
+	// Field names are the filter fields Filter accepts.
+	Where []filterx.Condition
 }
 
 // MapGormErr translates GORM's storage errors onto the repox sentinels,
@@ -70,11 +75,34 @@ func MapGormErr(err error) error {
 		return nil
 	case errors.Is(err, gorm.ErrRecordNotFound):
 		return ErrNotFound
-	case errors.Is(err, gorm.ErrDuplicatedKey):
+	case errors.Is(err, gorm.ErrDuplicatedKey), sqlState(err) == "23505":
 		return ErrAlreadyExists
+	case sqlState(err) == "23P01":
+		// An exclusion constraint, (store.v1.table).no_overlap: the write
+		// would overlap a row that already holds that time. Another writer
+		// won the race; retrying against fresh state is meaningful.
+		return ErrConflict
+	case sqlState(err) == "40P01", sqlState(err) == "40001":
+		// A deadlock or serialization failure: the database rolled the
+		// transaction back to let a concurrent one through. Two writers
+		// inserting conflicting rows under an exclusion constraint can each
+		// wait on the other, so under contention this is the race being lost,
+		// and like it, worth retrying.
+		return ErrConflict
 	default:
 		return err
 	}
+}
+
+// sqlState returns the SQLSTATE a driver error carries, or "". pgx's PgError
+// exposes it as SQLState(); matching the method rather than the type keeps
+// this package free of a driver import.
+func sqlState(err error) string {
+	var s interface{ SQLState() string }
+	if errors.As(err, &s) {
+		return s.SQLState()
+	}
+	return ""
 }
 
 // MapFilterxErr translates the filter/order engines' rejection onto

@@ -12,7 +12,7 @@
 --
 -- store — https://github.com/the-protobuf-project/store
 
--- Extensions (operator classes the search indexes below are built with).
+-- Extensions (operator classes the indexes and constraints below are built with).
 -- Database-wide, not schema-scoped: creating one twice is a no-op.
 CREATE EXTENSION IF NOT EXISTS "pg_trgm";
 

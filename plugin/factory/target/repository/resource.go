@@ -97,18 +97,18 @@ type ancestorFK struct {
 // columnPlan buckets a resource's columns by the role each plays in the
 // generated CRUD bodies.
 type columnPlan struct {
-	PK      *schema.Column   // synthesized ULID id
-	Name    *schema.Column   // the AIP name column (IDENTIFIER)
-	Etag    *schema.Column   // optimistic-concurrency column, when present
+	PK   *schema.Column // synthesized ULID id
+	Name *schema.Column // the AIP name column (IDENTIFIER)
+	Etag *schema.Column // optimistic-concurrency column, when present
 	// DeleteTime is the AIP-164 soft-delete column: an OUTPUT_ONLY
 	// google.protobuf.Timestamp named delete_time. When present, Delete marks
 	// the row instead of removing it, Undelete clears the mark, and Purge
 	// removes the row for good.
 	DeleteTime *schema.Column
-	Refs    []*schema.Column // resource-reference columns (FKModel set): name↔bare-id mapped
-	Mutable []*schema.Column // caller-settable data columns (the mask universe)
-	Autos   []*schema.Column // AutoCreate/AutoUpdate audit columns
-	Skipped []*schema.Column // value-object FKs, parent FKs, and other non-generated columns
+	Refs       []*schema.Column // resource-reference columns (FKModel set): name↔bare-id mapped
+	Mutable    []*schema.Column // caller-settable data columns (the mask universe)
+	Autos      []*schema.Column // AutoCreate/AutoUpdate audit columns
+	Skipped    []*schema.Column // value-object FKs, parent FKs, and other non-generated columns
 }
 
 // planResources returns the repository resources of db keyed by table, in
@@ -366,4 +366,19 @@ func outputOnly(c *schema.Column) bool {
 // field (TypeTimestamp also covers google.type.DateTime).
 func isTimestamp(c *schema.Column) bool {
 	return c.Source != nil && c.Source.Message() != nil && c.Source.Message().FullName() == "google.protobuf.Timestamp"
+}
+
+// serverOwned returns r's stored OUTPUT_ONLY columns a service may write:
+// scalars, enums, timestamps and lists the converters map, minus what the
+// repository already manages itself (name, etag, audit times, delete_time)
+// and the value-object wiring.
+func serverOwned(r *resource) []*schema.Column {
+	var out []*schema.Column
+	for _, c := range r.Cols.Skipped {
+		if c.Source == nil || c.FKModel != "" || !outputOnly(c) || c == r.Cols.DeleteTime || isValueObjectFK(r.Table, c) {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
 }

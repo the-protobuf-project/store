@@ -48,6 +48,7 @@ type gormResourceView struct {
 	RefsCreate     []string // set model ref columns from the incoming proto
 	RefsToProto    []string // decorate the proto with formatted reference names
 	MutableAssigns []string // write-back of mutable columns onto the loaded row
+	OutputAssigns  []string // UpdateOutputOnly: masked write-back of server-owned columns
 	MaskFields     []maskFieldView
 
 	// Value-object fragments (see vo_view.go).
@@ -139,6 +140,11 @@ func gormResourceViews(pb *pbIndex, db *schema.Database, s *schema.Schema, resou
 			v.RefsToProto = append(v.RefsToProto, ref.toProto)
 		}
 		v.MutableAssigns, v.MaskFields = mutableFragments(pb, db, resources, r)
+		for _, c := range serverOwned(r) {
+			f := gormField(c)
+			v.OutputAssigns = append(v.OutputAssigns,
+				fmt.Sprintf("if repox.InMask(paths, %q) {\n\t\t\texisting.%s = next.%s\n\t\t}", protoField(c), f, f))
+		}
 		if msg := pb.msgs[r.Table.Source.FullName()]; msg != nil {
 			for _, c := range oneofCases(pb, r.Table, msg) {
 				f := gormFieldName(c.Column.Name, false)
@@ -196,14 +202,26 @@ type refFragment struct{ create, toProto string }
 // those stay with Tier-2 overrides, mirroring the gorm converters' contract.
 func refFragments(pb *pbIndex, db *schema.Database, resources map[*schema.Table]*resource, r *resource, c *schema.Column) (refFragment, bool) {
 	target := findResourceByModel(db, resources, c.FKModel)
-	if target == nil || len(target.Segments) != 1 {
+	if target == nil {
 		return refFragment{}, false
 	}
-	collection := target.Segments[0].Collection
 	field := gormField(c)                     // e.g. "UserID"
 	acc := "in.Get" + pbGoField(pb, c) + "()" // e.g. in.GetUser()
 	outField := "out." + pbGoField(pb, c)
 	var frag refFragment
+	if len(target.Segments) > 1 {
+		// A nested resource's name cannot be rebuilt from its last id, so it
+		// is stored whole, as written.
+		if c.Optional {
+			frag.create = fmt.Sprintf("if v := %s; v != \"\" {\n\t\tm.%s = repox.Ptr(v)\n\t}", acc, field)
+			frag.toProto = fmt.Sprintf("if m.%s != nil {\n\t\t%s = *m.%s\n\t}", field, outField, field)
+		} else {
+			frag.create = fmt.Sprintf("m.%s = %s", field, acc)
+			frag.toProto = fmt.Sprintf("%s = m.%s", outField, field)
+		}
+		return frag, true
+	}
+	collection := target.Segments[0].Collection
 	if c.Optional {
 		frag.create = fmt.Sprintf("if v := %s; v != \"\" {\n\t\tm.%s = repox.Ptr(repox.LastSegment(v))\n\t}", acc, field)
 		frag.toProto = fmt.Sprintf("if m.%s != nil && *m.%s != \"\" {\n\t\t%s = %q + *m.%s\n\t}", field, field, outField, collection+"/", field)
@@ -225,14 +243,21 @@ func mutableFragments(pb *pbIndex, db *schema.Database, resources map[*schema.Ta
 	for _, c := range r.Cols.Mutable {
 		pf := protoField(c)
 		if c.FKModel != "" {
-			if target := findResourceByModel(db, resources, c.FKModel); target == nil || len(target.Segments) != 1 {
-				continue // nested-resource reference: Tier-2
+			target := findResourceByModel(db, resources, c.FKModel)
+			if target == nil {
+				continue
 			}
 			field := gormField(c)
 			acc := "merged.Get" + pbGoField(pb, c) + "()"
-			if c.Optional {
+			switch {
+			case len(target.Segments) > 1 && c.Optional:
+				// Nested: stored whole, as written (see refFragments).
+				assigns = append(assigns, fmt.Sprintf("if v := %s; v != \"\" {\n\t\t\texisting.%s = repox.Ptr(v)\n\t\t} else {\n\t\t\texisting.%s = nil\n\t\t}", acc, field, field))
+			case len(target.Segments) > 1:
+				assigns = append(assigns, fmt.Sprintf("existing.%s = %s", field, acc))
+			case c.Optional:
 				assigns = append(assigns, fmt.Sprintf("if v := %s; v != \"\" {\n\t\t\texisting.%s = repox.Ptr(repox.LastSegment(v))\n\t\t} else {\n\t\t\texisting.%s = nil\n\t\t}", acc, field, field))
-			} else {
+			default:
 				assigns = append(assigns, fmt.Sprintf("existing.%s = repox.LastSegment(%s)", field, acc))
 			}
 		} else {

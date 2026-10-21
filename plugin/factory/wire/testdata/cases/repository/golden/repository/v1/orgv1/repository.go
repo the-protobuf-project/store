@@ -75,6 +75,11 @@ type OrganisationRepository interface {
 	// mutable field. m.Etag, when set, guards against concurrent writes
 	// (repox.ErrConflict).
 	Update(ctx context.Context, m *orgv1.Organisation, paths []string) (*orgv1.Organisation, error)
+	// UpdateOutputOnly persists the server-owned (OUTPUT_ONLY) fields of m that
+	// paths names -- a state, an expiry, a computed list. Update refuses them,
+	// since a client may never set them; this is for the service that owns
+	// them. paths must name at least one; m.Etag guards as in Update.
+	UpdateOutputOnly(ctx context.Context, m *orgv1.Organisation, paths []string) (*orgv1.Organisation, error)
 	// Delete removes the record addressed by its resource name.
 	Delete(ctx context.Context, name string) error
 }
@@ -137,6 +142,32 @@ type Repositories struct {
 	Members       MemberRepository
 	Organisations OrganisationRepository
 	Users         UserRepository
+}
+
+// Batch queues writes across this schema's single-row resources and applies
+// them together on Commit, so a record and the records that depend on it land
+// whole or not at all. Hooks do not run for queued writes.
+type Batch interface {
+	// CreateUser queues a create and returns the name the record will have.
+	CreateUser(m *orgv1.User) (string, error)
+	// DeleteUser queues the record's removal for good; a record already
+	// gone is not an error.
+	DeleteUser(name string)
+	// Commit applies every queued write. GORM runs them in one transaction:
+	// all land or none do. GraphQL first applies the etag-guarded updates, one
+	// by one, returning repox.ErrConflict at the first that fails and before
+	// anything else is written -- the engine reports a failed guard by touching
+	// no row, which cannot abort a batch -- then commits the rest as one atomic
+	// mutation batch.
+	Commit(ctx context.Context) error
+}
+
+// NewBatch returns a Batch on the backend conn carries.
+func NewBatch(conn repox.Conn) Batch {
+	if conn.GraphQL != nil {
+		return &graphQLBatch{svc: conn.GraphQL}
+	}
+	return &gormBatch{db: conn.Gorm}
 }
 
 // options collects the per-resource customizations the factories thread into

@@ -165,6 +165,7 @@ func (r *GormAgendaRepository) list(ctx context.Context, scope *gorm.DB, in repo
 	if err != nil {
 		return nil, "", repox.MapFilterxErr(err)
 	}
+	conds = append(conds, in.Where...)
 	eng := filterx.Gorm[deepv1gorm.Agenda](deepv1gorm.AgendaFilterSpec)
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)
@@ -548,6 +549,11 @@ func (r *GormMeetingRepository) List(ctx context.Context, parent string, in repo
 	if err != nil {
 		return nil, "", err
 	}
+	// AIP-159: "-" for the parent reads across every parent; narrow with a
+	// Where on the parent field instead.
+	if parentIDs[len(parentIDs)-1] == "-" {
+		return r.list(ctx, r.DB, in)
+	}
 	scope := r.DB.Where("agenda_id = ?", parentIDs[len(parentIDs)-1])
 	return r.list(ctx, scope, in)
 }
@@ -557,6 +563,7 @@ func (r *GormMeetingRepository) list(ctx context.Context, scope *gorm.DB, in rep
 	if err != nil {
 		return nil, "", repox.MapFilterxErr(err)
 	}
+	conds = append(conds, in.Where...)
 	eng := filterx.Gorm[deepv1gorm.Meeting](deepv1gorm.MeetingFilterSpec)
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)

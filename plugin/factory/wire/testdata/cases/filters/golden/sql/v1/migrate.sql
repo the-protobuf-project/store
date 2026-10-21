@@ -14,7 +14,7 @@
 
 BEGIN;
 
--- Extensions (operator classes the search indexes below are built with)
+-- Extensions (operator classes the indexes and constraints below are built with)
 CREATE EXTENSION IF NOT EXISTS "pg_trgm";
 
 -- Schemas

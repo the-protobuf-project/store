@@ -302,6 +302,9 @@ func sqlCondition(spec Spec, c Condition) (string, []any, error) {
 		return "", nil, fmt.Errorf("%w: cannot filter by %q", ErrInvalid, c.Field)
 	}
 	col := spec.Table + `."` + f.Column + `"`
+	if c.Op == OpIn {
+		return sqlIn(f, col, c)
+	}
 	switch f.Kind {
 	case KindText:
 		switch c.Op {
@@ -397,6 +400,28 @@ func sqlSearchCondition(spec Spec, c Condition) (string, []any, error) {
 	return "(" + strings.Join(parts, " OR ") + ")", args, nil
 }
 
+// sqlIn translates an OpIn condition: the values normalised as an equality on
+// that kind would be, matched in one IN list. An empty list matches nothing.
+func sqlIn(f FieldSpec, col string, c Condition) (string, []any, error) {
+	if len(c.Values) == 0 {
+		return "FALSE", nil, nil
+	}
+	vals := make([]any, 0, len(c.Values))
+	for _, v := range c.Values {
+		switch f.Kind {
+		case KindText:
+			vals = append(vals, v)
+		case KindEnum:
+			vals = append(vals, NormalizeEnum(f, v))
+		case KindRef:
+			vals = append(vals, RefID(v))
+		default:
+			return "", nil, fmt.Errorf("%w: %q cannot be matched against a list", ErrInvalid, c.Field)
+		}
+	}
+	return col + " IN ?", []any{vals}, nil
+}
+
 // sqlOrderedOp maps an Op onto the SQL comparison an ordered kind supports.
 func sqlOrderedOp(op Op) (string, bool) {
 	switch op {
@@ -406,6 +431,10 @@ func sqlOrderedOp(op Op) (string, bool) {
 		return "<=", true
 	case OpGte:
 		return ">=", true
+	case OpLt:
+		return "<", true
+	case OpGt:
+		return ">", true
 	default:
 		return "", false
 	}

@@ -164,6 +164,38 @@ func goToDt(t *time.Time) *datetime.DateTime {
 		TimeOffset: &datetime.DateTime_UtcOffset{UtcOffset: durationpb.New(0)},
 	}
 }
+{{end}}{{if .Needs.Interval}}
+
+// intervalToGo writes a google.type.Interval as text: both ends in RFC 3339,
+// UTC, joined by "/", ISO 8601's interval form. An unbounded end is empty.
+func intervalToGo(iv *interval.Interval) string {
+	if iv == nil {
+		return ""
+	}
+	end := func(ts *timestamppb.Timestamp) string {
+		if ts == nil {
+			return ""
+		}
+		return ts.AsTime().UTC().Format(time.RFC3339Nano)
+	}
+	return end(iv.GetStartTime()) + "/" + end(iv.GetEndTime())
+}
+
+// goToInterval reads intervalToGo's text back; anything else is nil.
+func goToInterval(s string) *interval.Interval {
+	a, b, ok := strings.Cut(s, "/")
+	if !ok {
+		return nil
+	}
+	end := func(v string) *timestamppb.Timestamp {
+		t, err := time.Parse(time.RFC3339Nano, v)
+		if v == "" || err != nil {
+			return nil
+		}
+		return timestamppb.New(t)
+	}
+	return &interval.Interval{StartTime: end(a), EndTime: end(b)}
+}
 {{end}}{{if .Needs.Date}}
 // dateToGo maps a proto date onto a nullable DATE value (UTC midnight).
 func dateToGo(d *date.Date) *time.Time {

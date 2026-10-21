@@ -153,6 +153,11 @@ func (r *GormMemberRepository) List(ctx context.Context, parent string, in repox
 	if err != nil {
 		return nil, "", err
 	}
+	// AIP-159: "-" for the parent reads across every parent; narrow with a
+	// Where on the parent field instead.
+	if parentIDs[len(parentIDs)-1] == "-" {
+		return r.list(ctx, r.DB, in)
+	}
 	scope := r.DB.Where("organisation_id = ?", parentIDs[len(parentIDs)-1])
 	return r.list(ctx, scope, in)
 }
@@ -162,6 +167,7 @@ func (r *GormMemberRepository) list(ctx context.Context, scope *gorm.DB, in repo
 	if err != nil {
 		return nil, "", repox.MapFilterxErr(err)
 	}
+	conds = append(conds, in.Where...)
 	eng := filterx.Gorm[orgv1gorm.Member](orgv1gorm.MemberFilterSpec)
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)
@@ -420,6 +426,7 @@ func (r *GormOrganisationRepository) list(ctx context.Context, scope *gorm.DB, i
 	if err != nil {
 		return nil, "", repox.MapFilterxErr(err)
 	}
+	conds = append(conds, in.Where...)
 	eng := filterx.Gorm[orgv1gorm.Organisation](orgv1gorm.OrganisationFilterSpec)
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)
@@ -504,6 +511,48 @@ func (r *GormOrganisationRepository) Update(ctx context.Context, in *orgv1.Organ
 		return nil, repox.MapGormErr(err)
 	}
 	return r.get(ctx, id)
+}
+
+// UpdateOutputOnly persists the server-owned fields of in that paths names, in
+// one transaction guarded by in.Etag.
+func (r *GormOrganisationRepository) UpdateOutputOnly(ctx context.Context, in *orgv1.Organisation, paths []string) (*orgv1.Organisation, error) {
+	ids, err := repox.SplitName(in.GetName(), "organisations")
+	if err != nil {
+		return nil, err
+	}
+	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateOutputOnlyTx(ctx, tx, in, paths) })
+	if err != nil {
+		return nil, repox.MapGormErr(err)
+	}
+	return r.get(ctx, ids[len(ids)-1])
+}
+
+// updateOutputOnlyTx is UpdateOutputOnly's write inside tx, which a Batch
+// shares with other writes.
+func (r *GormOrganisationRepository) updateOutputOnlyTx(ctx context.Context, tx *gorm.DB, in *orgv1.Organisation, paths []string) error {
+	if len(paths) == 0 {
+		return fmt.Errorf("%w: UpdateOutputOnly needs the fields to write", repox.ErrInvalidArgument)
+	}
+	ids, err := repox.SplitName(in.GetName(), "organisations")
+	if err != nil {
+		return err
+	}
+	id := ids[len(ids)-1]
+	{
+		var existing orgv1gorm.Organisation
+		if err := tx.WithContext(ctx).First(&existing, "id = ?", id).Error; err != nil {
+			return err
+		}
+		if in.GetEtag() != "" && existing.Etag != nil && *existing.Etag != in.GetEtag() {
+			return repox.ErrConflict
+		}
+		next := orgv1gorm.OrganisationFromProto(in)
+		if repox.InMask(paths, "state") {
+			existing.State = next.State
+		}
+		existing.Etag = repox.Ptr(repox.NewULID())
+		return orgv1gorm.NewOrganisationStore(tx).Update(ctx, &existing)
+	}
 }
 
 // Delete removes the record addressed by its resource name.
@@ -625,6 +674,7 @@ func (r *GormUserRepository) list(ctx context.Context, scope *gorm.DB, in repox.
 	if err != nil {
 		return nil, "", repox.MapFilterxErr(err)
 	}
+	conds = append(conds, in.Where...)
 	eng := filterx.Gorm[orgv1gorm.User](orgv1gorm.UserFilterSpec)
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)
@@ -686,6 +736,26 @@ func (r *GormUserRepository) Update(ctx context.Context, in *orgv1.User, paths [
 	return r.get(ctx, id)
 }
 
+// newRow builds the row a Batch inserts for in, and the
+// name the record will have: the same resolution Create applies.
+func (r *GormUserRepository) newRow(in *orgv1.User) (*orgv1gorm.User, string, error) {
+	id := repox.NewULID()
+	if in.GetName() != "" {
+		ids, err := repox.SplitName(in.GetName(), "users")
+		if err != nil {
+			return nil, "", err
+		}
+		id = ids[len(ids)-1]
+	}
+	in = proto.Clone(in).(*orgv1.User)
+	in.Name = FormatUserName(id)
+	m := orgv1gorm.UserFromProto(in)
+	m.ID = id
+	m.Name = in.GetName()
+	m.Etag = repox.Ptr(repox.NewULID())
+	return m, in.GetName(), nil
+}
+
 // Delete removes the record addressed by its resource name.
 func (r *GormUserRepository) Delete(ctx context.Context, name string) error {
 	ids, err := repox.SplitName(name, "users")
@@ -707,3 +777,61 @@ func (r *GormUserRepository) Delete(ctx context.Context, name string) error {
 
 // Compile-time proof the adapter satisfies the interface.
 var _ UserRepository = (*GormUserRepository)(nil)
+
+// gormBatch is Batch on GORM: queued writes run in one transaction on Commit.
+type gormBatch struct {
+	db  *gorm.DB
+	ops []func(ctx context.Context, tx *gorm.DB) error
+	err error // the first queueing error; Commit returns it and writes nothing
+}
+
+// Commit runs every queued write in one transaction: all land or none do.
+func (b *gormBatch) Commit(ctx context.Context) error {
+	if b.err != nil {
+		return b.err
+	}
+	if len(b.ops) == 0 {
+		return nil
+	}
+	return repox.MapGormErr(b.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, op := range b.ops {
+			if err := op(ctx, tx); err != nil {
+				return err
+			}
+		}
+		return nil
+	}))
+}
+
+func (b *gormBatch) fail(err error) {
+	if b.err == nil {
+		b.err = err
+	}
+}
+
+// CreateUser queues a create and returns the name the record will have.
+func (b *gormBatch) CreateUser(in *orgv1.User) (string, error) {
+	m, name, err := (&GormUserRepository{DB: b.db}).newRow(in)
+	if err != nil {
+		return "", err
+	}
+	b.ops = append(b.ops, func(ctx context.Context, tx *gorm.DB) error {
+		return orgv1gorm.NewUserStore(tx).Create(ctx, m)
+	})
+	return name, nil
+}
+
+// DeleteUser queues the record's removal for good. A record already
+// gone is not an error: two batches clearing the same row must not fail each
+// other.
+func (b *gormBatch) DeleteUser(name string) {
+	ids, err := repox.SplitName(name, "users")
+	if err != nil {
+		b.fail(err)
+		return
+	}
+	id := ids[len(ids)-1]
+	b.ops = append(b.ops, func(ctx context.Context, tx *gorm.DB) error {
+		return tx.WithContext(ctx).Delete(&orgv1gorm.User{}, "id = ?", id).Error
+	})
+}

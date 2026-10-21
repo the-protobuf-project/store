@@ -11,7 +11,8 @@ import (
 	{{if .Alias}}{{.Alias}} {{end}}"{{.Path}}"
 {{- end}}
 
-	"gorm.io/gorm"
+{{if .Constraints}}	"errors"
+{{end}}	"gorm.io/gorm"
 {{- if .Telemetry}}
 	"{{.TelemetryImport}}"
 {{- end}}
@@ -46,6 +47,19 @@ var extensions = []string{
 }
 {{- end}}
 
+{{- if .Constraints}}
+
+// constraints are the exclusion constraints the models declare with
+// (store.v1.table).no_overlap: no two rows sharing a key may cover overlapping
+// time. AutoMigrate cannot express EXCLUDE, so Migrate adds them after it. Each
+// is idempotent, and needs the btree_gist extension EnsureSchemas installs.
+var constraints = []string{
+{{- range .Constraints}}
+	`{{.}}`,
+{{- end}}
+}
+{{- end}}
+
 // Registry collects GORM models so they migrate together.
 type Registry struct {
 	models []any
@@ -63,10 +77,30 @@ func (r *Registry) Register(models ...any) *Registry {
 // Models returns every registered model, in registration order.
 func (r *Registry) Models() []any { return r.models }
 
+{{- if .Constraints}}
+// Migrate runs AutoMigrate for every registered model, then adds the
+// exclusion constraints AutoMigrate cannot, which takes a *gorm.DB.
+func (r *Registry) Migrate(db Migrator) error {
+	if err := db.AutoMigrate(r.models...); err != nil {
+		return err
+	}
+	exec, ok := db.(interface{ Exec(string, ...any) *gorm.DB })
+	if !ok {
+		return errors.New("migrate: the no_overlap constraints need a *gorm.DB to run DDL")
+	}
+	for _, c := range constraints {
+		if err := exec.Exec(c).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+{{- else}}
 // Migrate runs AutoMigrate for every registered model.
 func (r *Registry) Migrate(db Migrator) error {
 	return db.AutoMigrate(r.models...)
 }
+{{- end}}
 
 // EnsureSchemas creates every Postgres schema the registered models live in, if
 // it does not already exist. AutoMigrate does not create schemas, so call this

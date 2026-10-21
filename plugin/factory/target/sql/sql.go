@@ -14,6 +14,7 @@ package sql
 
 import (
 	"fmt"
+	"github.com/the-protobuf-project/store/plugin/factory/target/nooverlap"
 
 	"google.golang.org/protobuf/compiler/protogen"
 
@@ -45,6 +46,11 @@ func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 	fx := facets.New(ir)
 	typeOf := func(c *schema.Column) string { return types.SQLForColumn(c, fx.Column(c)) }
+	for _, db := range ir.Databases {
+		if err := nooverlap.Check(db, fx); err != nil {
+			return err
+		}
+	}
 	for _, db := range ir.Databases {
 		if types.Provider(db.Provider) != types.Postgres {
 			return fmt.Errorf("sql: database %q uses provider %q — the sql target only supports postgres", db.Name, db.Provider)

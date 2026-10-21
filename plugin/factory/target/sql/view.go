@@ -14,6 +14,7 @@ import (
 	"github.com/the-protobuf-project/protokit/schema"
 	"github.com/the-protobuf-project/store/plugin/factory/facets"
 	"github.com/the-protobuf-project/store/plugin/factory/provenance"
+	"github.com/the-protobuf-project/store/plugin/factory/target/nooverlap"
 	"github.com/the-protobuf-project/store/plugin/factory/target/searchindex"
 	"github.com/the-protobuf-project/store/plugin/factory/target/types"
 )
@@ -69,8 +70,14 @@ func schemaView(db *schema.Database, s *schema.Schema, typeOf types.TypeOf, fx f
 	var tables []tableView
 	var extensions []string
 	for _, t := range s.Tables {
-		tables = append(tables, tableViewOf(s, t, typeOf, fx))
+		tv := tableViewOf(s, t, typeOf, fx)
 		extensions = append(extensions, searchindex.Extensions(searchindex.For(t, fx))...)
+		plans := nooverlap.For(s, t, fx)
+		extensions = append(extensions, nooverlap.Extensions(plans)...)
+		for _, p := range plans {
+			tv.Indexes = append(tv.Indexes, p.DDL())
+		}
+		tables = append(tables, tv)
 	}
 
 	ddl := schemaDDLOf(s, false) // per-schema files use plain, readable CREATE TRIGGER
@@ -198,7 +205,7 @@ func migrateView(db *schema.Database, typeOf types.TypeOf, fx facets.Set) map[st
 	var schemaNames []string
 	var enumStmts []string
 	var tables []migrateTableView
-	var alters, indexes, functions, triggers, comments, extensions []string
+	var alters, indexes, constraints, functions, triggers, comments, extensions []string
 
 	for _, s := range db.Schemas {
 		schemaNames = append(schemaNames, quoteIdent(s.Name))
@@ -229,6 +236,11 @@ func migrateView(db *schema.Database, typeOf types.TypeOf, fx facets.Set) map[st
 			plans := searchindex.For(t, fx)
 			indexes = append(indexes, searchIndexStmts(s, t, plans)...)
 			extensions = append(extensions, searchindex.Extensions(plans)...)
+			exclusions := nooverlap.For(s, t, fx)
+			extensions = append(extensions, nooverlap.Extensions(exclusions)...)
+			for _, p := range exclusions {
+				constraints = append(constraints, p.DDL())
+			}
 		}
 
 		ddl := schemaDDLOf(s, true) // DROP + CREATE TRIGGER — re-runnable on every PostgreSQL version
@@ -248,15 +260,16 @@ func migrateView(db *schema.Database, typeOf types.TypeOf, fx facets.Set) map[st
 		}),
 		// Extensions are created once for the database, before any index using
 		// their operator classes.
-		"Extensions": dedupe(extensions),
-		"Schemas":    schemaNames,
-		"EnumStmts":  enumStmts,
-		"Tables":     tables,
-		"Alters":     alters,
-		"Indexes":    indexes,
-		"Functions":  functions,
-		"Triggers":   triggers,
-		"Comments":   comments,
+		"Extensions":  dedupe(extensions),
+		"Schemas":     schemaNames,
+		"EnumStmts":   enumStmts,
+		"Tables":      tables,
+		"Alters":      alters,
+		"Indexes":     indexes,
+		"Constraints": constraints,
+		"Functions":   functions,
+		"Triggers":    triggers,
+		"Comments":    comments,
 	}
 }
 

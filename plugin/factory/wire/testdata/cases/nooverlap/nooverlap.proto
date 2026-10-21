@@ -1,0 +1,99 @@
+syntax = "proto3";
+
+// Package nooverlap.v1 exercises (store.v1.table).no_overlap: an exclusion
+// constraint the database enforces, so two bookings of one court can never
+// overlap however their writers race.
+//
+// Booking declares one keyed rule and Closure one unkeyed rule with an explicit
+// name; Note declares none, so the output shows the constraint appears only
+// where asked.
+package nooverlap.v1;
+
+import "entity/v1/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "google/protobuf/timestamp.proto";
+import "store/v1/annotations.proto";
+
+option java_multiple_files = true;
+option java_outer_classname = "NooverlapProto";
+option java_package = "com.nooverlap.v1";
+option (entity.v1.datasource) = {
+  database: "club_db"
+  provider: "postgres"
+  schema: "club"
+};
+
+// Booking is one court taken for a span: no two of one court may overlap.
+message Booking {
+  option (google.api.resource) = {
+    type: "nooverlap.v1/Booking"
+    pattern: "bookings/{booking}"
+    singular: "booking"
+    plural: "bookings"
+  };
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
+  option (store.v1.table) = {
+    no_overlap: {
+      key: ["court"]
+      start: "start_time"
+      end: "end_time"
+    }
+  };
+
+  // Resource name.
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  // The court taken.
+  string court = 2 [(google.api.field_behavior) = REQUIRED];
+
+  // When the booking starts, inclusive.
+  google.protobuf.Timestamp start_time = 3 [(google.api.field_behavior) = REQUIRED];
+
+  // When it ends, exclusive.
+  google.protobuf.Timestamp end_time = 4 [(google.api.field_behavior) = REQUIRED];
+}
+
+// Closure shuts the whole club: no two closures may overlap at all.
+message Closure {
+  option (google.api.resource) = {
+    type: "nooverlap.v1/Closure"
+    pattern: "closures/{closure}"
+    singular: "closure"
+    plural: "closures"
+  };
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
+  option (store.v1.table) = {
+    no_overlap: {
+      start: "begins"
+      end: "ends"
+      name: "one_closure_at_a_time"
+    }
+  };
+
+  // Resource name.
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  // When the closure begins.
+  google.protobuf.Timestamp begins = 2 [(google.api.field_behavior) = REQUIRED];
+
+  // When it ends.
+  google.protobuf.Timestamp ends = 3 [(google.api.field_behavior) = REQUIRED];
+}
+
+// Note declares no rule.
+message Note {
+  option (google.api.resource) = {
+    type: "nooverlap.v1/Note"
+    pattern: "notes/{note}"
+    singular: "note"
+    plural: "notes"
+  };
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
+
+  // Resource name.
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  // Text.
+  string text = 2 [(google.api.field_behavior) = REQUIRED];
+}

@@ -68,6 +68,9 @@ func gormFileView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 			imports["fmt"] = ""
 			imports["time"] = ""
 		}
+		if r.OutputOnly || r.Flat {
+			imports["fmt"] = ""
+		}
 		for _, cp := range r.CrossVOPkgs {
 			imports[dbGormModule(db)+"/"+db.Name+"/"+cp] = ""
 		}
@@ -83,6 +86,7 @@ func gormFileView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 		"GormPkg":   gormPkg,
 		"Imports":   renderImports(imports),
 		"Resources": rs,
+		"HasBatch":  gormHasFlat(rs),
 	}
 }
 
@@ -158,4 +162,13 @@ func addGormModelsImport(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg
 	qual := gormModelsQual(pb, s, pkg)
 	imports[dbGormModule(db)+"/"+db.Name+"/"+pkg] = qual
 	return qual
+}
+
+func gormHasFlat(rs []gormResourceView) bool {
+	for _, r := range rs {
+		if r.Flat {
+			return true
+		}
+	}
+	return false
 }

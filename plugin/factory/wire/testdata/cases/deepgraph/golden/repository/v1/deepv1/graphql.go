@@ -33,6 +33,7 @@ import (
 	"fmt"
 	"github.com/the-protobuf-project/runtime-go/network/graphql"
 	"google.golang.org/protobuf/proto"
+	"strings"
 	"time"
 )
 
@@ -43,6 +44,14 @@ func mapGraphQLErr(err error) error {
 		return nil
 	case errors.Is(err, graphql.ErrConflict):
 		return repox.ErrConflict
+	// The engine reports a database rejection as text, so the two the
+	// repository contract names are recognised by PostgreSQL's own wording:
+	// an exclusion constraint ((store.v1.table).no_overlap) is a conflict, a
+	// unique one a duplicate.
+	case strings.Contains(err.Error(), "violates exclusion constraint"):
+		return fmt.Errorf("%w: %v", repox.ErrConflict, err)
+	case strings.Contains(err.Error(), "violates unique constraint"):
+		return fmt.Errorf("%w: %v", repox.ErrAlreadyExists, err)
 	default:
 		return err
 	}
@@ -230,6 +239,7 @@ func (r *GraphQLAgendaRepository) list(ctx context.Context, in repox.ListInput, 
 	if err != nil {
 		return nil, "", repox.MapFilterxErr(err)
 	}
+	conds = append(conds, in.Where...)
 	eng := filterx.Hasura[agendasql.DeepV1Agendas](deepv1gorm.AgendaFilterSpec, r.Svc.Query.DeepV1.Agendas).Scope(scope...)
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)
@@ -726,6 +736,10 @@ func (r *GraphQLMeetingRepository) List(ctx context.Context, parent string, in r
 	if err != nil {
 		return nil, "", err
 	}
+	// AIP-159: "-" for the parent reads across every parent.
+	if parentIDs[len(parentIDs)-1] == "-" {
+		return r.list(ctx, in)
+	}
 	return r.list(ctx, in, meetingsql.AgendaId.Eq(parentIDs[len(parentIDs)-1]))
 }
 
@@ -734,6 +748,7 @@ func (r *GraphQLMeetingRepository) list(ctx context.Context, in repox.ListInput,
 	if err != nil {
 		return nil, "", repox.MapFilterxErr(err)
 	}
+	conds = append(conds, in.Where...)
 	eng := filterx.Hasura[meetingsql.DeepV1Meetings](deepv1gorm.MeetingFilterSpec, r.Svc.Query.DeepV1.Meetings).Scope(scope...)
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)

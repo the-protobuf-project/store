@@ -31,8 +31,9 @@ const graphqlRuntimeModule = "github.com/the-protobuf-project/runtime-go/network
 // table. Returns nil when no table in the schema yields a spec.
 func filtersView(db *schema.Database, s *schema.Schema, pkg string, fx facets.Set) map[string]any {
 	var tables []filterTableView
+	nested := nestedRefs(db)
 	for _, t := range s.Tables {
-		if v, ok := buildFilterTable(s, t, fx); ok {
+		if v, ok := buildFilterTable(s, t, fx, nested); ok {
 			tables = append(tables, v)
 		}
 	}

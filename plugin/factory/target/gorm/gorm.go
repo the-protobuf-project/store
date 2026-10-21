@@ -24,6 +24,7 @@ import (
 	"github.com/the-protobuf-project/protokit/schema"
 	"github.com/the-protobuf-project/store/plugin/factory/facets"
 	"github.com/the-protobuf-project/store/plugin/factory/provenance"
+	"github.com/the-protobuf-project/store/plugin/factory/target/nooverlap"
 	"github.com/the-protobuf-project/store/plugin/factory/target/types"
 	"github.com/the-protobuf-project/store/telemetry"
 )
@@ -54,6 +55,11 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 	tel := telemetry.New(ir)
 	typeOf := func(c *schema.Column) string { return types.SQLForColumn(c, fx.Column(c)) }
 	dbs := ir.Databases
+	for _, db := range dbs {
+		if err := nooverlap.Check(db, fx); err != nil {
+			return err
+		}
+	}
 	gormxEmitted := false     // the shared runtime is emitted once for the whole tree
 	filterxEmitted := false   // likewise the shared filter engine packages
 	telemetryEmitted := false // likewise the SDK adapter package

@@ -347,6 +347,9 @@ func gqlCondition(spec Spec, c Condition) (graphql.Predicate, error) {
 		return graphql.Predicate{}, fmt.Errorf("%w: cannot filter by %q", ErrInvalid, c.Field)
 	}
 	col := CamelCase(f.Column)
+	if c.Op == OpIn {
+		return gqlIn(f, col, c)
+	}
 	switch f.Kind {
 	case KindText:
 		sf := graphql.StringField{Col: col}
@@ -406,6 +409,10 @@ func gqlCondition(spec Spec, c Condition) (graphql.Predicate, error) {
 			return nf.Lte(graphql.Int64(v)), nil
 		case OpGte:
 			return nf.Gte(graphql.Int64(v)), nil
+		case OpLt:
+			return nf.Lt(graphql.Int64(v)), nil
+		case OpGt:
+			return nf.Gt(graphql.Int64(v)), nil
 		}
 	case KindFloat:
 		v, err := ParseFloat(c.Value)
@@ -422,6 +429,10 @@ func gqlCondition(spec Spec, c Condition) (graphql.Predicate, error) {
 			return nf.Lte(v), nil
 		case OpGte:
 			return nf.Gte(v), nil
+		case OpLt:
+			return nf.Lt(v), nil
+		case OpGt:
+			return nf.Gt(v), nil
 		}
 	case KindBool:
 		v, err := ParseBool(c.Value)
@@ -459,6 +470,25 @@ func gqlSearchPredicate(spec Spec, c Condition) (graphql.Predicate, error) {
 	return graphql.Or(preds...), nil
 }
 
+// gqlIn translates an OpIn condition onto the field's _in comparison, the
+// values normalised as an equality on that kind would be.
+func gqlIn(f FieldSpec, col string, c Condition) (graphql.Predicate, error) {
+	vals := make([]string, 0, len(c.Values))
+	for _, v := range c.Values {
+		switch f.Kind {
+		case KindText:
+			vals = append(vals, v)
+		case KindEnum:
+			vals = append(vals, NormalizeEnum(f, v))
+		case KindRef:
+			vals = append(vals, RefID(v))
+		default:
+			return graphql.Predicate{}, fmt.Errorf("%w: %q cannot be matched against a list", ErrInvalid, c.Field)
+		}
+	}
+	return graphql.StringField{Col: col}.In(vals...), nil
+}
+
 // gqlOrderedPred maps an ordered-kind Op onto the string field's comparison.
 func gqlOrderedPred(f graphql.StringField, op Op, v string) (graphql.Predicate, bool) {
 	switch op {
@@ -468,6 +498,10 @@ func gqlOrderedPred(f graphql.StringField, op Op, v string) (graphql.Predicate, 
 		return f.Lte(v), true
 	case OpGte:
 		return f.Gte(v), true
+	case OpLt:
+		return f.Lt(v), true
+	case OpGt:
+		return f.Gt(v), true
 	default:
 		return graphql.Predicate{}, false
 	}

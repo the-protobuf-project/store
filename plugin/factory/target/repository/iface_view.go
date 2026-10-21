@@ -28,6 +28,11 @@ type resourceView struct {
 	Parented    bool   // Create/List take a parent resource name
 	Pattern     string // resource pattern, for doc comments
 	SoftDelete  bool   // AIP-164: Delete marks delete_time; Undelete and Purge exist
+	// OutputOnly reports server-owned columns, which UpdateOutputOnly writes.
+	OutputOnly bool
+	// Flat reports a resource stored as one row -- no value objects, no deep
+	// graph -- which is what a Batch can queue.
+	Flat bool
 }
 
 // schemaPkgView is the template data for one schema's repository.go.
@@ -40,6 +45,7 @@ type schemaPkgView struct {
 
 	// GraphQL adapter wiring, set when the graphql_module opt is configured.
 	HasGraphQL   bool
+	HasBatch     bool   // some resource is Flat, so the schema gets a Batch
 	ClientPkg    string // client root package name, e.g. "freebusyql"
 	GQLResources []gqlResourceView
 }
@@ -78,6 +84,8 @@ func schemaView(pb *pbIndex, db *schema.Database, s *schema.Schema, resources ma
 			Parented:    r.Parent != nil || len(r.Segments) > 1,
 			Pattern:     r.Pattern,
 			SoftDelete:  r.Cols.DeleteTime != nil,
+			OutputOnly:  len(serverOwned(r)) > 0,
+			Flat:        len(r.VOs) == 0 && len(r.Graph) == 0,
 		})
 	}
 	return &schemaPkgView{
@@ -93,6 +101,7 @@ func schemaView(pb *pbIndex, db *schema.Database, s *schema.Schema, resources ma
 		Imports:   renderImports(imports),
 		RepoxPkg:  repoxPkg,
 		Resources: views,
+		HasBatch:  hasFlat(views),
 	}, nil
 }
 
@@ -118,4 +127,14 @@ func renderImports(m map[string]string) []string {
 		}
 	}
 	return lines
+}
+
+// hasFlat reports whether any resource can be queued in a Batch.
+func hasFlat(views []resourceView) bool {
+	for _, v := range views {
+		if v.Flat {
+			return true
+		}
+	}
+	return false
 }

@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+// A no_overlap rule naming a key field the message does not have.
+package badkey.v1;
+
+import "entity/v1/annotations.proto";
+import "google/api/resource.proto";
+import "google/protobuf/timestamp.proto";
+import "store/v1/annotations.proto";
+
+option (entity.v1.datasource) = {
+  database: "club_db"
+  provider: "postgres"
+  schema: "club"
+};
+
+// Booking misspells its key.
+message Booking {
+  option (google.api.resource) = {
+    type: "bad.v1/Booking"
+    pattern: "bookings/{booking}"
+    singular: "booking"
+    plural: "bookings"
+  };
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
+  option (store.v1.table) = {
+    no_overlap: {
+      key: ["cuort"]
+      start: "start_time"
+      end: "end_time"
+    }
+  };
+
+  // Resource name.
+  string name = 1;
+  // The court taken.
+  string court = 2;
+  // Start.
+  google.protobuf.Timestamp start_time = 3;
+  // End.
+  google.protobuf.Timestamp end_time = 4;
+}

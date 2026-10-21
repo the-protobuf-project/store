@@ -2,7 +2,7 @@
 
 BEGIN;
 {{if .Extensions}}
--- Extensions (operator classes the search indexes below are built with)
+-- Extensions (operator classes the indexes and constraints below are built with)
 {{range .Extensions}}CREATE EXTENSION IF NOT EXISTS "{{.}}";
 {{end}}
 {{- end}}
@@ -35,6 +35,11 @@ CREATE TABLE IF NOT EXISTS {{.Ref}} (
 {{- if .Indexes}}
 -- Indexes
 {{range .Indexes}}{{.}}
+{{end}}{{- end}}
+{{- if .Constraints}}
+-- Exclusion constraints ((store.v1.table).no_overlap): no two rows sharing a
+-- key may cover overlapping time.
+{{range .Constraints}}{{.}}
 {{end}}{{- end}}
 {{- if .Comments}}
 -- Documentation

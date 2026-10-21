@@ -14,6 +14,10 @@ package gorm
 import (
 	"fmt"
 	"sort"
+	"strings"
+
+	"google.golang.org/genproto/googleapis/api/annotations"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
@@ -60,7 +64,7 @@ type filterTableView struct {
 
 // buildFilterTable plans one table's spec. Returns ok=false when nothing on the
 // table is filterable or sortable (the spec would be empty).
-func buildFilterTable(s *schema.Schema, t *schema.Table, fx facets.Set) (filterTableView, bool) {
+func buildFilterTable(s *schema.Schema, t *schema.Table, fx facets.Set, nested map[*schema.Column]bool) (filterTableView, bool) {
 	v := filterTableView{
 		SpecVar: t.LocalName + "FilterSpec",
 		Model:   t.LocalName,
@@ -75,7 +79,7 @@ func buildFilterTable(s *schema.Schema, t *schema.Table, fx facets.Set) (filterT
 		}
 		// A key type classifyFilterColumn excludes from filtering is still a
 		// perfectly good tiebreaker; it just travels through the cursor as text.
-		kind, _, ok := classifyFilterColumn(c)
+		kind, _, ok := classifyFilterColumn(c, nested)
 		if !ok {
 			kind = "KindText"
 		}
@@ -86,7 +90,7 @@ func buildFilterTable(s *schema.Schema, t *schema.Table, fx facets.Set) (filterT
 		if c.Source == nil {
 			continue // synthesized (surrogate keys, parent FKs): scoped by the caller, not filters
 		}
-		kind, sortable, ok := classifyFilterColumn(c)
+		kind, sortable, ok := classifyFilterColumn(c, nested)
 		if !ok {
 			continue
 		}
@@ -118,6 +122,30 @@ func buildFilterTable(s *schema.Schema, t *schema.Table, fx facets.Set) (filterT
 			}
 		}
 	}
+	// Parent references are synthesized columns, so the pass above skips them,
+	// but a read across parents (AIP-159: List under "parents/-") needs to
+	// narrow by parent. Each is a ref field named for the parent -- event's
+	// calendar_id is "calendar" -- matched by resource name or bare id. A
+	// value object's FK is not a parent, and carries a ReferencedProto.
+	taken := map[string]bool{}
+	for _, f := range v.Fields {
+		taken[f.Field] = true
+	}
+	for _, fk := range t.ForeignKeys {
+		if fk.ReferencedProto != "" {
+			continue
+		}
+		c := columnOf(t, fk.Column)
+		if c == nil || c.Source != nil {
+			continue
+		}
+		field := naming.StripIDSuffix(c.Name)
+		if field == c.Name || taken[field] {
+			continue
+		}
+		taken[field] = true
+		v.Fields = append(v.Fields, filterFieldView{Field: field, Column: c.Name, Kind: "KindRef"})
+	}
 	sort.Slice(v.Fields, func(i, j int) bool { return v.Fields[i].Field < v.Fields[j].Field })
 	sort.Slice(v.Sort, func(i, j int) bool { return v.Sort[i].Field < v.Sort[j].Field })
 	sort.Strings(v.Search)
@@ -127,11 +155,15 @@ func buildFilterTable(s *schema.Schema, t *schema.Table, fx facets.Set) (filterT
 // classifyFilterColumn maps a column's neutral type onto a filterx kind and the
 // type-default sortability. ok=false excludes the column entirely (blobs, JSON,
 // intervals, and other shapes with no meaningful filter semantics).
-func classifyFilterColumn(c *schema.Column) (kind string, sortable, ok bool) {
+func classifyFilterColumn(c *schema.Column, nested map[*schema.Column]bool) (kind string, sortable, ok bool) {
 	// An explicit resource reference is an identity match on the stored id — it
 	// scopes rows to a parent/peer, so only equality applies and sorting by it
-	// is meaningless.
+	// is meaningless. A reference to a nested resource is stored whole, as
+	// written, so it matches as text (see nestedRefs).
 	if c.FKModel != "" {
+		if nested[c] {
+			return "KindText", false, true
+		}
 		return "KindRef", false, true
 	}
 	if c.List {
@@ -158,4 +190,46 @@ func classifyFilterColumn(c *schema.Column) (kind string, sortable, ok bool) {
 	default:
 		return "", false, false
 	}
+}
+
+// columnOf finds a column of t by name.
+func columnOf(t *schema.Table, name string) *schema.Column {
+	for _, c := range t.Columns {
+		if c.Name == name {
+			return c
+		}
+	}
+	return nil
+}
+
+// nestedRefs returns the reference columns of db whose target resource is
+// nested ("parents/{p}/children/{c}"). Such a name cannot be rebuilt from its
+// last id, so the repositories store it whole and the filter matches it as
+// text.
+func nestedRefs(db *schema.Database) map[*schema.Column]bool {
+	nested := map[string]bool{}
+	for _, s := range db.Schemas {
+		for _, t := range s.Tables {
+			if t.Source == nil {
+				continue
+			}
+			rd, _ := proto.GetExtension(t.Source.Options(), annotations.E_Resource).(*annotations.ResourceDescriptor)
+			for _, p := range rd.GetPattern() {
+				if strings.Count(p, "{") > 1 {
+					nested[t.LocalName], nested[t.ModelName] = true, true
+				}
+			}
+		}
+	}
+	out := map[*schema.Column]bool{}
+	for _, s := range db.Schemas {
+		for _, t := range s.Tables {
+			for _, c := range t.Columns {
+				if c.FKModel != "" && nested[c.FKModel] {
+					out[c] = true
+				}
+			}
+		}
+	}
+	return out
 }

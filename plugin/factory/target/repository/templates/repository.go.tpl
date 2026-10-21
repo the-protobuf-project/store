@@ -35,6 +35,13 @@ type {{.Model}}Repository interface {
 	// mutable field. m.Etag, when set, guards against concurrent writes
 	// (repox.ErrConflict).
 	Update(ctx context.Context, m *{{.PB}}, paths []string) (*{{.PB}}, error)
+{{- if .OutputOnly}}
+	// UpdateOutputOnly persists the server-owned (OUTPUT_ONLY) fields of m that
+	// paths names -- a state, an expiry, a computed list. Update refuses them,
+	// since a client may never set them; this is for the service that owns
+	// them. paths must name at least one; m.Etag guards as in Update.
+	UpdateOutputOnly(ctx context.Context, m *{{.PB}}, paths []string) (*{{.PB}}, error)
+{{- end}}
 {{- if .SoftDelete}}
 	// Delete soft-deletes the record addressed by its resource name (AIP-164):
 	// Get still returns it, with delete_time set; List skips it unless
@@ -75,6 +82,43 @@ type Repositories struct {
 	{{.PluralField}} {{.Model}}Repository
 {{- end}}
 }
+
+{{- if .HasBatch}}
+// Batch queues writes across this schema's single-row resources and applies
+// them together on Commit, so a record and the records that depend on it land
+// whole or not at all. Hooks do not run for queued writes.
+type Batch interface {
+{{- range .Resources}}{{if .Flat}}
+	// Create{{.Model}} queues a create and returns the name the record will have.
+	Create{{.Model}}({{if .Parented}}parent string, {{end}}m *{{.PB}}) (string, error)
+{{- if .OutputOnly}}
+	// Update{{.Model}}OutputOnly queues UpdateOutputOnly; m.Etag, when set,
+	// guards it.
+	Update{{.Model}}OutputOnly(m *{{.PB}}, paths []string)
+{{- end}}
+	// Delete{{.Model}} queues the record's removal for good; a record already
+	// gone is not an error.
+	Delete{{.Model}}(name string)
+{{- end}}{{end}}
+	// Commit applies every queued write. GORM runs them in one transaction:
+	// all land or none do. GraphQL first applies the etag-guarded updates, one
+	// by one, returning repox.ErrConflict at the first that fails and before
+	// anything else is written -- the engine reports a failed guard by touching
+	// no row, which cannot abort a batch -- then commits the rest as one atomic
+	// mutation batch.
+	Commit(ctx context.Context) error
+}
+
+// NewBatch returns a Batch on the backend conn carries.
+func NewBatch(conn repox.Conn) Batch {
+{{- if .HasGraphQL}}
+	if conn.GraphQL != nil {
+		return &graphQLBatch{svc: conn.GraphQL}
+	}
+{{- end}}
+	return &gormBatch{db: conn.Gorm}
+}
+{{- end}}
 
 // options collects the per-resource customizations the factories thread into
 // the adapters they build.

@@ -32,4 +32,43 @@ message TableOptions {
   //
   // Off by default.
   bool outbox = 1;
+
+  // no_overlap forbids two rows that agree on `key` from covering overlapping
+  // time, enforced by the database itself rather than by whoever writes.
+  //
+  // A booking table is the case it exists for: "no two allocations of one
+  // resource may overlap" is a check-then-insert race in application code, and
+  // a lock that every writer has to remember to take. Declared here, it is a
+  // PostgreSQL exclusion constraint -- EXCLUDE USING gist (key WITH =,
+  // tstzrange(start, end, '[)') WITH &&) -- which settles the race in the one
+  // place every writer passes through. A write that would overlap fails with
+  // SQLSTATE 23P01, which the generated repositories report as a conflict.
+  //
+  // Ranges are half-open, so back-to-back rows (one ending as the next begins)
+  // do not overlap.
+  //
+  // Applied via:
+  //
+  //	option (store.v1.table) = {
+  //	  no_overlap: {key: ["resource"], start: "start_time", end: "end_time"}
+  //	};
+  repeated NoOverlap no_overlap = 2;
+}
+
+// NoOverlap is one exclusion rule over a table's time ranges.
+message NoOverlap {
+  // key lists the fields (proto snake_case) rows must share to conflict, e.g.
+  // ["resource"]. Empty means every row conflicts with every other.
+  repeated string key = 1;
+
+  // start is the google.protobuf.Timestamp field where a row's range begins,
+  // inclusive.
+  string start = 2;
+
+  // end is the google.protobuf.Timestamp field where it ends, exclusive.
+  string end = 3;
+
+  // name is the constraint's name. Generated as <table>_<key...>_no_overlap
+  // when empty.
+  string name = 4;
 }

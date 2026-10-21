@@ -52,6 +52,14 @@ const (
 	OpLte
 	// OpGte is the `>=` operator (ordered kinds only).
 	OpGte
+	// OpLt is the `<` operator (ordered kinds only). A half-open window's
+	// bound needs it: `end_time > t` is not the same set as `end_time >= t`.
+	OpLt
+	// OpGt is the `>` operator (ordered kinds only).
+	OpGt
+	// OpIn matches any of Condition.Values. AIP-160 has no list syntax, so it
+	// is built in code (ListInput.Where) rather than parsed from a filter.
+	OpIn
 )
 
 // Condition is one parsed term of a filter expression. A condition with an
@@ -61,6 +69,14 @@ type Condition struct {
 	Field string
 	Op    Op
 	Value string
+	// Values are OpIn's alternatives; every other Op reads Value.
+	Values []string
+}
+
+// In is the condition "field is any of values", for callers batching a read
+// across many keys at once.
+func In(field string, values ...string) Condition {
+	return Condition{Field: field, Op: OpIn, Values: values}
 }
 
 // Kind classifies a field's filter semantics; it decides which operators apply
@@ -196,6 +212,10 @@ func parseOp(s string) (Op, error) {
 		return OpLte, nil
 	case ">=":
 		return OpGte, nil
+	case "<":
+		return OpLt, nil
+	case ">":
+		return OpGt, nil
 	default:
 		return 0, fmt.Errorf("%w: unsupported filter operator %q", ErrInvalid, s)
 	}
@@ -245,7 +265,8 @@ func tokenize(s string) ([]token, error) {
 				toks = append(toks, token{text: string(c) + "=", op: true})
 				i += 2
 			} else {
-				return nil, fmt.Errorf("%w: unexpected %q in filter (only <= and >= are supported)", ErrInvalid, string(c))
+				toks = append(toks, token{text: string(c), op: true})
+				i++
 			}
 		default:
 			j := i

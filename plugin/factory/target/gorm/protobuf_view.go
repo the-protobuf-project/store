@@ -154,6 +154,7 @@ type convModel struct {
 type helperNeeds struct {
 	Ptr, Ts, Date, Tod, Dur, JSON    bool
 	DT                               bool // google.type.DateTime <-> TIMESTAMPTZ
+	Interval                         bool // google.type.Interval <-> TEXT "start/end"
 	DateVal, TodVal, DurVal, EnumCSV bool
 }
 
@@ -403,7 +404,32 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 				cm.FromLines = append(cm.FromLines, mField+" = structToJSON("+getter+")")
 				cm.ToLines = append(cm.ToLines, assignPB("jsonToStruct("+mField+")", "nil")...)
 				continue
-			case schema.TypeText, schema.TypeDecimal, schema.TypeLatLng, schema.TypeInterval:
+			case schema.TypeInterval:
+				// A google.type.Interval is stored as text: its two ends in
+				// RFC 3339, UTC, joined by "/" -- ISO 8601's interval form, so
+				// the column reads plainly and sorts by start.
+				if fullNameOf(f) != "google.type.Interval" {
+					toSkips, fromSkips = skipBoth(toSkips, fromSkips, col)
+					continue
+				}
+				needs.Interval = true
+				imports.add("google.golang.org/genproto/googleapis/type/interval")
+				imports.add("google.golang.org/protobuf/types/known/timestamppb")
+				imports.addStd("strings")
+				imports.addStd("time")
+				if col.Optional {
+					cm.FromLines = append(cm.FromLines, "if v := intervalToGo("+getter+"); v != \"\" {", "\t"+mField+" = &v", "}")
+					cm.ToLines = append(cm.ToLines, "if "+mField+" != nil {")
+					for _, l := range assignPB("goToInterval(*"+mField+")", "nil") {
+						cm.ToLines = append(cm.ToLines, "\t"+l)
+					}
+					cm.ToLines = append(cm.ToLines, "}")
+				} else {
+					cm.FromLines = append(cm.FromLines, mField+" = intervalToGo("+getter+")")
+					cm.ToLines = append(cm.ToLines, assignPB("goToInterval("+mField+")", "nil")...)
+				}
+				continue
+			case schema.TypeText, schema.TypeDecimal, schema.TypeLatLng:
 				toSkips, fromSkips = skipBoth(toSkips, fromSkips, col)
 				continue
 			}

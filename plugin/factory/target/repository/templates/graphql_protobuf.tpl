@@ -146,6 +146,38 @@ func rawToBytes(r *json.RawMessage) []byte {
 	return b
 }
 {{- end}}
+{{- if .Needs.Interval}}
+
+// intervalToStr / strToInterval cross a google.type.Interval as text: both
+// ends RFC 3339 in UTC joined by "/", as the gorm converter stores it.
+func intervalToStr(iv *interval.Interval) string {
+	if iv == nil {
+		return ""
+	}
+	end := func(ts *timestamppb.Timestamp) string {
+		if ts == nil {
+			return ""
+		}
+		return ts.AsTime().UTC().Format(time.RFC3339Nano)
+	}
+	return end(iv.GetStartTime()) + "/" + end(iv.GetEndTime())
+}
+
+func strToInterval(s string) *interval.Interval {
+	a, b, ok := strings.Cut(s, "/")
+	if !ok {
+		return nil
+	}
+	end := func(v string) *timestamppb.Timestamp {
+		t, err := time.Parse(time.RFC3339Nano, v)
+		if v == "" || err != nil {
+			return nil
+		}
+		return timestamppb.New(t)
+	}
+	return &interval.Interval{StartTime: end(a), EndTime: end(b)}
+}
+{{- end}}
 {{- if .Needs.Duration}}
 
 // durToStr / strToDur cross the interval boundary as Go duration strings.
@@ -231,6 +263,19 @@ func {{.LowerModelV}}ToUpdatePatch(merged *{{.PB}}) {{.ResPkg}}.UpdateInput {
 	{{- end}}
 	return patch
 }
+
+{{- if .OutputOnly}}
+
+// {{.LowerModelV}}ToOutputPatch maps the server-owned fields paths names onto
+// a patch, for UpdateOutputOnly: every other column is left as it is.
+func {{.LowerModelV}}ToOutputPatch(merged *{{.PB}}, paths []string) {{.ResPkg}}.UpdateInput {
+	var patch {{.ResPkg}}.UpdateInput
+	{{- range .OutputPatchAssigns}}
+	{{.}}
+	{{- end}}
+	return patch
+}
+{{- end}}
 
 // {{.LowerModelV}}FromRow re-hydrates the proto from a client row, decorating
 // reference names from their stored bare ids.

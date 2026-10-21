@@ -46,7 +46,27 @@ type TableOptions struct {
 	// schema, and does so without needing to edit anything in this tree.
 	//
 	// Off by default.
-	Outbox        bool `protobuf:"varint,1,opt,name=outbox,proto3" json:"outbox,omitempty"`
+	Outbox bool `protobuf:"varint,1,opt,name=outbox,proto3" json:"outbox,omitempty"`
+	// no_overlap forbids two rows that agree on `key` from covering overlapping
+	// time, enforced by the database itself rather than by whoever writes.
+	//
+	// A booking table is the case it exists for: "no two allocations of one
+	// resource may overlap" is a check-then-insert race in application code, and
+	// a lock that every writer has to remember to take. Declared here, it is a
+	// PostgreSQL exclusion constraint -- EXCLUDE USING gist (key WITH =,
+	// tstzrange(start, end, '[)') WITH &&) -- which settles the race in the one
+	// place every writer passes through. A write that would overlap fails with
+	// SQLSTATE 23P01, which the generated repositories report as a conflict.
+	//
+	// Ranges are half-open, so back-to-back rows (one ending as the next begins)
+	// do not overlap.
+	//
+	// Applied via:
+	//
+	//	option (store.v1.table) = {
+	//	  no_overlap: {key: ["resource"], start: "start_time", end: "end_time"}
+	//	};
+	NoOverlap     []*NoOverlap `protobuf:"bytes,2,rep,name=no_overlap,json=noOverlap,proto3" json:"no_overlap,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -88,13 +108,103 @@ func (x *TableOptions) GetOutbox() bool {
 	return false
 }
 
+func (x *TableOptions) GetNoOverlap() []*NoOverlap {
+	if x != nil {
+		return x.NoOverlap
+	}
+	return nil
+}
+
+// NoOverlap is one exclusion rule over a table's time ranges.
+type NoOverlap struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// key lists the fields (proto snake_case) rows must share to conflict, e.g.
+	// ["resource"]. Empty means every row conflicts with every other.
+	Key []string `protobuf:"bytes,1,rep,name=key,proto3" json:"key,omitempty"`
+	// start is the google.protobuf.Timestamp field where a row's range begins,
+	// inclusive.
+	Start string `protobuf:"bytes,2,opt,name=start,proto3" json:"start,omitempty"`
+	// end is the google.protobuf.Timestamp field where it ends, exclusive.
+	End string `protobuf:"bytes,3,opt,name=end,proto3" json:"end,omitempty"`
+	// name is the constraint's name. Generated as <table>_<key...>_no_overlap
+	// when empty.
+	Name          string `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NoOverlap) Reset() {
+	*x = NoOverlap{}
+	mi := &file_store_v1_table_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NoOverlap) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NoOverlap) ProtoMessage() {}
+
+func (x *NoOverlap) ProtoReflect() protoreflect.Message {
+	mi := &file_store_v1_table_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NoOverlap.ProtoReflect.Descriptor instead.
+func (*NoOverlap) Descriptor() ([]byte, []int) {
+	return file_store_v1_table_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *NoOverlap) GetKey() []string {
+	if x != nil {
+		return x.Key
+	}
+	return nil
+}
+
+func (x *NoOverlap) GetStart() string {
+	if x != nil {
+		return x.Start
+	}
+	return ""
+}
+
+func (x *NoOverlap) GetEnd() string {
+	if x != nil {
+		return x.End
+	}
+	return ""
+}
+
+func (x *NoOverlap) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
 var File_store_v1_table_proto protoreflect.FileDescriptor
 
 const file_store_v1_table_proto_rawDesc = "" +
 	"\n" +
-	"\x14store/v1/table.proto\x12\bstore.v1\"&\n" +
+	"\x14store/v1/table.proto\x12\bstore.v1\"Z\n" +
 	"\fTableOptions\x12\x16\n" +
-	"\x06outbox\x18\x01 \x01(\bR\x06outboxB\xa0\x01\n" +
+	"\x06outbox\x18\x01 \x01(\bR\x06outbox\x122\n" +
+	"\n" +
+	"no_overlap\x18\x02 \x03(\v2\x13.store.v1.NoOverlapR\tnoOverlap\"Y\n" +
+	"\tNoOverlap\x12\x10\n" +
+	"\x03key\x18\x01 \x03(\tR\x03key\x12\x14\n" +
+	"\x05start\x18\x02 \x01(\tR\x05start\x12\x10\n" +
+	"\x03end\x18\x03 \x01(\tR\x03end\x12\x12\n" +
+	"\x04name\x18\x04 \x01(\tR\x04nameB\xa0\x01\n" +
 	"\fcom.store.v1B\n" +
 	"TableProtoP\x01ZCgithub.com/the-protobuf-project/store/plugin/pb/storepbv1;storepbv1\xa2\x02\x03SXX\xaa\x02\bStore.V1\xca\x02\bStore\\V1\xe2\x02\x14Store\\V1\\GPBMetadata\xea\x02\tStore::V1b\x06proto3"
 
@@ -110,16 +220,18 @@ func file_store_v1_table_proto_rawDescGZIP() []byte {
 	return file_store_v1_table_proto_rawDescData
 }
 
-var file_store_v1_table_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
+var file_store_v1_table_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_store_v1_table_proto_goTypes = []any{
 	(*TableOptions)(nil), // 0: store.v1.TableOptions
+	(*NoOverlap)(nil),    // 1: store.v1.NoOverlap
 }
 var file_store_v1_table_proto_depIdxs = []int32{
-	0, // [0:0] is the sub-list for method output_type
-	0, // [0:0] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	1, // 0: store.v1.TableOptions.no_overlap:type_name -> store.v1.NoOverlap
+	1, // [1:1] is the sub-list for method output_type
+	1, // [1:1] is the sub-list for method input_type
+	1, // [1:1] is the sub-list for extension type_name
+	1, // [1:1] is the sub-list for extension extendee
+	0, // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_store_v1_table_proto_init() }
@@ -133,7 +245,7 @@ func file_store_v1_table_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_store_v1_table_proto_rawDesc), len(file_store_v1_table_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   1,
+			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
