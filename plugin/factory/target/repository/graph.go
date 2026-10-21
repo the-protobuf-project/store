@@ -148,6 +148,7 @@ func planEdges(pb *pbIndex, db *schema.Database, s *schema.Schema, t *schema.Tab
 				EnumLocal:   cc.Enum.LocalName,
 				Const:       cc.Enum.LocalName + naming.PascalGo(name),
 				OneofGoName: f.Oneof.GoName,
+				Arms:        oneofArmNames(f.Oneof),
 			}
 		}
 		out = append(out, e)

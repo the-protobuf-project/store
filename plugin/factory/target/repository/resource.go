@@ -79,6 +79,7 @@ type voCase struct {
 	EnumLocal   string         // model enum type, e.g. "AvailabilityExceptionSpanCase"
 	Const       string         // this member's constant, e.g. "AvailabilityExceptionSpanCaseWindow"
 	OneofGoName string         // proto oneof Go name, e.g. "Span"
+	Arms        []string       // every member's proto field name, scalar arms included
 }
 
 // patternSegment is one collection/{var} pair of a resource pattern.
@@ -99,6 +100,11 @@ type columnPlan struct {
 	PK      *schema.Column   // synthesized ULID id
 	Name    *schema.Column   // the AIP name column (IDENTIFIER)
 	Etag    *schema.Column   // optimistic-concurrency column, when present
+	// DeleteTime is the AIP-164 soft-delete column: an OUTPUT_ONLY
+	// google.protobuf.Timestamp named delete_time. When present, Delete marks
+	// the row instead of removing it, Undelete clears the mark, and Purge
+	// removes the row for good.
+	DeleteTime *schema.Column
 	Refs    []*schema.Column // resource-reference columns (FKModel set): name↔bare-id mapped
 	Mutable []*schema.Column // caller-settable data columns (the mask universe)
 	Autos   []*schema.Column // AutoCreate/AutoUpdate audit columns
@@ -164,7 +170,6 @@ func planResources(pb *pbIndex, db *schema.Database) (map[*schema.Table]*resourc
 	for _, r := range byTable {
 		r.VOs = planVOFields(pb, db, r)
 		r.Graph = planGraph(pb, db, r)
-		debugGraph(r)
 	}
 	return byTable, nil
 }
@@ -230,6 +235,7 @@ func planVOFields(pb *pbIndex, db *schema.Database, r *resource) []voField {
 				EnumLocal:   cc.Enum.LocalName,
 				Const:       cc.Enum.LocalName + naming.PascalGo(fieldName),
 				OneofGoName: f.Oneof.GoName,
+				Arms:        oneofArmNames(f.Oneof),
 			}
 		}
 		out = append(out, v)
@@ -310,6 +316,9 @@ func planColumns(t *schema.Table) columnPlan {
 			p.Name = c
 		case c.Name == "etag":
 			p.Etag = c
+		case c.Name == "delete_time" && isTimestamp(c) && outputOnly(c):
+			p.DeleteTime = c
+			p.Skipped = append(p.Skipped, c)
 		case c.FKModel != "":
 			p.Refs = append(p.Refs, c)
 			p.Mutable = append(p.Mutable, c)
@@ -351,4 +360,10 @@ func outputOnly(c *schema.Column) bool {
 		}
 	}
 	return false
+}
+
+// isTimestamp reports whether c is stored from a google.protobuf.Timestamp
+// field (TypeTimestamp also covers google.type.DateTime).
+func isTimestamp(c *schema.Column) bool {
+	return c.Source != nil && c.Source.Message() != nil && c.Source.Message().FullName() == "google.protobuf.Timestamp"
 }

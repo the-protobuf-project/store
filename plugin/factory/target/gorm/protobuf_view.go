@@ -516,6 +516,38 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 			cm.ToLines = append(cm.ToLines, toLines...)
 		}
 
+		// A stored oneof discriminator ("<oneof>_case") follows whichever arm
+		// the proto carries. Message arms used to set it in the repository's
+		// graph writes and scalar arms not at all, so a DURATION arm was stored
+		// with no case; deriving it here covers every arm on every write.
+		for _, o := range msg.Oneofs {
+			if o.Desc.IsSynthetic() {
+				continue
+			}
+			var cc *schema.Column
+			for _, c := range t.Columns {
+				if c.Name == string(o.Desc.Name())+"_case" && c.Enum != nil {
+					cc = c
+				}
+			}
+			if cc == nil {
+				continue
+			}
+			lines := []string{"switch pb.Get" + o.GoName + "().(type) {"}
+			for _, f := range o.Fields {
+				w := oneofWrap(imports, f)
+				label := naming.ScreamingSnake(string(f.Desc.Name()))
+				lines = append(lines, "case *"+w.wrapper+":",
+					"	c := "+cc.Enum.LocalName+naming.PascalGo(strings.ToLower(label)))
+				if cc.Optional {
+					lines = append(lines, "	m."+gormFieldName(cc)+" = &c")
+				} else {
+					lines = append(lines, "	m."+gormFieldName(cc)+" = c")
+				}
+			}
+			cm.FromLines = append(cm.FromLines, append(lines, "}")...)
+		}
+
 		// Relationalized sub-rows (value objects): their FK columns are
 		// synthesized, so they pair with the proto message field by name
 		// (id_document_id → id_document). ToProto renders the preloaded

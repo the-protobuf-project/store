@@ -233,7 +233,8 @@ func (r *GormMemberRepository) Update(ctx context.Context, in *orgv1.Member, pat
 		}
 		existing.Role = next.Role
 		existing.Duration = next.Duration
-		if repox.GroupTouched(paths, "window") || repox.GroupTouched(paths, "date_range") {
+		existing.SpanCase = next.SpanCase
+		if repox.GroupTouched(paths, "window") || repox.GroupTouched(paths, "date_range") || repox.GroupTouched(paths, "duration") {
 			if existing.WindowID != nil {
 				staleWindow = *existing.WindowID
 			}
@@ -242,7 +243,6 @@ func (r *GormMemberRepository) Update(ctx context.Context, in *orgv1.Member, pat
 				staleDateRange = *existing.DateRangeID
 			}
 			existing.DateRangeID = nil
-			existing.SpanCase = nil
 			if v := merged.GetWindow(); v != nil {
 				vo := orgv1gorm.TimeWindowFromProto(v)
 				vo.ID = repox.NewULID()

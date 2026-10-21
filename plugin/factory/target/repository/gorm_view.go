@@ -24,6 +24,9 @@ type gormResourceView struct {
 	HasEtag   bool
 	EtagField string // gorm model field, e.g. "Etag"; pointer-typed when EtagPtr
 	EtagPtr   bool
+	// EtagColumn is the etag column name, rewritten by soft delete and
+	// undelete as any other write would.
+	EtagColumn string
 
 	PKField string // gorm model field of the surrogate key, e.g. "ID"
 
@@ -98,6 +101,7 @@ func gormResourceViews(pb *pbIndex, db *schema.Database, s *schema.Schema, resou
 		}
 		if r.Cols.Etag != nil {
 			v.HasEtag, v.EtagField, v.EtagPtr = true, gormField(r.Cols.Etag), r.Cols.Etag.Optional
+			v.EtagColumn = r.Cols.Etag.Name
 		}
 		var formatParts, collections []string
 		for _, seg := range r.Segments {
@@ -135,6 +139,12 @@ func gormResourceViews(pb *pbIndex, db *schema.Database, s *schema.Schema, resou
 			v.RefsToProto = append(v.RefsToProto, ref.toProto)
 		}
 		v.MutableAssigns, v.MaskFields = mutableFragments(pb, db, resources, r)
+		if msg := pb.msgs[r.Table.Source.FullName()]; msg != nil {
+			for _, c := range oneofCases(pb, r.Table, msg) {
+				f := gormFieldName(c.Column.Name, false)
+				v.MutableAssigns = append(v.MutableAssigns, fmt.Sprintf("existing.%s = next.%s", f, f))
+			}
+		}
 		vg := voGormFragments(gormPkg, r)
 		gg := graphGormFragments(gormPkg, r)
 		v.HasVOs = len(r.VOs) > 0 || len(r.Graph) > 0

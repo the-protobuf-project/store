@@ -49,6 +49,10 @@ func graphqlFileView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg str
 		if r.Parented {
 			imports["fmt"] = ""
 		}
+		if r.SoftDelete {
+			imports["fmt"] = ""
+			imports["time"] = ""
+		}
 		if r.CreateTimeField != "" || r.UpdateTimeField != "" {
 			needTime = true
 		}

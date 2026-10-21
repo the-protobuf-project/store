@@ -115,6 +115,14 @@ func memberToCreateInput(in *orgv1.Member) membersql.CreateInput {
 	if v := durToStr(in.GetDuration()); v != "" {
 		ci.Duration = v
 	}
+	switch in.GetSpan().(type) {
+	case *orgv1.Member_Window:
+		ci.SpanCase = "WINDOW"
+	case *orgv1.Member_DateRange:
+		ci.SpanCase = "DATE_RANGE"
+	case *orgv1.Member_Duration:
+		ci.SpanCase = "DURATION"
+	}
 	return ci
 }
 
@@ -136,6 +144,16 @@ func memberToUpdatePatch(merged *orgv1.Member) membersql.UpdateInput {
 		patch.Duration = graphql.Value(v)
 	} else {
 		patch.Duration = graphql.Null[string]()
+	}
+	switch merged.GetSpan().(type) {
+	case *orgv1.Member_Window:
+		patch.SpanCase = graphql.Value("WINDOW")
+	case *orgv1.Member_DateRange:
+		patch.SpanCase = graphql.Value("DATE_RANGE")
+	case *orgv1.Member_Duration:
+		patch.SpanCase = graphql.Value("DURATION")
+	default:
+		patch.SpanCase = graphql.Null[string]()
 	}
 	return patch
 }

@@ -216,6 +216,11 @@ func (r *GraphQL{{.Model}}Repository) List(ctx context.Context, in repox.ListInp
 {{end}}
 
 func (r *GraphQL{{.Model}}Repository) list(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) ([]*{{.PB}}, string, error) {
+	{{- if .SoftDelete}}
+	if !in.ShowDeleted {
+		scope = append(scope, {{.DeleteTimePred}}.IsNull(true))
+	}
+	{{- end}}
 	conds, err := filterx.Parse(in.Filter)
 	if err != nil {
 		return nil, "", repox.MapFilterxErr(err)
@@ -331,8 +336,61 @@ func (r *GraphQL{{.Model}}Repository) Update(ctx context.Context, in *{{.PB}}, p
 	return r.get(ctx, id)
 }
 
+{{- if .SoftDelete}}
+// Delete soft-deletes the record addressed by its resource name: delete_time
+// is set, the row stays.
+func (r *GraphQL{{.Model}}Repository) Delete(ctx context.Context, name string) error {
+	ids, err := repox.SplitName(name, {{.CollectionsExpr}})
+	if err != nil {
+		return err
+	}
+	if h := r.Hooks.BeforeDelete; h != nil {
+		if err := h(ctx, name); err != nil {
+			return err
+		}
+	}
+	patch := {{.ResPkg}}.UpdateInput{ {{- .DeleteTimeInputField}}: graphql.Value(time.Now().UTC().Format(time.RFC3339Nano))}
+	{{- if .EtagInputField}}
+	patch.{{.EtagInputField}} = graphql.Value(repox.NewULID())
+	{{- end}}
+	if _, err := r.Svc.Mutation.{{.Domain}}.{{.Resource}}.UpdateIfMatch(ctx, ids[len(ids)-1], patch, {{.DeleteTimePred}}.IsNull(true)); err != nil {
+		if errors.Is(err, graphql.ErrConflict) {
+			return repox.ErrNotFound
+		}
+		return mapGraphQLErr(err)
+	}
+	return nil
+}
+
+// Undelete clears the soft-delete mark and returns the restored record.
+func (r *GraphQL{{.Model}}Repository) Undelete(ctx context.Context, name string) (*{{.PB}}, error) {
+	ids, err := repox.SplitName(name, {{.CollectionsExpr}})
+	if err != nil {
+		return nil, err
+	}
+	id := ids[len(ids)-1]
+	patch := {{.ResPkg}}.UpdateInput{ {{- .DeleteTimeInputField}}: graphql.Null[string]()}
+	{{- if .EtagInputField}}
+	patch.{{.EtagInputField}} = graphql.Value(repox.NewULID())
+	{{- end}}
+	if _, err := r.Svc.Mutation.{{.Domain}}.{{.Resource}}.UpdateIfMatch(ctx, id, patch, {{.DeleteTimePred}}.IsNull(false)); err != nil {
+		if !errors.Is(err, graphql.ErrConflict) {
+			return nil, mapGraphQLErr(err)
+		}
+		if _, err := r.get(ctx, id); err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: %s is not deleted", repox.ErrAlreadyExists, name)
+	}
+	return r.get(ctx, id)
+}
+
+// Purge removes the record addressed by its resource name for good.
+func (r *GraphQL{{.Model}}Repository) Purge(ctx context.Context, name string) error {
+{{- else}}
 // Delete removes the record addressed by its resource name.
 func (r *GraphQL{{.Model}}Repository) Delete(ctx context.Context, name string) error {
+{{- end}}
 	ids, err := repox.SplitName(name, {{.CollectionsExpr}})
 	if err != nil {
 		return err

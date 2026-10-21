@@ -72,12 +72,13 @@ func graphGormFragments(pkg string, r *resource) graphGorm {
 	// Updates replace a touched field's whole subtree. Oneof members that are
 	// value objects share one group, like the single-level path.
 	for _, grp := range graphGroups(r.Graph) {
-		var conds []string
+		var fields []string
 		for _, e := range grp {
-			conds = append(conds, fmt.Sprintf("repox.GroupTouched(paths, %q)", e.FieldName))
+			fields = append(fields, e.FieldName)
 		}
+		conds := []string{touchedAny(fields, grp[0].Case)}
 		var b strings.Builder
-		fmt.Fprintf(&b, "if %s {\n", strings.Join(conds, " || "))
+		fmt.Fprintf(&b, "if %s {\n", conds[0])
 		for _, e := range grp {
 			stale := "stale" + e.PBGoName
 			if e.Kind == edgeOne {
@@ -95,13 +96,8 @@ func graphGormFragments(pkg string, r *resource) graphGorm {
 				out.StaleDels = append(out.StaleDels, g.deleteManyVar(e, stale))
 			}
 		}
-		if c := grp[0].Case; c != nil {
-			if c.Column.Optional {
-				fmt.Fprintf(&b, "existing.%s = nil\n", c.Field)
-			} else {
-				fmt.Fprintf(&b, "existing.%s = \"\"\n", c.Field)
-			}
-		}
+		// The discriminator is not reset here: the row's mutable write-back
+		// already set it from the merged proto, whichever arm it carries.
 		for _, e := range grp {
 			if e.Kind == edgeOne {
 				b.WriteString(g.createOne(e, "merged", "existing", g.pkg, []string{"id"}) + "\n")

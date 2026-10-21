@@ -48,6 +48,9 @@ type ListInput struct {
 	PageToken string
 	OrderBy   string
 	Filter    string
+	// ShowDeleted includes soft-deleted records (AIP-164 show_deleted); it
+	// has no effect on resources without soft delete.
+	ShowDeleted bool
 }
 
 // MapGormErr translates GORM's storage errors onto the repox sentinels,

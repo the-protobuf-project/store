@@ -29,6 +29,10 @@ type gqlResourceView struct {
 	Row         string // qualified row type, e.g. "membersql.OrganisationMembers"
 	ParentPred  string // parent scope predicate field, e.g. "membersql.OrganisationId"
 	EtagPred    string // etag predicate, e.g. "membersql.Etag" (HasEtag only)
+	// DeleteTimePred and DeleteTimeInputField address the soft-delete column
+	// (SoftDelete only), e.g. "membersql.DeleteTime" and "DeleteTime".
+	DeleteTimePred       string
+	DeleteTimeInputField string
 	LowerModelV string // camelCase model for converter func names
 
 	ParentInputField string // CreateInput parent FK field, e.g. "OrganisationId"
@@ -127,6 +131,10 @@ func gqlResourceViews(pb *pbIndex, db *schema.Database, s *schema.Schema, resour
 					fmt.Sprintf("ci.%s = parentIDs[%d]", export(camel(a.Column)), a.Index))
 			}
 		}
+		if c := r.Cols.DeleteTime; c != nil {
+			v.DeleteTimePred = v.ResPkg + "." + export(camel(c.Name))
+			v.DeleteTimeInputField = export(camel(c.Name))
+		}
 		if v.HasEtag {
 			v.EtagPred = v.ResPkg + ".Etag"
 			v.EtagInputField = export(camel(r.Cols.Etag.Name))
@@ -144,6 +152,12 @@ func gqlResourceViews(pb *pbIndex, db *schema.Database, s *schema.Schema, resour
 		}
 		var rn helperNeeds
 		v.InputAssigns, v.PatchAssigns, v.RowToProto, rn = gqlColumnFragments(pb, db, resources, r)
+		if msg := pb.msgs[r.Table.Source.FullName()]; msg != nil {
+			for _, c := range oneofCases(pb, r.Table, msg) {
+				v.InputAssigns = append(v.InputAssigns, gqlCaseInput("in", c))
+				v.PatchAssigns = append(v.PatchAssigns, gqlCasePatch(c))
+			}
+		}
 		v.NeedsHelpers = rn
 		needs.or(rn)
 		vp := gqlVOFragments(pb, s, r)
@@ -221,6 +235,9 @@ func gqlNodeConvs(pb *pbIndex, db *schema.Database, s *schema.Schema, resources 
 						needs.or(n)
 						conv.InputAssigns = append(conv.InputAssigns, in...)
 						conv.RowToProto = append(conv.RowToProto, row...)
+					}
+					for _, c := range oneofCases(pb, t, msg) {
+						conv.InputAssigns = append(conv.InputAssigns, gqlCaseInput("in", c))
 					}
 					convs = append(convs, conv)
 				}
@@ -346,7 +363,17 @@ func gqlColumnFragments(pb *pbIndex, db *schema.Database, resources map[*schema.
 				v = "repox.Deref(" + f + ")"
 			}
 			addRow(fmt.Sprintf("out.%s = %s(%s_value[%q+%s])", pbGoField(pb, c), pbT, pbT, prefix, v))
+			continue
 		}
+		// Any other stored scalar (a delete_time, a server-computed count) is
+		// read back the way a mutable column of its type is, and never
+		// written: only the row fragment is kept.
+		_, _, row, n, ok := gqlScalarFragments(pb, c, "row."+export(camel(c.Name)))
+		if !ok {
+			continue
+		}
+		needs.or(n)
+		rows = append(rows, row...)
 	}
 	return inputs, patches, rows, needs
 }
@@ -421,10 +448,25 @@ func gqlScalarFragments(pb *pbIndex, c *schema.Column, rowField string) (inputs,
 	acc := "in.Get" + gof + "()"
 	mAcc := "merged.Get" + gof + "()"
 	outField := "out." + gof
+	// A proto3 `optional` scalar carries its presence in the Go field itself (a
+	// pointer), so a NULL column reads back as absent and an absent field
+	// clears the column, where a plain scalar compares against its zero value.
+	f := pbFieldOf(pb, c)
+	presence := c.Optional && f != nil && f.Message == nil && f.Oneof != nil && f.Oneof.Desc.IsSynthetic()
+	patch := func(expr, zero string) string {
+		if !presence {
+			return gqlPatch(field, expr, zero, c.Optional)
+		}
+		return fmt.Sprintf("if merged.%s != nil {\n\t\tpatch.%s = graphql.Value(%s)\n\t} else {\n\t\tpatch.%s = graphql.Null[%s]()\n\t}",
+			gof, field, expr, field, patchType(zero))
+	}
 	// assignRow renders the row->proto assignment. A oneof member has no struct
 	// field of its own, so it is boxed in its wrapper and guarded: an absent
 	// column must leave the oneof unset rather than select an arm holding nil.
 	assignRow := func(expr string) string {
+		if presence {
+			return fmt.Sprintf("if %s != nil {\n\t\tv := %s\n\t\t%s = &v\n\t}", rowField, expr, outField)
+		}
 		oneof, wrapper, isOneof := gqlOneofOut(pb, c)
 		if !isOneof {
 			return fmt.Sprintf("%s = %s", outField, expr)
@@ -448,7 +490,7 @@ func gqlScalarFragments(pb *pbIndex, c *schema.Column, rowField string) (inputs,
 	}
 
 	// google.protobuf wrapper fields: nil-able scalars on both sides.
-	if f := pbFieldOf(pb, c); f != nil && f.Message != nil && !c.List {
+	if f != nil && f.Message != nil && !c.List {
 		if in2, p2, r2, handled := gqlWrapperFragments(string(f.Message.Desc.FullName()), field, gof, rowField); handled {
 			if !c.Optional {
 				return nil, nil, nil, needs, false // a NOT NULL wrapper column loses absence: Tier-2
@@ -459,7 +501,7 @@ func gqlScalarFragments(pb *pbIndex, c *schema.Column, rowField string) (inputs,
 	}
 	set := func(inExpr, patchExpr, rowExpr, zero string) {
 		inputs = append(inputs, fmt.Sprintf("ci.%s = %s", field, inExpr))
-		patches = append(patches, gqlPatch(field, patchExpr, zero, c.Optional))
+		patches = append(patches, patch(patchExpr, zero))
 		rows = append(rows, assignRow(rowExpr))
 	}
 
@@ -492,20 +534,31 @@ func gqlScalarFragments(pb *pbIndex, c *schema.Column, rowField string) (inputs,
 			return fmt.Sprintf("strings.TrimPrefix(%s.String(), %q)", a, prefix)
 		}
 		inputs = append(inputs, fmt.Sprintf("if v := %s; v != 0 {\n\t\tci.%s = %s\n\t}", acc, field, toStr(acc)))
-		patches = append(patches, gqlPatch(field, toStr(mAcc), fmt.Sprintf("%q", "UNSPECIFIED"), c.Optional))
-		rows = append(rows, assignRow(fmt.Sprintf("%s(%s_value[%q+%s])", pbT, pbT, prefix, rowVal)))
+		patches = append(patches, patch(toStr(mAcc), fmt.Sprintf("%q", "UNSPECIFIED")))
+		// The stored label is the value name without the enum's type prefix.
+		// An enum whose values carry no such prefix (google.type.DayOfWeek's
+		// MONDAY, not DAY_OF_WEEK_MONDAY) is looked up by the bare label.
+		readPrefix := prefix
+		if f := pbFieldOf(pb, c); f != nil && f.Enum != nil && !enumValuesPrefixed(f.Enum, prefix) {
+			readPrefix = ""
+		}
+		if readPrefix == "" {
+			rows = append(rows, assignRow(fmt.Sprintf("%s(%s_value[%s])", pbT, pbT, rowVal)))
+		} else {
+			rows = append(rows, assignRow(fmt.Sprintf("%s(%s_value[%q+%s])", pbT, pbT, readPrefix, rowVal)))
+		}
 	case schema.TypeInt32, schema.TypeUint32:
 		set(fmt.Sprintf("int32(%s)", acc), fmt.Sprintf("int32(%s)", mAcc), fmt.Sprintf("%s(%s)", pbCast(pb, c), rowVal), "0")
 	case schema.TypeInt64, schema.TypeUint64:
 		inputs = append(inputs, fmt.Sprintf("ci.%s = graphql.Int64(%s)", field, acc))
-		patches = append(patches, gqlPatch(field, fmt.Sprintf("graphql.Int64(%s)", mAcc), "graphql.Int64(0)", c.Optional))
+		patches = append(patches, patch(fmt.Sprintf("graphql.Int64(%s)", mAcc), "graphql.Int64(0)"))
 		rows = append(rows, assignRow(fmt.Sprintf("%s(%s)", pbCast(pb, c), rowVal)))
 	case schema.TypeFloat, schema.TypeDouble:
 		set(acc, mAcc, rowVal, "0.0")
 	case schema.TypeDecimal:
 		needs.Decimal = true
 		inputs = append(inputs, fmt.Sprintf("ci.%s = bigdec(%s)", field, acc))
-		patches = append(patches, gqlPatch(field, fmt.Sprintf("bigdec(%s)", mAcc), `graphql.Bigdecimal("")`, c.Optional))
+		patches = append(patches, patch(fmt.Sprintf("bigdec(%s)", mAcc), `graphql.Bigdecimal("")`))
 		rows = append(rows, assignRow(fmt.Sprintf("fromBigdec(%s)", rowVal)))
 	case schema.TypeBool:
 		set(acc, mAcc, rowVal, "false")
@@ -520,7 +573,7 @@ func gqlScalarFragments(pb *pbIndex, c *schema.Column, rowField string) (inputs,
 			// denotes; same mapping as the gorm converter.
 			needs.DT = true
 			inputs = append(inputs, fmt.Sprintf("if v := dtToStr(%s); v != \"\" {\n\t\tci.%s = v\n\t}", acc, field))
-			patches = append(patches, gqlPatch(field, fmt.Sprintf("dtToStr(%s)", mAcc), `""`, c.Optional))
+			patches = append(patches, patch(fmt.Sprintf("dtToStr(%s)", mAcc), `""`))
 			rows = append(rows, assignRow(fmt.Sprintf("strToDt(%s)", rowVal)))
 			return inputs, patches, rows, needs, true
 		}
@@ -529,7 +582,7 @@ func gqlScalarFragments(pb *pbIndex, c *schema.Column, rowField string) (inputs,
 		}
 		needs.Ts = true
 		inputs = append(inputs, fmt.Sprintf("ci.%s = tsToStr(%s)", field, acc))
-		patches = append(patches, gqlPatch(field, fmt.Sprintf("tsToStr(%s)", mAcc), `""`, c.Optional))
+		patches = append(patches, patch(fmt.Sprintf("tsToStr(%s)", mAcc), `""`))
 		rows = append(rows, assignRow(fmt.Sprintf("strToTs(%s)", rowVal)))
 	case schema.TypeDate:
 		// protokit maps more than one well-known type onto this schema type
@@ -542,7 +595,7 @@ func gqlScalarFragments(pb *pbIndex, c *schema.Column, rowField string) (inputs,
 		}
 		needs.Date = true
 		inputs = append(inputs, fmt.Sprintf("if v := dateToStr(%s); v != \"\" {\n\t\tci.%s = v\n\t}", acc, field))
-		patches = append(patches, gqlPatch(field, fmt.Sprintf("dateToStr(%s)", mAcc), `""`, c.Optional))
+		patches = append(patches, patch(fmt.Sprintf("dateToStr(%s)", mAcc), `""`))
 		rows = append(rows, assignRow(fmt.Sprintf("strToDate(%s)", rowVal)))
 	case schema.TypeDuration:
 		// protokit maps more than one well-known type onto this schema type
@@ -555,7 +608,7 @@ func gqlScalarFragments(pb *pbIndex, c *schema.Column, rowField string) (inputs,
 		}
 		needs.Duration = true
 		inputs = append(inputs, fmt.Sprintf("if v := durToStr(%s); v != \"\" {\n\t\tci.%s = v\n\t}", acc, field))
-		patches = append(patches, gqlPatch(field, fmt.Sprintf("durToStr(%s)", mAcc), `""`, c.Optional))
+		patches = append(patches, patch(fmt.Sprintf("durToStr(%s)", mAcc), `""`))
 		rows = append(rows, assignRow(fmt.Sprintf("strToDur(%s)", rowVal)))
 	case schema.TypeJSON:
 		// TypeJSON also covers a proto map field, which is a distinct Go type
@@ -658,4 +711,16 @@ func pbCast(pb *pbIndex, c *schema.Column) string {
 	default:
 		return "int32"
 	}
+}
+
+// enumValuesPrefixed reports whether e's non-zero values are spelled with
+// prefix (MEMBER_ROLE_ADMIN for MemberRole) rather than bare (MONDAY).
+func enumValuesPrefixed(e *protogen.Enum, prefix string) bool {
+	for _, v := range e.Values {
+		if v.Desc.Number() == 0 {
+			continue
+		}
+		return strings.HasPrefix(string(v.Desc.Name()), prefix)
+	}
+	return true
 }

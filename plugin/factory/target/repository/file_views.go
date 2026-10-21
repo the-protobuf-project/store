@@ -64,6 +64,10 @@ func gormFileView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 		if r.Parented {
 			imports["fmt"] = ""
 		}
+		if r.SoftDelete {
+			imports["fmt"] = ""
+			imports["time"] = ""
+		}
 		for _, cp := range r.CrossVOPkgs {
 			imports[dbGormModule(db)+"/"+db.Name+"/"+cp] = ""
 		}

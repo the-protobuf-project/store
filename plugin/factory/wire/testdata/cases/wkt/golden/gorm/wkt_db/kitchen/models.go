@@ -34,9 +34,9 @@ type Sink struct {
 	// int64 → BIGINT.
 	Count64 *int64 `gorm:"column:count64" json:"count64,omitempty"`
 	// float → REAL.
-	Ratio *float32 `gorm:"column:ratio" json:"ratio,omitempty"`
+	Ratio *float32 `gorm:"column:ratio;type:real" json:"ratio,omitempty"`
 	// double → DOUBLE PRECISION.
-	Precise *float64 `gorm:"column:precise" json:"precise,omitempty"`
+	Precise *float64 `gorm:"column:precise;type:double precision" json:"precise,omitempty"`
 	// bytes → BYTEA.
 	Blob []byte `gorm:"column:blob" json:"blob,omitempty"`
 	// Timestamp → TIMESTAMPTZ.

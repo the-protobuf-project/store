@@ -236,12 +236,11 @@ func (r *GraphQLMemberRepository) Update(ctx context.Context, in *orgv1.Member, 
 	patch := memberToUpdatePatch(merged)
 	patch.Etag = graphql.Value(repox.NewULID())
 	patch.UpdateTime = graphql.Value(tsToStr(timestamppb.New(time.Now().UTC())))
-	if repox.GroupTouched(paths, "window") || repox.GroupTouched(paths, "date_range") {
+	if repox.GroupTouched(paths, "window") || repox.GroupTouched(paths, "date_range") || repox.GroupTouched(paths, "duration") {
 		staleWindow = repox.Deref(row.WindowId)
 		patch.WindowId = graphql.Null[string]()
 		staleDateRange = repox.Deref(row.DateRangeId)
 		patch.DateRangeId = graphql.Null[string]()
-		patch.SpanCase = graphql.Null[string]()
 		if v := merged.GetWindow(); v != nil {
 			vi := orgV1TimeWindowToCreateInput(v)
 			vi.Id = repox.NewULID()

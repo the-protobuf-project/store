@@ -152,12 +152,12 @@ func voWriteFragment(pkg string, v voField, src, dst string) string {
 // merged record carries. Stale rows are deleted after the resource row update
 // (see voStaleDelete), so the foreign keys never dangle.
 func voUpdateFragment(pkg string, grp []voField) string {
-	var conds []string
+	var fields []string
 	for _, v := range grp {
-		conds = append(conds, fmt.Sprintf("repox.GroupTouched(paths, %q)", v.FieldName))
+		fields = append(fields, v.FieldName)
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "if %s {\n", strings.Join(conds, " || "))
+	fmt.Fprintf(&b, "if %s {\n", touchedAny(fields, grp[0].Case))
 	for _, v := range grp {
 		if v.Col.Optional {
 			fmt.Fprintf(&b, "\t\t\tif existing.%s != nil {\n\t\t\t\tstale%s = *existing.%s\n\t\t\t}\n", v.FKField, v.PBGoName, v.FKField)
@@ -166,13 +166,8 @@ func voUpdateFragment(pkg string, grp []voField) string {
 			fmt.Fprintf(&b, "\t\t\tstale%s = existing.%s\n", v.PBGoName, v.FKField)
 		}
 	}
-	if c := grp[0].Case; c != nil {
-		if c.Column.Optional {
-			fmt.Fprintf(&b, "\t\t\texisting.%s = nil\n", c.Field)
-		} else {
-			fmt.Fprintf(&b, "\t\t\texisting.%s = \"\"\n", c.Field)
-		}
-	}
+	// The discriminator is left to the mutable write-back, which set it from
+	// the merged proto whichever arm it carries.
 	for _, v := range grp {
 		frag := voWriteFragment(pkg, v, "merged", "existing")
 		b.WriteString("\t\t\t" + strings.ReplaceAll(frag, "\n\t\t", "\n\t\t\t") + "\n")

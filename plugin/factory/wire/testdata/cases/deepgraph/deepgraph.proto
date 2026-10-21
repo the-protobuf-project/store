@@ -1,0 +1,164 @@
+syntax = "proto3";
+
+package deep.v1;
+
+import "entity/v1/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "example.com/test/gen;deepv1";
+option java_multiple_files = true;
+option java_outer_classname = "DeepgraphProto";
+option java_package = "com.deep.v1";
+
+// Zone is keyed by its own field, not a minted id: a natural-key value object,
+// shared by every agenda in the zone (upserted, never deleted with an owner).
+message Zone {
+  // IANA name, e.g. "Asia/Kolkata".
+  string id = 1 [(google.api.field_behavior) = REQUIRED];
+
+  // Database version.
+  string version = 2 [(google.api.field_behavior) = OPTIONAL];
+}
+
+// Moment is a keyed value object used singly at several depths.
+message Moment {
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
+
+  // The instant.
+  google.protobuf.Timestamp at = 1 [(google.api.field_behavior) = REQUIRED];
+}
+
+// Slot is a has-many child carrying singular value objects of its own.
+message Slot {
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
+
+  // When the slot opens.
+  Moment start = 1 [(google.api.field_behavior) = REQUIRED];
+
+  // When it closes.
+  Moment end = 2 [(google.api.field_behavior) = OPTIONAL];
+
+  // Recurrence rule.
+  string rule = 3 [(google.api.field_behavior) = OPTIONAL];
+}
+
+// Note is a plain has-many child.
+message Note {
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
+
+  // Text.
+  string text = 1 [(google.api.field_behavior) = REQUIRED];
+
+  // Weight, where an explicit zero differs from none at all: a proto3
+  // optional scalar, read back and patched through its presence.
+  optional double weight = 2 [(google.api.field_behavior) = OPTIONAL];
+}
+
+// Agenda exercises a natural-key value object and has-many children with
+// nested value objects.
+message Agenda {
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
+  option (google.api.resource) = {
+    type: "deep.v1/Agenda"
+    pattern: "agendas/{agenda}"
+    singular: "agenda"
+    plural: "agendas"
+  };
+
+  // Resource name.
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  // Time zone, shared.
+  Zone zone = 2 [(google.api.field_behavior) = OPTIONAL];
+
+  // Ordered slots.
+  repeated Slot slots = 3 [(google.api.field_behavior) = OPTIONAL];
+
+  // Notes.
+  repeated Note notes = 4 [(google.api.field_behavior) = OPTIONAL];
+
+  // Etag.
+  string etag = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // When the agenda was soft-deleted (AIP-164); unset while it is live.
+  google.protobuf.Timestamp delete_time = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// Day is a has-many child two levels down.
+message Day {
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
+
+  // Weekday code.
+  string code = 1 [(google.api.field_behavior) = REQUIRED];
+}
+
+// Rule is a singular value object with a has-many child and a oneof member
+// value object of its own.
+message Rule {
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
+
+  // Frequency.
+  string frequency = 1 [(google.api.field_behavior) = REQUIRED];
+
+  // Days.
+  repeated Day days = 2 [(google.api.field_behavior) = OPTIONAL];
+
+  // How the rule ends.
+  oneof bound {
+    // Last occurrence.
+    Moment until = 3;
+
+    // Occurrence count.
+    int32 count = 4;
+  }
+}
+
+// Tag is held in two lists by one message: ambiguous, so never generated.
+message Tag {
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
+
+  // Label.
+  string label = 1 [(google.api.field_behavior) = REQUIRED];
+}
+
+// Meeting exercises deep singular graphs, a oneof deep edge and an ambiguous
+// pair of lists.
+message Meeting {
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
+  option (google.api.resource) = {
+    type: "deep.v1/Meeting"
+    pattern: "agendas/{agenda}/meetings/{meeting}"
+    singular: "meeting"
+    plural: "meetings"
+  };
+
+  // Resource name.
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  // Start.
+  Moment start = 2 [(google.api.field_behavior) = REQUIRED];
+
+  // How the meeting ends.
+  oneof ends {
+    // End instant.
+    Moment end = 3;
+
+    // Length.
+    google.protobuf.Duration duration = 4;
+  }
+
+  // Recurrence.
+  Rule rule = 5 [(google.api.field_behavior) = OPTIONAL];
+
+  // Two lists of one type: rows could not be told apart.
+  repeated Tag labels = 6 [(google.api.field_behavior) = OPTIONAL];
+
+  // The second list.
+  repeated Tag topics = 7 [(google.api.field_behavior) = OPTIONAL];
+
+  // Etag.
+  string etag = 8 [(google.api.field_behavior) = OUTPUT_ONLY];
+}

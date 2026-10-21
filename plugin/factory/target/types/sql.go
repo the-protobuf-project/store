@@ -87,10 +87,14 @@ func GormGoType(pgType string) string {
 // tag value needed when GORM's Go-type default disagrees with the canonical
 // column type: time.Time defaults to timestamptz (so a TIMESTAMP/DATE/TIME loses
 // its kind), and json.RawMessage ([]byte) defaults to bytea (clashing with the
-// Prisma/SQL jsonb). Keywords absent here need no override.
+// Prisma/SQL jsonb), and float32/float64 default to decimal (a numeric column,
+// which GraphQL engines expose as an arbitrary-precision string rather than a
+// float). Keywords absent here need no override.
 var gormColumnType = map[string]string{
 	"TIMESTAMPTZ": "timestamptz", "TIMESTAMP": "timestamp",
 	"DATE": "date", "TIME": "time", "TIMETZ": "timetz",
+	"REAL": "real", "FLOAT4": "real",
+	"DOUBLE PRECISION": "double precision", "FLOAT8": "double precision",
 	"JSONB": "jsonb", "JSON": "json",
 }
 

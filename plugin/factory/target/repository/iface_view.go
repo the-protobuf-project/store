@@ -27,6 +27,7 @@ type resourceView struct {
 	PB          string // qualified proto type, e.g. "orgpbv1.Organisation"
 	Parented    bool   // Create/List take a parent resource name
 	Pattern     string // resource pattern, for doc comments
+	SoftDelete  bool   // AIP-164: Delete marks delete_time; Undelete and Purge exist
 }
 
 // schemaPkgView is the template data for one schema's repository.go.
@@ -76,6 +77,7 @@ func schemaView(pb *pbIndex, db *schema.Database, s *schema.Schema, resources ma
 			PB:          pkgName + "." + msg.GoIdent.GoName,
 			Parented:    r.Parent != nil || len(r.Segments) > 1,
 			Pattern:     r.Pattern,
+			SoftDelete:  r.Cols.DeleteTime != nil,
 		})
 	}
 	return &schemaPkgView{

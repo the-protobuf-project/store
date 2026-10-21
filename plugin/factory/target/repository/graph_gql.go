@@ -113,11 +113,11 @@ func graphGQLFragments(pb *pbIndex, r *resource) graphGQL {
 	}
 
 	for _, grp := range graphGroups(r.Graph) {
-		var conds []string
+		var fields []string
 		for _, e := range grp {
-			conds = append(conds, fmt.Sprintf("repox.GroupTouched(paths, %q)", e.FieldName))
+			fields = append(fields, e.FieldName)
 		}
-		touched := strings.Join(conds, " || ")
+		touched := touchedAny(fields, grp[0].Case)
 		var b strings.Builder
 		fmt.Fprintf(&b, "if %s {\n", touched)
 		for _, e := range grp {
@@ -137,9 +137,7 @@ func graphGQLFragments(pb *pbIndex, r *resource) graphGQL {
 				fmt.Fprintf(&b, "for _, oid := range %s {\n%s\n}\n", stale, g.deleteNode(e.Child, "oid", "atx", "return nil, "))
 			}
 		}
-		if c := grp[0].Case; c != nil {
-			fmt.Fprintf(&b, "patch.%s = graphql.Null[string]()\n", caseInputField(voField{Case: c}))
-		}
+		// The discriminator is already on the patch, from the merged proto.
 		for _, e := range grp {
 			if e.Kind == edgeOne {
 				b.WriteString(g.createOne(e, "merged", "patch", true, []string{"id"}, "utx") + "\n")

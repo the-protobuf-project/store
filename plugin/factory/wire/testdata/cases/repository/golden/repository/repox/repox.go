@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
@@ -55,6 +56,9 @@ type ListInput struct {
 	PageToken string
 	OrderBy   string
 	Filter    string
+	// ShowDeleted includes soft-deleted records (AIP-164 show_deleted); it
+	// has no effect on resources without soft delete.
+	ShowDeleted bool
 }
 
 // MapGormErr translates GORM's storage errors onto the repox sentinels,
@@ -153,19 +157,56 @@ func Deref[T any](p *T) T {
 	return *p
 }
 
+// ulidMu guards the monotonic state NewULID carries between calls.
+var (
+	ulidMu       sync.Mutex
+	ulidLastMs   uint64
+	ulidLastRand [10]byte
+)
+
 // crockford is the ULID alphabet (Crockford base32, no I/L/O/U).
 const crockford = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 // NewULID mints a 26-character ULID: 48 bits of millisecond timestamp and 80
-// bits of crypto randomness, Crockford-base32 encoded — the same shape and
-// ordering guarantees as the canonical spec, with no external dependency.
+// bits of crypto randomness, Crockford-base32 encoded, with no external
+// dependency.
+//
+// Monotonic within the process, per the spec's monotonicity section: a ULID
+// minted in the same millisecond as the previous one increments its random
+// part instead of drawing a fresh one. Keys therefore sort in the order they
+// were minted, which is what lets a repeated field stored as child rows be
+// read back in the order it was written.
 func NewULID() string {
-	var b [16]byte
+	ulidMu.Lock()
 	ms := uint64(time.Now().UnixMilli())
-	b[0], b[1], b[2], b[3], b[4], b[5] = byte(ms>>40), byte(ms>>32), byte(ms>>24), byte(ms>>16), byte(ms>>8), byte(ms)
-	if _, err := rand.Read(b[6:]); err != nil {
+	if ms <= ulidLastMs {
+		ms = ulidLastMs
+		// Increment the 80-bit random part; on the (astronomically unlikely)
+		// overflow, move to the next millisecond.
+		i := 9
+		for ; i >= 0; i-- {
+			ulidLastRand[i]++
+			if ulidLastRand[i] != 0 {
+				break
+			}
+		}
+		if i < 0 {
+			ms++
+			if _, err := rand.Read(ulidLastRand[:]); err != nil {
+				ulidMu.Unlock()
+				panic(fmt.Sprintf("repox: reading crypto/rand: %v", err))
+			}
+		}
+	} else if _, err := rand.Read(ulidLastRand[:]); err != nil {
+		ulidMu.Unlock()
 		panic(fmt.Sprintf("repox: reading crypto/rand: %v", err))
 	}
+	ulidLastMs = ms
+	var b [16]byte
+	b[0], b[1], b[2], b[3], b[4], b[5] = byte(ms>>40), byte(ms>>32), byte(ms>>24), byte(ms>>16), byte(ms>>8), byte(ms)
+	copy(b[6:], ulidLastRand[:])
+	ulidMu.Unlock()
+
 	// Encode the 128 bits as 26 base32 chars, most significant first: char c
 	// covers bits [5c, 5c+5) of a virtual 130-bit value whose top two bits are
 	// zero (so the first char is always 0-7, per the canonical spec).

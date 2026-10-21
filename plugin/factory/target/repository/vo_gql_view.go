@@ -193,12 +193,12 @@ func gqlVODeleteCleanup(g gqlVO) string {
 // whichever member the merged record carries. Stale rows are deleted after the
 // resource mutation succeeds.
 func gqlVOUpdate(grp []gqlVO) string {
-	var conds []string
+	var fields []string
 	for _, g := range grp {
-		conds = append(conds, fmt.Sprintf("repox.GroupTouched(paths, %q)", g.vo.FieldName))
+		fields = append(fields, g.vo.FieldName)
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "if %s {\n", strings.Join(conds, " || "))
+	fmt.Fprintf(&b, "if %s {\n", touchedAny(fields, grp[0].vo.Case))
 	for _, g := range grp {
 		if g.vo.Col.Optional {
 			fmt.Fprintf(&b, "\t\tstale%s = repox.Deref(row.%s)\n", g.vo.PBGoName, g.FKInput)
@@ -207,11 +207,7 @@ func gqlVOUpdate(grp []gqlVO) string {
 			fmt.Fprintf(&b, "\t\tstale%s = row.%s\n", g.vo.PBGoName, g.FKInput)
 		}
 	}
-	if c := grp[0].vo.Case; c != nil {
-		if c.Column.Optional {
-			fmt.Fprintf(&b, "\t\tpatch.%s = graphql.Null[string]()\n", caseInputField(grp[0].vo))
-		}
-	}
+	// The discriminator is already on the patch, from the merged proto.
 	for _, g := range grp {
 		fmt.Fprintf(&b, "\t\tif v := merged.Get%s(); v != nil {\n", g.vo.PBGoName)
 		fmt.Fprintf(&b, "\t\t\tvi := %sToCreateInput(v)\n", g.ConvName)
@@ -285,6 +281,11 @@ func gqlVOConvs(pb *pbIndex, db *schema.Database, s *schema.Schema, resources ma
 				needs.or(n)
 				conv.InputAssigns = append(conv.InputAssigns, in...)
 				conv.RowToProto = append(conv.RowToProto, row...)
+			}
+			if msg := pb.msgs[v.Target.Source.FullName()]; msg != nil {
+				for _, c := range oneofCases(pb, v.Target, msg) {
+					conv.InputAssigns = append(conv.InputAssigns, gqlCaseInput("in", c))
+				}
 			}
 			out = append(out, conv)
 		}

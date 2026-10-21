@@ -54,6 +54,17 @@ func AudioFromProto(pb *oneofv1.Audio) *Audio {
 	m.UploadPath = toPtr(pb.GetUploadPath())
 	m.LivePipelineFilePath = toPtr(pb.GetLivePipelineFilePath())
 	m.SampleRate = toPtr(pb.GetSampleRate())
+	switch pb.GetInput().(type) {
+	case *oneofv1.Audio_AudioData:
+		c := AudioInputCaseAudioData
+		m.InputCase = &c
+	case *oneofv1.Audio_UploadPath:
+		c := AudioInputCaseUploadPath
+		m.InputCase = &c
+	case *oneofv1.Audio_LivePipelineFilePath:
+		c := AudioInputCaseLivePipelineFilePath
+		m.InputCase = &c
+	}
 	return m
 }
 
@@ -85,6 +96,14 @@ func BookingFromProto(pb *oneofv1.Booking) *Booking {
 	m.Name = pb.GetName()
 	m.End = tsToGo(pb.GetEnd())
 	m.Duration = durToGo(pb.GetDuration())
+	switch pb.GetEndForm().(type) {
+	case *oneofv1.Booking_End:
+		c := BookingEndFormCaseEnd
+		m.EndFormCase = &c
+	case *oneofv1.Booking_Duration:
+		c := BookingEndFormCaseDuration
+		m.EndFormCase = &c
+	}
 	return m
 }
 

@@ -23,7 +23,7 @@ type Reading struct {
 	Station string `gorm:"column:station;not null" json:"station" validate:"required" telemetry:"trace:reading.station"`
 	// Condition carries an explicit attribute name override.
 	Condition    *string  `gorm:"column:condition" json:"condition,omitempty" telemetry:"trace:weather.condition"`
-	TemperatureC *float64 `gorm:"column:temperature_c" json:"temperature_c,omitempty"`
+	TemperatureC *float64 `gorm:"column:temperature_c;type:double precision" json:"temperature_c,omitempty"`
 }
 
 func (*Reading) TableName() string { return "weather.readings" }
