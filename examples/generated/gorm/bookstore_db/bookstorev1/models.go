@@ -59,13 +59,13 @@ func (*Author) TableName() string { return "bookstore_v1.authors" }
 // Book is a resource nested under Author. Inferred table: bookstore_v1.books.
 type Book struct {
 	// Unique identifier for the record.
-	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	ID string `gorm:"column:id;primaryKey;not null;index:idx_books_author_id_id,priority:2" json:"id"`
 	// name: IDENTIFIER → PRIMARY KEY, VARCHAR(255).
 	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
 	// title: REQUIRED NOT NULL; max_length caps the VARCHAR provider-neutrally.
 	Title string `gorm:"column:title;not null" json:"title" validate:"required"`
 	// author_id references Author; store infers the FOREIGN KEY, aligns the column type with the referenced PK (CHAR(26) ULID), and applies CASCADE.
-	AuthorID string  `gorm:"column:author_id;not null;index:idx_books_author_year,priority:1" json:"author_id" validate:"required"`
+	AuthorID string  `gorm:"column:author_id;not null;index:idx_books_author_year,priority:1;index:idx_books_author_id_id,priority:1" json:"author_id" validate:"required"`
 	Author   *Author `gorm:"foreignKey:AuthorID;constraint:OnDelete:CASCADE" json:"author,omitempty"`
 	// isbn must be globally unique; custom fixed-width type.
 	ISBN *string `gorm:"column:isbn;uniqueIndex" json:"isbn,omitempty"`

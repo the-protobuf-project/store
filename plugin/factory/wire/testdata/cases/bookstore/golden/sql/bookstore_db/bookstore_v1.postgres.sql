@@ -54,6 +54,7 @@ CREATE TABLE "bookstore_v1"."books" (
     CONSTRAINT "fk_books_author_id" FOREIGN KEY ("author_id") REFERENCES "bookstore_v1"."authors"("id") ON DELETE CASCADE
 );
 CREATE INDEX "idx_books_author_year" ON "bookstore_v1"."books" ("author_id", "published_year");
+CREATE INDEX "idx_books_author_id_id" ON "bookstore_v1"."books" ("author_id", "id");
 
 
 -- Column and table documentation, persisted to the catalog.

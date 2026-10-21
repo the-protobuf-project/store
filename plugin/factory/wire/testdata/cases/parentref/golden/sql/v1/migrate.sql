@@ -47,7 +47,7 @@ ALTER TABLE "parentref_v1"."notes" DROP CONSTRAINT IF EXISTS "fk_notes_user_id";
 ALTER TABLE "parentref_v1"."notes" ADD CONSTRAINT "fk_notes_user_id" FOREIGN KEY ("user_id") REFERENCES "parentref_v1"."users"("id") ON DELETE CASCADE;
 
 -- Indexes
-CREATE INDEX IF NOT EXISTS "idx_notes_user_id" ON "parentref_v1"."notes" ("user_id");
+CREATE INDEX IF NOT EXISTS "idx_notes_user_id_id" ON "parentref_v1"."notes" ("user_id", "id");
 
 -- Documentation
 COMMENT ON TABLE "parentref_v1"."users" IS 'User is the parent resource.';

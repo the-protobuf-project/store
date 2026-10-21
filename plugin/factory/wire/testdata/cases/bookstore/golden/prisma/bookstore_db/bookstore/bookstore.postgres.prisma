@@ -92,6 +92,8 @@ model Book {
 
   /// Composite index on [author_id, published_year].
   @@index([authorID, publishedYear])
+  /// Composite index on [author_id, id].
+  @@index([authorID, id])
   /// Maps the model to the "books" table in the database.
   @@map("books")
   /// Maps the model to the "bookstore_v1" schema in the database.

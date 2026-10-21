@@ -104,7 +104,7 @@ ALTER TABLE "embedded_v1"."event_attendees" ADD CONSTRAINT "fk_event_attendees_a
 CREATE INDEX IF NOT EXISTS "idx_events_location_id" ON "embedded_v1"."events" ("location_id");
 CREATE INDEX IF NOT EXISTS "idx_events_billing_id" ON "embedded_v1"."events" ("billing_id");
 CREATE INDEX IF NOT EXISTS "idx_events_metadata_id" ON "embedded_v1"."events" ("metadata_id");
-CREATE INDEX IF NOT EXISTS "idx_attendees_event_id" ON "embedded_v1"."attendees" ("event_id");
+CREATE INDEX IF NOT EXISTS "idx_attendees_event_id_id" ON "embedded_v1"."attendees" ("event_id", "id");
 CREATE INDEX IF NOT EXISTS "idx_metadatas_owner" ON "embedded_v1"."metadatas" ("owner");
 -- tag containment (@>) cannot use a B-tree
 CREATE INDEX IF NOT EXISTS "idx_metadatas_tags_gin" ON "embedded_v1"."metadatas" USING gin ("tags");

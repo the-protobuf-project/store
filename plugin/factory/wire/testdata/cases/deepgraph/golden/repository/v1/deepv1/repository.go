@@ -179,11 +179,14 @@ func WithMeetingGraphQLListOverride(field string, h filterx.GraphQLHandler) Opti
 
 // New picks the adapter set for the live handle in conn: GraphQL when a
 // client connection is present, otherwise GORM.
+//
+// When conn carries a ChangeObserver, every write the returned repositories
+// make is reported to it (see observe).
 func New(conn repox.Conn, opts ...Option) Repositories {
 	if conn.GraphQL != nil {
-		return NewGraphQL(conn.GraphQL, opts...)
+		return observe(NewGraphQL(conn.GraphQL, opts...), conn.Changes)
 	}
-	return NewGorm(conn.Gorm, opts...)
+	return observe(NewGorm(conn.Gorm, opts...), conn.Changes)
 }
 
 // NewGraphQL builds the GraphQL adapter set over svc.
@@ -208,4 +211,117 @@ func NewGorm(db *gorm.DB, opts ...Option) Repositories {
 		Agendas:  &GormAgendaRepository{DB: db, Hooks: o.agendaHooks, ListOverrides: o.agendaOverrides},
 		Meetings: &GormMeetingRepository{DB: db, Hooks: o.meetingHooks, ListOverrides: o.meetingOverrides},
 	}
+}
+
+// observe wraps every repository in repos so its writes are reported to
+// changes. With no observer it returns repos unchanged, so a process that wires
+// none pays nothing.
+//
+// The wrapper sits over the whole interface, not inside the adapters, so the
+// same notification covers GORM and GraphQL alike -- and a Tier-2 adapter that
+// embeds a generated one and overrides a write is covered too.
+func observe(repos Repositories, changes repox.ChangeObserver) Repositories {
+	if changes == nil {
+		return repos
+	}
+	return Repositories{
+		Agendas:  &observedAgendaRepository{AgendaRepository: repos.Agendas, changes: changes},
+		Meetings: &observedMeetingRepository{MeetingRepository: repos.Meetings, changes: changes},
+	}
+}
+
+// observedAgendaRepository reports every Agenda write to a ChangeObserver.
+//
+// It reports a write that returned an error too, whenever the name is known.
+// An error does not prove nothing was written -- the adapters re-read after
+// writing, and that re-read can fail -- and an observer told about a write
+// that did not happen only drops something it did not need to, while one not
+// told about a write that did keeps serving what the write replaced.
+type observedAgendaRepository struct {
+	AgendaRepository
+	changes repox.ChangeObserver
+}
+
+func (o *observedAgendaRepository) Create(ctx context.Context, m *deepv1.Agenda) (*deepv1.Agenda, error) {
+	out, err := o.AgendaRepository.Create(ctx, m)
+	o.created(ctx, m, out)
+	return out, err
+}
+
+// created reports a Create: by the stored record's name, or failing that by
+// the name the caller asked for. A Create that failed before naming anything
+// wrote nothing.
+func (o *observedAgendaRepository) created(ctx context.Context, m, out *deepv1.Agenda) {
+	switch {
+	case out.GetName() != "":
+		o.changes.Changed(ctx, out.GetName())
+	case m.GetName() != "":
+		o.changes.Changed(ctx, m.GetName())
+	}
+}
+
+func (o *observedAgendaRepository) Update(ctx context.Context, m *deepv1.Agenda, paths []string) (*deepv1.Agenda, error) {
+	out, err := o.AgendaRepository.Update(ctx, m, paths)
+	o.changes.Changed(ctx, m.GetName())
+	return out, err
+}
+
+func (o *observedAgendaRepository) Delete(ctx context.Context, name string) error {
+	err := o.AgendaRepository.Delete(ctx, name)
+	o.changes.Changed(ctx, name)
+	return err
+}
+
+func (o *observedAgendaRepository) Undelete(ctx context.Context, name string) (*deepv1.Agenda, error) {
+	out, err := o.AgendaRepository.Undelete(ctx, name)
+	o.changes.Changed(ctx, name)
+	return out, err
+}
+
+func (o *observedAgendaRepository) Purge(ctx context.Context, name string) error {
+	err := o.AgendaRepository.Purge(ctx, name)
+	o.changes.Changed(ctx, name)
+	return err
+}
+
+// observedMeetingRepository reports every Meeting write to a ChangeObserver.
+//
+// It reports a write that returned an error too, whenever the name is known.
+// An error does not prove nothing was written -- the adapters re-read after
+// writing, and that re-read can fail -- and an observer told about a write
+// that did not happen only drops something it did not need to, while one not
+// told about a write that did keeps serving what the write replaced.
+type observedMeetingRepository struct {
+	MeetingRepository
+	changes repox.ChangeObserver
+}
+
+func (o *observedMeetingRepository) Create(ctx context.Context, parent string, m *deepv1.Meeting) (*deepv1.Meeting, error) {
+	out, err := o.MeetingRepository.Create(ctx, parent, m)
+	o.created(ctx, m, out)
+	return out, err
+}
+
+// created reports a Create: by the stored record's name, or failing that by
+// the name the caller asked for. A Create that failed before naming anything
+// wrote nothing.
+func (o *observedMeetingRepository) created(ctx context.Context, m, out *deepv1.Meeting) {
+	switch {
+	case out.GetName() != "":
+		o.changes.Changed(ctx, out.GetName())
+	case m.GetName() != "":
+		o.changes.Changed(ctx, m.GetName())
+	}
+}
+
+func (o *observedMeetingRepository) Update(ctx context.Context, m *deepv1.Meeting, paths []string) (*deepv1.Meeting, error) {
+	out, err := o.MeetingRepository.Update(ctx, m, paths)
+	o.changes.Changed(ctx, m.GetName())
+	return out, err
+}
+
+func (o *observedMeetingRepository) Delete(ctx context.Context, name string) error {
+	err := o.MeetingRepository.Delete(ctx, name)
+	o.changes.Changed(ctx, name)
+	return err
 }

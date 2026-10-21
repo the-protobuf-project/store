@@ -51,13 +51,13 @@ func (*Event) TableName() string { return "embedded_v1.events" }
 // Attendee carries an IDENTIFIER, so that field is its primary key.
 type Attendee struct {
 	// Unique identifier for the record.
-	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	ID string `gorm:"column:id;primaryKey;not null;index:idx_attendees_event_id_id,priority:2" json:"id"`
 	// Resource name; the AIP identifier.
 	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
 	// Email address of the attendee.
 	Email string `gorm:"column:email;not null" json:"email" validate:"required"`
 	// Parent reference to Event (from the AIP resource pattern).
-	EventID string `gorm:"column:event_id;not null;index:idx_attendees_event_id" json:"event_id" validate:"required"`
+	EventID string `gorm:"column:event_id;not null;index:idx_attendees_event_id_id,priority:1" json:"event_id" validate:"required"`
 	Event   *Event `gorm:"foreignKey:EventID;constraint:OnDelete:CASCADE" json:"event,omitempty"`
 	// Back-relation: Metadata records that reference this via owner.
 	Metadatas []Metadata `gorm:"foreignKey:OwnerID" json:"metadatas,omitempty"`

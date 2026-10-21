@@ -8,6 +8,7 @@
 package repox
 
 import (
+	"context"
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -39,6 +40,36 @@ type Conn struct {
 {{- if .GraphQLModule}}
 	GraphQL *{{.GraphQLPkg}}.Service
 {{- end}}
+	// Changes, when set, hears about every write a repository or Batch built
+	// from this Conn commits. It is on the connection rather than on one
+	// repository because a process builds many repositories over one
+	// connection, and something that must see every write -- a cache dropping
+	// what a write made stale -- cannot depend on each of them being wired.
+	Changes ChangeObserver
+}
+
+// ChangeObserver hears that the record named name was written: created,
+// updated, deleted, restored or purged. It runs after the write is durable, so
+// it can neither veto nor alter it, and once per record a Batch commits.
+//
+// It is told only the name. That is enough to know which resource and which
+// parent changed, and it keeps an observer from coming to depend on the
+// record's contents, which a delete does not have.
+type ChangeObserver interface {
+	Changed(ctx context.Context, name string)
+}
+
+// Changes fans one notification out to several observers, in order. A nil
+// entry is skipped.
+type Changes []ChangeObserver
+
+// Changed tells every observer in cs.
+func (cs Changes) Changed(ctx context.Context, name string) {
+	for _, c := range cs {
+		if c != nil {
+			c.Changed(ctx, name)
+		}
+	}
 }
 
 // ListInput is the request shape every repository List takes: AIP page

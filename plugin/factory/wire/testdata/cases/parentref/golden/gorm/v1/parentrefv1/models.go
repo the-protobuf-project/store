@@ -31,13 +31,13 @@ func (*User) TableName() string { return "parentref_v1.users" }
 // Note is owned by a User. Its pattern carries a {user} parent segment with no corresponding field, so store materializes a user_id FK → User from the pattern alone.
 type Note struct {
 	// Unique identifier for the record.
-	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	ID string `gorm:"column:id;primaryKey;not null;index:idx_notes_user_id_id,priority:2" json:"id"`
 	// Resource name; the AIP identifier.
 	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
 	// body is the note's text.
 	Body string `gorm:"column:body;not null" json:"body" validate:"required"`
 	// Parent reference to User (from the AIP resource pattern).
-	UserID string `gorm:"column:user_id;not null;index:idx_notes_user_id" json:"user_id" validate:"required"`
+	UserID string `gorm:"column:user_id;not null;index:idx_notes_user_id_id,priority:1" json:"user_id" validate:"required"`
 	User   *User  `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE" json:"user,omitempty"`
 }
 

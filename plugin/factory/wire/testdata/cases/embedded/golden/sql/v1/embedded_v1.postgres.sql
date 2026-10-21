@@ -50,7 +50,7 @@ CREATE TABLE "embedded_v1"."attendees" (
     "event_id"  CHAR(26)  NOT NULL,
     CONSTRAINT "fk_attendees_event_id" FOREIGN KEY ("event_id") REFERENCES "embedded_v1"."events"("id") ON DELETE CASCADE
 );
-CREATE INDEX "idx_attendees_event_id" ON "embedded_v1"."attendees" ("event_id");
+CREATE INDEX "idx_attendees_event_id_id" ON "embedded_v1"."attendees" ("event_id", "id");
 
 -- Location is reachable from Event and so becomes its own table; its existing `id` field is promoted to the primary key.
 CREATE TABLE "embedded_v1"."locations" (

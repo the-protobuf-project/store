@@ -109,14 +109,19 @@ type Batch interface {
 	Commit(ctx context.Context) error
 }
 
-// NewBatch returns a Batch on the backend conn carries.
+// NewBatch returns a Batch on the backend conn carries. When conn carries a
+// ChangeObserver, Commit reports every record it queued to it.
 func NewBatch(conn repox.Conn) Batch {
+	var b Batch = &gormBatch{db: conn.Gorm}
 {{- if .HasGraphQL}}
 	if conn.GraphQL != nil {
-		return &graphQLBatch{svc: conn.GraphQL}
+		b = &graphQLBatch{svc: conn.GraphQL}
 	}
 {{- end}}
-	return &gormBatch{db: conn.Gorm}
+	if conn.Changes != nil {
+		b = &observedBatch{Batch: b, changes: conn.Changes}
+	}
+	return b
 }
 {{- end}}
 
@@ -174,11 +179,14 @@ func With{{.Model}}GraphQLListOverride(field string, h filterx.GraphQLHandler) O
 
 // New picks the adapter set for the live handle in conn: GraphQL when a
 // client connection is present, otherwise GORM.
+//
+// When conn carries a ChangeObserver, every write the returned repositories
+// make is reported to it (see observe).
 func New(conn repox.Conn, opts ...Option) Repositories {
 	if conn.GraphQL != nil {
-		return NewGraphQL(conn.GraphQL, opts...)
+		return observe(NewGraphQL(conn.GraphQL, opts...), conn.Changes)
 	}
-	return NewGorm(conn.Gorm, opts...)
+	return observe(NewGorm(conn.Gorm, opts...), conn.Changes)
 }
 
 // NewGraphQL builds the GraphQL adapter set over svc.
@@ -196,8 +204,11 @@ func NewGraphQL(svc *{{.ClientPkg}}.Service, opts ...Option) Repositories {
 {{- else}}
 
 // New picks the adapter set for the live handle in conn.
+//
+// When conn carries a ChangeObserver, every write the returned repositories
+// make is reported to it (see observe).
 func New(conn repox.Conn, opts ...Option) Repositories {
-	return NewGorm(conn.Gorm, opts...)
+	return observe(NewGorm(conn.Gorm, opts...), conn.Changes)
 }
 {{- end}}
 
@@ -213,3 +224,139 @@ func NewGorm(db *gorm.DB, opts ...Option) Repositories {
 {{- end}}
 	}
 }
+
+// observe wraps every repository in repos so its writes are reported to
+// changes. With no observer it returns repos unchanged, so a process that wires
+// none pays nothing.
+//
+// The wrapper sits over the whole interface, not inside the adapters, so the
+// same notification covers GORM and GraphQL alike -- and a Tier-2 adapter that
+// embeds a generated one and overrides a write is covered too.
+func observe(repos Repositories, changes repox.ChangeObserver) Repositories {
+	if changes == nil {
+		return repos
+	}
+	return Repositories{
+{{- range .Resources}}
+		{{.PluralField}}: &observed{{.Model}}Repository{ {{- .Model}}Repository: repos.{{.PluralField}}, changes: changes},
+{{- end}}
+	}
+}
+{{- range .Resources}}
+
+// observed{{.Model}}Repository reports every {{.Model}} write to a ChangeObserver.
+//
+// It reports a write that returned an error too, whenever the name is known.
+// An error does not prove nothing was written -- the adapters re-read after
+// writing, and that re-read can fail -- and an observer told about a write
+// that did not happen only drops something it did not need to, while one not
+// told about a write that did keeps serving what the write replaced.
+type observed{{.Model}}Repository struct {
+	{{.Model}}Repository
+	changes repox.ChangeObserver
+}
+
+{{- if .Parented}}
+
+func (o *observed{{.Model}}Repository) Create(ctx context.Context, parent string, m *{{.PB}}) (*{{.PB}}, error) {
+	out, err := o.{{.Model}}Repository.Create(ctx, parent, m)
+	o.created(ctx, m, out)
+	return out, err
+}
+{{- else}}
+
+func (o *observed{{.Model}}Repository) Create(ctx context.Context, m *{{.PB}}) (*{{.PB}}, error) {
+	out, err := o.{{.Model}}Repository.Create(ctx, m)
+	o.created(ctx, m, out)
+	return out, err
+}
+{{- end}}
+
+// created reports a Create: by the stored record's name, or failing that by
+// the name the caller asked for. A Create that failed before naming anything
+// wrote nothing.
+func (o *observed{{.Model}}Repository) created(ctx context.Context, m, out *{{.PB}}) {
+	switch {
+	case out.GetName() != "":
+		o.changes.Changed(ctx, out.GetName())
+	case m.GetName() != "":
+		o.changes.Changed(ctx, m.GetName())
+	}
+}
+
+func (o *observed{{.Model}}Repository) Update(ctx context.Context, m *{{.PB}}, paths []string) (*{{.PB}}, error) {
+	out, err := o.{{.Model}}Repository.Update(ctx, m, paths)
+	o.changes.Changed(ctx, m.GetName())
+	return out, err
+}
+{{- if .OutputOnly}}
+
+func (o *observed{{.Model}}Repository) UpdateOutputOnly(ctx context.Context, m *{{.PB}}, paths []string) (*{{.PB}}, error) {
+	out, err := o.{{.Model}}Repository.UpdateOutputOnly(ctx, m, paths)
+	o.changes.Changed(ctx, m.GetName())
+	return out, err
+}
+{{- end}}
+
+func (o *observed{{.Model}}Repository) Delete(ctx context.Context, name string) error {
+	err := o.{{.Model}}Repository.Delete(ctx, name)
+	o.changes.Changed(ctx, name)
+	return err
+}
+{{- if .SoftDelete}}
+
+func (o *observed{{.Model}}Repository) Undelete(ctx context.Context, name string) (*{{.PB}}, error) {
+	out, err := o.{{.Model}}Repository.Undelete(ctx, name)
+	o.changes.Changed(ctx, name)
+	return out, err
+}
+
+func (o *observed{{.Model}}Repository) Purge(ctx context.Context, name string) error {
+	err := o.{{.Model}}Repository.Purge(ctx, name)
+	o.changes.Changed(ctx, name)
+	return err
+}
+{{- end}}
+{{- end}}
+{{- if .HasBatch}}
+
+// observedBatch reports every record a Batch queued once Commit returns --
+// whatever it returns: GraphQL applies a batch's guarded updates one by one
+// before the rest, so a Commit that failed may still have written some.
+type observedBatch struct {
+	Batch
+	changes repox.ChangeObserver
+	names   []string
+}
+
+func (o *observedBatch) Commit(ctx context.Context) error {
+	err := o.Batch.Commit(ctx)
+	for _, name := range o.names {
+		o.changes.Changed(ctx, name)
+	}
+	o.names = nil
+	return err
+}
+{{- range .Resources}}{{if .Flat}}
+
+func (o *observedBatch) Create{{.Model}}({{if .Parented}}parent string, {{end}}m *{{.PB}}) (string, error) {
+	name, err := o.Batch.Create{{.Model}}({{if .Parented}}parent, {{end}}m)
+	if err == nil {
+		o.names = append(o.names, name)
+	}
+	return name, err
+}
+{{- if .OutputOnly}}
+
+func (o *observedBatch) Update{{.Model}}OutputOnly(m *{{.PB}}, paths []string) {
+	o.Batch.Update{{.Model}}OutputOnly(m, paths)
+	o.names = append(o.names, m.GetName())
+}
+{{- end}}
+
+func (o *observedBatch) Delete{{.Model}}(name string) {
+	o.Batch.Delete{{.Model}}(name)
+	o.names = append(o.names, name)
+}
+{{- end}}{{end}}
+{{- end}}

@@ -85,8 +85,8 @@ model Attendee {
   /// Back-relation: EventAttendees records that reference this model via attendee_id.
   eventAttendees EventAttendees[]
 
-  /// Index on [event_id].
-  @@index([eventID])
+  /// Composite index on [event_id, id].
+  @@index([eventID, id])
   /// Maps the model to the "attendees" table in the database.
   @@map("attendees")
   /// Maps the model to the "embedded_v1" schema in the database.

@@ -162,12 +162,17 @@ type Batch interface {
 	Commit(ctx context.Context) error
 }
 
-// NewBatch returns a Batch on the backend conn carries.
+// NewBatch returns a Batch on the backend conn carries. When conn carries a
+// ChangeObserver, Commit reports every record it queued to it.
 func NewBatch(conn repox.Conn) Batch {
+	var b Batch = &gormBatch{db: conn.Gorm}
 	if conn.GraphQL != nil {
-		return &graphQLBatch{svc: conn.GraphQL}
+		b = &graphQLBatch{svc: conn.GraphQL}
 	}
-	return &gormBatch{db: conn.Gorm}
+	if conn.Changes != nil {
+		b = &observedBatch{Batch: b, changes: conn.Changes}
+	}
+	return b
 }
 
 // options collects the per-resource customizations the factories thread into
@@ -270,11 +275,14 @@ func WithUserGraphQLListOverride(field string, h filterx.GraphQLHandler) Option 
 
 // New picks the adapter set for the live handle in conn: GraphQL when a
 // client connection is present, otherwise GORM.
+//
+// When conn carries a ChangeObserver, every write the returned repositories
+// make is reported to it (see observe).
 func New(conn repox.Conn, opts ...Option) Repositories {
 	if conn.GraphQL != nil {
-		return NewGraphQL(conn.GraphQL, opts...)
+		return observe(NewGraphQL(conn.GraphQL, opts...), conn.Changes)
 	}
-	return NewGorm(conn.Gorm, opts...)
+	return observe(NewGorm(conn.Gorm, opts...), conn.Changes)
 }
 
 // NewGraphQL builds the GraphQL adapter set over svc.
@@ -301,4 +309,185 @@ func NewGorm(db *gorm.DB, opts ...Option) Repositories {
 		Organisations: &GormOrganisationRepository{DB: db, Hooks: o.organisationHooks, ListOverrides: o.organisationOverrides},
 		Users:         &GormUserRepository{DB: db, Hooks: o.userHooks, ListOverrides: o.userOverrides},
 	}
+}
+
+// observe wraps every repository in repos so its writes are reported to
+// changes. With no observer it returns repos unchanged, so a process that wires
+// none pays nothing.
+//
+// The wrapper sits over the whole interface, not inside the adapters, so the
+// same notification covers GORM and GraphQL alike -- and a Tier-2 adapter that
+// embeds a generated one and overrides a write is covered too.
+func observe(repos Repositories, changes repox.ChangeObserver) Repositories {
+	if changes == nil {
+		return repos
+	}
+	return Repositories{
+		Members:       &observedMemberRepository{MemberRepository: repos.Members, changes: changes},
+		Organisations: &observedOrganisationRepository{OrganisationRepository: repos.Organisations, changes: changes},
+		Users:         &observedUserRepository{UserRepository: repos.Users, changes: changes},
+	}
+}
+
+// observedMemberRepository reports every Member write to a ChangeObserver.
+//
+// It reports a write that returned an error too, whenever the name is known.
+// An error does not prove nothing was written -- the adapters re-read after
+// writing, and that re-read can fail -- and an observer told about a write
+// that did not happen only drops something it did not need to, while one not
+// told about a write that did keeps serving what the write replaced.
+type observedMemberRepository struct {
+	MemberRepository
+	changes repox.ChangeObserver
+}
+
+func (o *observedMemberRepository) Create(ctx context.Context, parent string, m *orgv1.Member) (*orgv1.Member, error) {
+	out, err := o.MemberRepository.Create(ctx, parent, m)
+	o.created(ctx, m, out)
+	return out, err
+}
+
+// created reports a Create: by the stored record's name, or failing that by
+// the name the caller asked for. A Create that failed before naming anything
+// wrote nothing.
+func (o *observedMemberRepository) created(ctx context.Context, m, out *orgv1.Member) {
+	switch {
+	case out.GetName() != "":
+		o.changes.Changed(ctx, out.GetName())
+	case m.GetName() != "":
+		o.changes.Changed(ctx, m.GetName())
+	}
+}
+
+func (o *observedMemberRepository) Update(ctx context.Context, m *orgv1.Member, paths []string) (*orgv1.Member, error) {
+	out, err := o.MemberRepository.Update(ctx, m, paths)
+	o.changes.Changed(ctx, m.GetName())
+	return out, err
+}
+
+func (o *observedMemberRepository) Delete(ctx context.Context, name string) error {
+	err := o.MemberRepository.Delete(ctx, name)
+	o.changes.Changed(ctx, name)
+	return err
+}
+
+// observedOrganisationRepository reports every Organisation write to a ChangeObserver.
+//
+// It reports a write that returned an error too, whenever the name is known.
+// An error does not prove nothing was written -- the adapters re-read after
+// writing, and that re-read can fail -- and an observer told about a write
+// that did not happen only drops something it did not need to, while one not
+// told about a write that did keeps serving what the write replaced.
+type observedOrganisationRepository struct {
+	OrganisationRepository
+	changes repox.ChangeObserver
+}
+
+func (o *observedOrganisationRepository) Create(ctx context.Context, m *orgv1.Organisation) (*orgv1.Organisation, error) {
+	out, err := o.OrganisationRepository.Create(ctx, m)
+	o.created(ctx, m, out)
+	return out, err
+}
+
+// created reports a Create: by the stored record's name, or failing that by
+// the name the caller asked for. A Create that failed before naming anything
+// wrote nothing.
+func (o *observedOrganisationRepository) created(ctx context.Context, m, out *orgv1.Organisation) {
+	switch {
+	case out.GetName() != "":
+		o.changes.Changed(ctx, out.GetName())
+	case m.GetName() != "":
+		o.changes.Changed(ctx, m.GetName())
+	}
+}
+
+func (o *observedOrganisationRepository) Update(ctx context.Context, m *orgv1.Organisation, paths []string) (*orgv1.Organisation, error) {
+	out, err := o.OrganisationRepository.Update(ctx, m, paths)
+	o.changes.Changed(ctx, m.GetName())
+	return out, err
+}
+
+func (o *observedOrganisationRepository) UpdateOutputOnly(ctx context.Context, m *orgv1.Organisation, paths []string) (*orgv1.Organisation, error) {
+	out, err := o.OrganisationRepository.UpdateOutputOnly(ctx, m, paths)
+	o.changes.Changed(ctx, m.GetName())
+	return out, err
+}
+
+func (o *observedOrganisationRepository) Delete(ctx context.Context, name string) error {
+	err := o.OrganisationRepository.Delete(ctx, name)
+	o.changes.Changed(ctx, name)
+	return err
+}
+
+// observedUserRepository reports every User write to a ChangeObserver.
+//
+// It reports a write that returned an error too, whenever the name is known.
+// An error does not prove nothing was written -- the adapters re-read after
+// writing, and that re-read can fail -- and an observer told about a write
+// that did not happen only drops something it did not need to, while one not
+// told about a write that did keeps serving what the write replaced.
+type observedUserRepository struct {
+	UserRepository
+	changes repox.ChangeObserver
+}
+
+func (o *observedUserRepository) Create(ctx context.Context, m *orgv1.User) (*orgv1.User, error) {
+	out, err := o.UserRepository.Create(ctx, m)
+	o.created(ctx, m, out)
+	return out, err
+}
+
+// created reports a Create: by the stored record's name, or failing that by
+// the name the caller asked for. A Create that failed before naming anything
+// wrote nothing.
+func (o *observedUserRepository) created(ctx context.Context, m, out *orgv1.User) {
+	switch {
+	case out.GetName() != "":
+		o.changes.Changed(ctx, out.GetName())
+	case m.GetName() != "":
+		o.changes.Changed(ctx, m.GetName())
+	}
+}
+
+func (o *observedUserRepository) Update(ctx context.Context, m *orgv1.User, paths []string) (*orgv1.User, error) {
+	out, err := o.UserRepository.Update(ctx, m, paths)
+	o.changes.Changed(ctx, m.GetName())
+	return out, err
+}
+
+func (o *observedUserRepository) Delete(ctx context.Context, name string) error {
+	err := o.UserRepository.Delete(ctx, name)
+	o.changes.Changed(ctx, name)
+	return err
+}
+
+// observedBatch reports every record a Batch queued once Commit returns --
+// whatever it returns: GraphQL applies a batch's guarded updates one by one
+// before the rest, so a Commit that failed may still have written some.
+type observedBatch struct {
+	Batch
+	changes repox.ChangeObserver
+	names   []string
+}
+
+func (o *observedBatch) Commit(ctx context.Context) error {
+	err := o.Batch.Commit(ctx)
+	for _, name := range o.names {
+		o.changes.Changed(ctx, name)
+	}
+	o.names = nil
+	return err
+}
+
+func (o *observedBatch) CreateUser(m *orgv1.User) (string, error) {
+	name, err := o.Batch.CreateUser(m)
+	if err == nil {
+		o.names = append(o.names, name)
+	}
+	return name, err
+}
+
+func (o *observedBatch) DeleteUser(name string) {
+	o.Batch.DeleteUser(name)
+	o.names = append(o.names, name)
 }

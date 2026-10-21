@@ -36,7 +36,7 @@ CREATE TABLE "parentref_v1"."notes" (
     "user_id"  CHAR(26)  NOT NULL,
     CONSTRAINT "fk_notes_user_id" FOREIGN KEY ("user_id") REFERENCES "parentref_v1"."users"("id") ON DELETE CASCADE
 );
-CREATE INDEX "idx_notes_user_id" ON "parentref_v1"."notes" ("user_id");
+CREATE INDEX "idx_notes_user_id_id" ON "parentref_v1"."notes" ("user_id", "id");
 
 
 -- Column and table documentation, persisted to the catalog.

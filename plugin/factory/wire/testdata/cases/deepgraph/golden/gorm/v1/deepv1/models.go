@@ -66,7 +66,7 @@ func (*Agenda) TableName() string { return "deep_v1.agendas" }
 // Meeting exercises deep singular graphs, a oneof deep edge and an ambiguous pair of lists.
 type Meeting struct {
 	// Unique identifier for the record.
-	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	ID string `gorm:"column:id;primaryKey;not null;index:idx_meetings_agenda_id_id,priority:2" json:"id"`
 	// Resource name.
 	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
 	// Length.
@@ -76,7 +76,7 @@ type Meeting struct {
 	// Discriminator: which ends oneof member is set (null = none).
 	EndsCase *MeetingEndsCase `gorm:"column:ends_case;check:chk_meetings_ends_case,ends_case IN ('END','DURATION')" json:"ends_case,omitempty"`
 	// Parent reference to Agenda (from the AIP resource pattern).
-	AgendaID string  `gorm:"column:agenda_id;not null;index:idx_meetings_agenda_id" json:"agenda_id" validate:"required"`
+	AgendaID string  `gorm:"column:agenda_id;not null;index:idx_meetings_agenda_id_id,priority:1" json:"agenda_id" validate:"required"`
 	Agenda   *Agenda `gorm:"foreignKey:AgendaID;constraint:OnDelete:CASCADE" json:"agenda,omitempty"`
 	// Foreign key to Moment.
 	StartID string  `gorm:"column:start_id;not null;index:idx_meetings_start_id" json:"start_id" validate:"required"`

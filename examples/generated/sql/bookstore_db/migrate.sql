@@ -89,6 +89,7 @@ ALTER TABLE "bookstore_v1"."books" ADD CONSTRAINT "fk_books_author_id" FOREIGN K
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS "idx_books_author_year" ON "bookstore_v1"."books" ("author_id", "published_year");
+CREATE INDEX IF NOT EXISTS "idx_books_author_id_id" ON "bookstore_v1"."books" ("author_id", "id");
 
 -- Documentation
 COMMENT ON TABLE "bookstore_v1"."authors" IS 'Author is a top-level resource. Inferred table: bookstore_v1.authors. id: ID_STRATEGY_ULID synthesizes a generated `id` PK and demotes the AIP resource name to a UNIQUE lookup column; timestamps adds created_at/updated_at.';

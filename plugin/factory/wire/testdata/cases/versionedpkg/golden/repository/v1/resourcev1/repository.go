@@ -91,8 +91,11 @@ func WithEventListOverride(field string, h filterx.SQLHandler) Option {
 }
 
 // New picks the adapter set for the live handle in conn.
+//
+// When conn carries a ChangeObserver, every write the returned repositories
+// make is reported to it (see observe).
 func New(conn repox.Conn, opts ...Option) Repositories {
-	return NewGorm(conn.Gorm, opts...)
+	return observe(NewGorm(conn.Gorm, opts...), conn.Changes)
 }
 
 // NewGorm builds the GORM adapter set over db.
@@ -104,4 +107,62 @@ func NewGorm(db *gorm.DB, opts ...Option) Repositories {
 	return Repositories{
 		Events: &GormEventRepository{DB: db, Hooks: o.eventHooks, ListOverrides: o.eventOverrides},
 	}
+}
+
+// observe wraps every repository in repos so its writes are reported to
+// changes. With no observer it returns repos unchanged, so a process that wires
+// none pays nothing.
+//
+// The wrapper sits over the whole interface, not inside the adapters, so the
+// same notification covers GORM and GraphQL alike -- and a Tier-2 adapter that
+// embeds a generated one and overrides a write is covered too.
+func observe(repos Repositories, changes repox.ChangeObserver) Repositories {
+	if changes == nil {
+		return repos
+	}
+	return Repositories{
+		Events: &observedEventRepository{EventRepository: repos.Events, changes: changes},
+	}
+}
+
+// observedEventRepository reports every Event write to a ChangeObserver.
+//
+// It reports a write that returned an error too, whenever the name is known.
+// An error does not prove nothing was written -- the adapters re-read after
+// writing, and that re-read can fail -- and an observer told about a write
+// that did not happen only drops something it did not need to, while one not
+// told about a write that did keeps serving what the write replaced.
+type observedEventRepository struct {
+	EventRepository
+	changes repox.ChangeObserver
+}
+
+func (o *observedEventRepository) Create(ctx context.Context, m *resourcev1.Event) (*resourcev1.Event, error) {
+	out, err := o.EventRepository.Create(ctx, m)
+	o.created(ctx, m, out)
+	return out, err
+}
+
+// created reports a Create: by the stored record's name, or failing that by
+// the name the caller asked for. A Create that failed before naming anything
+// wrote nothing.
+func (o *observedEventRepository) created(ctx context.Context, m, out *resourcev1.Event) {
+	switch {
+	case out.GetName() != "":
+		o.changes.Changed(ctx, out.GetName())
+	case m.GetName() != "":
+		o.changes.Changed(ctx, m.GetName())
+	}
+}
+
+func (o *observedEventRepository) Update(ctx context.Context, m *resourcev1.Event, paths []string) (*resourcev1.Event, error) {
+	out, err := o.EventRepository.Update(ctx, m, paths)
+	o.changes.Changed(ctx, m.GetName())
+	return out, err
+}
+
+func (o *observedEventRepository) Delete(ctx context.Context, name string) error {
+	err := o.EventRepository.Delete(ctx, name)
+	o.changes.Changed(ctx, name)
+	return err
 }
