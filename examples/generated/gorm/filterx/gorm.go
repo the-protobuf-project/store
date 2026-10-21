@@ -11,7 +11,7 @@
 //
 // Shared AIP-160 filter / AIP-132 order_by / paginated-list engines driven by the generated per-schema specs.
 // annotations: entity.v1 dev, store.v1 dev
-// engine:      protokit v1.2.1
+// engine:      protokit v1.3.1
 //
 // store — https://github.com/the-protobuf-project/store
 
@@ -94,6 +94,24 @@ func (e *GormEngine[M]) Where(conds []Condition) (string, []any, error) {
 		clauses, args = append(clauses, cl), append(args, a...)
 	}
 	return strings.Join(clauses, " AND "), args, nil
+}
+
+// sqlAny translates an OpOr condition: its alternatives ORed. An empty one
+// matches nothing.
+func sqlAny(spec Spec, c Condition) (string, []any, error) {
+	if len(c.Any) == 0 {
+		return "FALSE", nil, nil
+	}
+	parts := make([]string, 0, len(c.Any))
+	var args []any
+	for _, alt := range c.Any {
+		cl, a, err := sqlCondition(spec, alt)
+		if err != nil {
+			return "", nil, err
+		}
+		parts, args = append(parts, cl), append(args, a...)
+	}
+	return "(" + strings.Join(parts, " OR ") + ")", args, nil
 }
 
 // OrderClause resolves an order_by string into a safe "col DIR, ..." clause
@@ -297,6 +315,9 @@ func (e *GormEngine[M]) List(ctx context.Context, q *gorm.DB, in ListInput) ([]M
 
 // sqlCondition translates one spec-listed condition.
 func sqlCondition(spec Spec, c Condition) (string, []any, error) {
+	if c.Op == OpOr {
+		return sqlAny(spec, c)
+	}
 	if c.Field == "" {
 		return sqlSearchCondition(spec, c)
 	}
@@ -305,6 +326,30 @@ func sqlCondition(spec Spec, c Condition) (string, []any, error) {
 		return "", nil, fmt.Errorf("%w: cannot filter by %q", ErrInvalid, c.Field)
 	}
 	col := spec.Table + `."` + f.Column + `"`
+	if c.Op == OpNull {
+		null, err := ParseBool(c.Value)
+		if err != nil {
+			return "", nil, err
+		}
+		if null {
+			return col + " IS NULL", nil, nil
+		}
+		return col + " IS NOT NULL", nil, nil
+	}
+	if f.Via != nil {
+		// A value-object field: match the referenced row, then point at it.
+		inner := Spec{Table: f.Via.Table, Fields: map[string]FieldSpec{
+			c.Field: {Column: f.Via.Column, Kind: f.Kind, EnumPrefix: f.EnumPrefix},
+		}}
+		cl, a, err := sqlCondition(inner, c)
+		if err != nil {
+			return "", nil, err
+		}
+		return col + ` IN (SELECT ` + f.Via.Table + `."` + f.Via.Key + `" FROM ` + f.Via.Table + ` WHERE ` + cl + `)`, a, nil
+	}
+	if c.Op == OpIn {
+		return sqlIn(f, col, c)
+	}
 	switch f.Kind {
 	case KindText:
 		switch c.Op {
@@ -400,6 +445,28 @@ func sqlSearchCondition(spec Spec, c Condition) (string, []any, error) {
 	return "(" + strings.Join(parts, " OR ") + ")", args, nil
 }
 
+// sqlIn translates an OpIn condition: the values normalised as an equality on
+// that kind would be, matched in one IN list. An empty list matches nothing.
+func sqlIn(f FieldSpec, col string, c Condition) (string, []any, error) {
+	if len(c.Values) == 0 {
+		return "FALSE", nil, nil
+	}
+	vals := make([]any, 0, len(c.Values))
+	for _, v := range c.Values {
+		switch f.Kind {
+		case KindText:
+			vals = append(vals, v)
+		case KindEnum:
+			vals = append(vals, NormalizeEnum(f, v))
+		case KindRef:
+			vals = append(vals, RefID(v))
+		default:
+			return "", nil, fmt.Errorf("%w: %q cannot be matched against a list", ErrInvalid, c.Field)
+		}
+	}
+	return col + " IN ?", []any{vals}, nil
+}
+
 // sqlOrderedOp maps an Op onto the SQL comparison an ordered kind supports.
 func sqlOrderedOp(op Op) (string, bool) {
 	switch op {
@@ -409,6 +476,10 @@ func sqlOrderedOp(op Op) (string, bool) {
 		return "<=", true
 	case OpGte:
 		return ">=", true
+	case OpLt:
+		return "<", true
+	case OpGt:
+		return ">", true
 	default:
 		return "", false
 	}

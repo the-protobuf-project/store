@@ -269,9 +269,21 @@ func gqlEq(col string, kind Kind, arg any) (graphql.Predicate, error) {
 	}
 }
 
-// GraphQLColumn resolves the physical column a response field holds. Hasura names
-// its fields in camelCase, which is the form the JSON tag carries.
+// GraphQLColumn resolves the response field a struct field holds, in the
+// camelCase Hasura names its fields by. The graphql client's models carry it in
+// their graphql tag -- the field name, past any "alias:" and before any
+// arguments; a row type decoded from JSON carries it in its json tag.
+//
+// Reading only the json tag left every generated model without a key, so the
+// first list that filled a page failed minting its next-page cursor.
 func GraphQLColumn(f reflect.StructField) string {
+	if tag, ok := f.Tag.Lookup("graphql"); ok {
+		if _, field, aliased := strings.Cut(tag, ":"); aliased {
+			tag = field
+		}
+		name, _, _ := strings.Cut(strings.TrimSpace(tag), "(")
+		return strings.TrimSpace(name)
+	}
 	name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
 	return name
 }

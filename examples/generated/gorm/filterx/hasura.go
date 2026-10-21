@@ -11,7 +11,7 @@
 //
 // Shared AIP-160 filter / AIP-132 order_by / paginated-list engines driven by the generated per-schema specs.
 // annotations: entity.v1 dev, store.v1 dev
-// engine:      protokit v1.2.1
+// engine:      protokit v1.3.1
 //
 // store — https://github.com/the-protobuf-project/store
 
@@ -99,11 +99,13 @@ func (e *HasuraEngine[M]) Predicate(conds []Condition) (graphql.Predicate, bool,
 			preds = append(preds, p)
 			continue
 		}
-		p, err := gqlCondition(e.spec, c)
+		p, ok, err := gqlConditionOrHint(e.spec, c)
 		if err != nil {
 			return graphql.Predicate{}, false, err
 		}
-		preds = append(preds, p)
+		if ok {
+			preds = append(preds, p)
+		}
 	}
 	switch len(preds) {
 	case 0:
@@ -282,9 +284,21 @@ func gqlEq(col string, kind Kind, arg any) (graphql.Predicate, error) {
 	}
 }
 
-// GraphQLColumn resolves the physical column a response field holds. Hasura names
-// its fields in camelCase, which is the form the JSON tag carries.
+// GraphQLColumn resolves the response field a struct field holds, in the
+// camelCase Hasura names its fields by. The graphql client's models carry it in
+// their graphql tag -- the field name, past any "alias:" and before any
+// arguments; a row type decoded from JSON carries it in its json tag.
+//
+// Reading only the json tag left every generated model without a key, so the
+// first list that filled a page failed minting its next-page cursor.
 func GraphQLColumn(f reflect.StructField) string {
+	if tag, ok := f.Tag.Lookup("graphql"); ok {
+		if _, field, aliased := strings.Cut(tag, ":"); aliased {
+			tag = field
+		}
+		name, _, _ := strings.Cut(strings.TrimSpace(tag), "(")
+		return strings.TrimSpace(name)
+	}
 	name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
 	return name
 }
@@ -354,6 +368,17 @@ func (e *HasuraEngine[M]) List(ctx context.Context, in ListInput) ([]M, string, 
 
 // gqlCondition translates one spec-listed condition.
 func gqlCondition(spec Spec, c Condition) (graphql.Predicate, error) {
+	if c.Op == OpOr {
+		preds := make([]graphql.Predicate, 0, len(c.Any))
+		for _, alt := range c.Any {
+			p, err := gqlCondition(spec, alt)
+			if err != nil {
+				return graphql.Predicate{}, err
+			}
+			preds = append(preds, p)
+		}
+		return graphql.Or(preds...), nil
+	}
 	if c.Field == "" {
 		return gqlSearchPredicate(spec, c)
 	}
@@ -361,7 +386,20 @@ func gqlCondition(spec Spec, c Condition) (graphql.Predicate, error) {
 	if !ok {
 		return graphql.Predicate{}, fmt.Errorf("%w: cannot filter by %q", ErrInvalid, c.Field)
 	}
+	if f.Via != nil {
+		return graphql.Predicate{}, fmt.Errorf("%w: %q is a value-object field, which this GraphQL schema cannot reach", ErrInvalid, c.Field)
+	}
 	col := CamelCase(f.Column)
+	if c.Op == OpNull {
+		null, err := ParseBool(c.Value)
+		if err != nil {
+			return graphql.Predicate{}, err
+		}
+		return graphql.StringField{Col: col}.IsNull(null), nil
+	}
+	if c.Op == OpIn {
+		return gqlIn(f, col, c)
+	}
 	switch f.Kind {
 	case KindText:
 		sf := graphql.StringField{Col: col}
@@ -421,6 +459,10 @@ func gqlCondition(spec Spec, c Condition) (graphql.Predicate, error) {
 			return nf.Lte(graphql.Int64(v)), nil
 		case OpGte:
 			return nf.Gte(graphql.Int64(v)), nil
+		case OpLt:
+			return nf.Lt(graphql.Int64(v)), nil
+		case OpGt:
+			return nf.Gt(graphql.Int64(v)), nil
 		}
 	case KindFloat:
 		v, err := ParseFloat(c.Value)
@@ -437,6 +479,10 @@ func gqlCondition(spec Spec, c Condition) (graphql.Predicate, error) {
 			return nf.Lte(v), nil
 		case OpGte:
 			return nf.Gte(v), nil
+		case OpLt:
+			return nf.Lt(v), nil
+		case OpGt:
+			return nf.Gt(v), nil
 		}
 	case KindBool:
 		v, err := ParseBool(c.Value)
@@ -474,6 +520,25 @@ func gqlSearchPredicate(spec Spec, c Condition) (graphql.Predicate, error) {
 	return graphql.Or(preds...), nil
 }
 
+// gqlIn translates an OpIn condition onto the field's _in comparison, the
+// values normalised as an equality on that kind would be.
+func gqlIn(f FieldSpec, col string, c Condition) (graphql.Predicate, error) {
+	vals := make([]string, 0, len(c.Values))
+	for _, v := range c.Values {
+		switch f.Kind {
+		case KindText:
+			vals = append(vals, v)
+		case KindEnum:
+			vals = append(vals, NormalizeEnum(f, v))
+		case KindRef:
+			vals = append(vals, RefID(v))
+		default:
+			return graphql.Predicate{}, fmt.Errorf("%w: %q cannot be matched against a list", ErrInvalid, c.Field)
+		}
+	}
+	return graphql.StringField{Col: col}.In(vals...), nil
+}
+
 // gqlOrderedPred maps an ordered-kind Op onto the string field's comparison.
 func gqlOrderedPred(f graphql.StringField, op Op, v string) (graphql.Predicate, bool) {
 	switch op {
@@ -483,7 +548,39 @@ func gqlOrderedPred(f graphql.StringField, op Op, v string) (graphql.Predicate, 
 		return f.Lte(v), true
 	case OpGte:
 		return f.Gte(v), true
+	case OpLt:
+		return f.Lt(v), true
+	case OpGt:
+		return f.Gt(v), true
 	default:
 		return graphql.Predicate{}, false
 	}
+}
+
+// gqlConditionOrHint translates c, or reports ok=false for a hint this engine
+// cannot follow. The generated GraphQL schema has no relationships between a
+// row and its value objects, so a value-object path is out of reach here; as
+// a hint it is left out (the caller filters the result itself), anything else
+// is an error.
+func gqlConditionOrHint(spec Spec, c Condition) (graphql.Predicate, bool, error) {
+	if c.Hint && reachesVia(spec, c) {
+		return graphql.Predicate{}, false, nil
+	}
+	p, err := gqlCondition(spec, c)
+	return p, err == nil, err
+}
+
+// reachesVia reports whether c, or any of its alternatives, names a
+// value-object field.
+func reachesVia(spec Spec, c Condition) bool {
+	if c.Op == OpOr {
+		for _, alt := range c.Any {
+			if reachesVia(spec, alt) {
+				return true
+			}
+		}
+		return false
+	}
+	f, ok := spec.Fields[c.Field]
+	return ok && f.Via != nil
 }

@@ -11,7 +11,7 @@
 //
 // First-party telemetry adapter: the stores' gormx.Telemetry and the SQL-level gorm plugin.
 // annotations: entity.v1 dev, store.v1 dev
-// engine:      protokit v1.2.1
+// engine:      protokit v1.3.1
 // runtime:     github.com/the-protobuf-project/telemetry/telemetry-go
 //
 // store — https://github.com/the-protobuf-project/store

@@ -11,7 +11,7 @@
 //
 // Shared AIP-160 filter / AIP-132 order_by / paginated-list engines driven by the generated per-schema specs.
 // annotations: entity.v1 dev, store.v1 dev
-// engine:      protokit v1.2.1
+// engine:      protokit v1.3.1
 //
 // store — https://github.com/the-protobuf-project/store
 
@@ -55,6 +55,19 @@ const (
 	OpLte
 	// OpGte is the `>=` operator (ordered kinds only).
 	OpGte
+	// OpLt is the `<` operator (ordered kinds only). A half-open window's
+	// bound needs it: `end_time > t` is not the same set as `end_time >= t`.
+	OpLt
+	// OpGt is the `>` operator (ordered kinds only).
+	OpGt
+	// OpIn matches any of Condition.Values. AIP-160 has no list syntax, so it
+	// is built in code (ListInput.Where) rather than parsed from a filter.
+	OpIn
+	// OpNull matches a field that is unset (Value "true") or set ("false"). For
+	// a reference to a value object it asks whether the object exists.
+	OpNull
+	// OpOr matches when any of Condition.Any does. Built in code only.
+	OpOr
 )
 
 // Condition is one parsed term of a filter expression. A condition with an
@@ -64,6 +77,39 @@ type Condition struct {
 	Field string
 	Op    Op
 	Value string
+	// Values are OpIn's alternatives; every other Op reads Value.
+	Values []string
+	// Any are OpOr's alternatives.
+	Any []Condition
+	// Hint marks a condition that only narrows: an engine that can evaluate
+	// it does, one that cannot leaves it out, so the caller must not rely on
+	// it for correctness and filters the result itself. It is how a read
+	// pushes a window down where the backend can follow a value-object path
+	// and stays correct where it cannot.
+	Hint bool
+}
+
+// Or is the condition "any of these", e.g. a start given as a date or a
+// date-time.
+func Or(alternatives ...Condition) Condition {
+	return Condition{Op: OpOr, Any: alternatives}
+}
+
+// IsNull is the condition "field is unset" (null) or "is set" (!null).
+func IsNull(field string, null bool) Condition {
+	return Condition{Field: field, Op: OpNull, Value: strconv.FormatBool(null)}
+}
+
+// AsHint returns c marked as a hint (see Condition.Hint).
+func AsHint(c Condition) Condition {
+	c.Hint = true
+	return c
+}
+
+// In is the condition "field is any of values", for callers batching a read
+// across many keys at once.
+func In(field string, values ...string) Condition {
+	return Condition{Field: field, Op: OpIn, Values: values}
 }
 
 // Kind classifies a field's filter semantics; it decides which operators apply
@@ -99,6 +145,18 @@ type FieldSpec struct {
 	Column     string
 	Kind       Kind
 	EnumPrefix string
+	// Via is set for a field of a value object the row points at -- an
+	// event's "start.date_time" -- which is matched through the reference
+	// rather than on the row itself.
+	Via *Via
+}
+
+// Via locates a value-object field: the row's reference column (FieldSpec's
+// Column) names a key of Table, whose Column holds the value.
+type Via struct {
+	Table  string // quoted, schema-qualified value-object table
+	Key    string // its key column
+	Column string // the value column
 }
 
 // Spec is one table's filter/order surface. Instances are generated per schema
@@ -199,6 +257,10 @@ func parseOp(s string) (Op, error) {
 		return OpLte, nil
 	case ">=":
 		return OpGte, nil
+	case "<":
+		return OpLt, nil
+	case ">":
+		return OpGt, nil
 	default:
 		return 0, fmt.Errorf("%w: unsupported filter operator %q", ErrInvalid, s)
 	}
@@ -248,7 +310,8 @@ func tokenize(s string) ([]token, error) {
 				toks = append(toks, token{text: string(c) + "=", op: true})
 				i += 2
 			} else {
-				return nil, fmt.Errorf("%w: unexpected %q in filter (only <= and >= are supported)", ErrInvalid, string(c))
+				toks = append(toks, token{text: string(c), op: true})
+				i++
 			}
 		default:
 			j := i
