@@ -324,9 +324,10 @@ func (r *GormAgendaRepository) Delete(ctx context.Context, name string) error {
 			return err
 		}
 	}
+	now := time.Now()
 	res := r.DB.WithContext(ctx).Model(&deepv1gorm.Agenda{}).
 		Where("id = ? AND delete_time IS NULL", ids[len(ids)-1]).
-		Updates(map[string]any{"delete_time": time.Now(), "etag": repox.NewULID()})
+		Updates(map[string]any{"delete_time": now, "etag": repox.NewULID()})
 	if res.Error != nil {
 		return repox.MapGormErr(res.Error)
 	}

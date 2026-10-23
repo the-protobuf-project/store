@@ -137,10 +137,22 @@ type options struct {
 	{{.LowerModel}}GQLOverrides map[string]filterx.GraphQLHandler
 {{- end}}
 {{- end}}
+{{- if .HasExpiring}}
+	retention time.Duration
+{{- end}}
 }
 
 // Option customizes the adapters a factory builds.
 type Option func(*options)
+{{- if .HasExpiring}}
+
+// WithRetention is how long a soft-deleted record stays restorable (AIP-164):
+// Delete sets its expire_time that far ahead, in the same write as its
+// delete_time, and Undelete clears it. Zero leaves expire_time unset.
+func WithRetention(d time.Duration) Option {
+	return func(o *options) { o.retention = d }
+}
+{{- end}}
 
 {{- range .Resources}}
 
@@ -197,7 +209,7 @@ func NewGraphQL(svc *{{.ClientPkg}}.Service, opts ...Option) Repositories {
 	}
 	return Repositories{
 {{- range .Resources}}
-		{{.PluralField}}: &GraphQL{{.Model}}Repository{Svc: svc, Hooks: o.{{.LowerModel}}Hooks, ListOverrides: o.{{.LowerModel}}GQLOverrides},
+		{{.PluralField}}: &GraphQL{{.Model}}Repository{Svc: svc, Hooks: o.{{.LowerModel}}Hooks, ListOverrides: o.{{.LowerModel}}GQLOverrides{{if .Expiring}}, Retention: o.retention{{end}}},
 {{- end}}
 	}
 }
@@ -220,7 +232,7 @@ func NewGorm(db *gorm.DB, opts ...Option) Repositories {
 	}
 	return Repositories{
 {{- range .Resources}}
-		{{.PluralField}}: &Gorm{{.Model}}Repository{DB: db, Hooks: o.{{.LowerModel}}Hooks, ListOverrides: o.{{.LowerModel}}Overrides},
+		{{.PluralField}}: &Gorm{{.Model}}Repository{DB: db, Hooks: o.{{.LowerModel}}Hooks, ListOverrides: o.{{.LowerModel}}Overrides{{if .Expiring}}, Retention: o.retention{{end}}},
 {{- end}}
 	}
 }

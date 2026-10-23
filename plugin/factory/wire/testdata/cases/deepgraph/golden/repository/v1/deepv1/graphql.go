@@ -442,7 +442,9 @@ func (r *GraphQLAgendaRepository) Delete(ctx context.Context, name string) error
 			return err
 		}
 	}
-	patch := agendasql.UpdateInput{DeleteTime: graphql.Value(time.Now().UTC().Format(time.RFC3339Nano))}
+	at := time.Now().UTC()
+	now := at.Format(time.RFC3339Nano)
+	patch := agendasql.UpdateInput{DeleteTime: graphql.Value(now)}
 	patch.Etag = graphql.Value(repox.NewULID())
 	if _, err := r.Svc.Mutation.DeepV1.Agendas.UpdateIfMatch(ctx, ids[len(ids)-1], patch, agendasql.DeleteTime.IsNull(true)); err != nil {
 		if errors.Is(err, graphql.ErrConflict) {

@@ -9,6 +9,7 @@ package repository
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -28,6 +29,9 @@ type resourceView struct {
 	Parented    bool   // Create/List take a parent resource name
 	Pattern     string // resource pattern, for doc comments
 	SoftDelete  bool   // AIP-164: Delete marks delete_time; Undelete and Purge exist
+	// Expiring reports an AIP-164 expire_time: Delete sets it from Retention
+	// (WithRetention) and Undelete clears it.
+	Expiring bool
 	// OutputOnly reports server-owned columns, which UpdateOutputOnly writes.
 	OutputOnly bool
 	// Flat reports a resource stored as one row -- no value objects, no deep
@@ -46,6 +50,7 @@ type schemaPkgView struct {
 	// GraphQL adapter wiring, set when the graphql_module opt is configured.
 	HasGraphQL   bool
 	HasBatch     bool   // some resource is Flat, so the schema gets a Batch
+	HasExpiring  bool   // some resource has an AIP-164 expire_time: WithRetention exists
 	ClientPkg    string // client root package name, e.g. "freebusyql"
 	GQLResources []gqlResourceView
 }
@@ -69,6 +74,9 @@ func schemaView(pb *pbIndex, db *schema.Database, s *schema.Schema, resources ma
 	}
 	var views []resourceView
 	for _, r := range rs {
+		if r.Cols.ExpireTime != nil {
+			imports["time"] = "" // WithRetention's duration
+		}
 		msg, ok := pb.msgs[r.Table.Source.FullName()]
 		if !ok {
 			return nil, fmt.Errorf("repository: no generated Go type for %s (is its proto in the codegen request?)", r.Table.ProtoMessage)
@@ -84,6 +92,7 @@ func schemaView(pb *pbIndex, db *schema.Database, s *schema.Schema, resources ma
 			Parented:    r.Parent != nil || len(r.Segments) > 1,
 			Pattern:     r.Pattern,
 			SoftDelete:  r.Cols.DeleteTime != nil,
+			Expiring:    r.Cols.ExpireTime != nil,
 			OutputOnly:  len(serverOwned(r)) > 0,
 			Flat:        len(r.VOs) == 0 && len(r.Graph) == 0,
 		})
@@ -97,11 +106,12 @@ func schemaView(pb *pbIndex, db *schema.Database, s *schema.Schema, resources ma
 			Schema:        s.Name,
 			Notes:         []string{"Proto-facing repository interfaces; adapters compose the generated gorm and GraphQL outputs."},
 		}),
-		Package:   pkg,
-		Imports:   renderImports(imports),
-		RepoxPkg:  repoxPkg,
-		Resources: views,
-		HasBatch:  hasFlat(views),
+		Package:     pkg,
+		Imports:     renderImports(imports),
+		RepoxPkg:    repoxPkg,
+		Resources:   views,
+		HasBatch:    hasFlat(views),
+		HasExpiring: slices.ContainsFunc(views, func(v resourceView) bool { return v.Expiring }),
 	}, nil
 }
 

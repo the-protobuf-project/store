@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS "aip_v1"."documents" (
 );
 
 -- Indexes
+CREATE INDEX IF NOT EXISTS "idx_documents_update_time" ON "aip_v1"."documents" ("update_time");
 CREATE INDEX IF NOT EXISTS "idx_documents_delete_time" ON "aip_v1"."documents" ("delete_time");
 
 -- Documentation

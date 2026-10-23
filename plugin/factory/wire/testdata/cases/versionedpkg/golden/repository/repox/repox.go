@@ -224,6 +224,15 @@ var (
 // crockford is the ULID alphabet (Crockford base32, no I/L/O/U).
 const crockford = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
+// ExpireAt is the expire_time a soft delete at at writes (AIP-164): at plus
+// retention, or nil -- none -- when retention is not positive.
+func ExpireAt(at time.Time, retention time.Duration) any {
+	if retention <= 0 {
+		return nil
+	}
+	return at.Add(retention)
+}
+
 // NewULID mints a 26-character ULID: 48 bits of millisecond timestamp and 80
 // bits of crypto randomness, Crockford-base32 encoded, with no external
 // dependency.

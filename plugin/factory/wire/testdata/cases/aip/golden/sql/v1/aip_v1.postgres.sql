@@ -31,6 +31,7 @@ CREATE TABLE "aip_v1"."documents" (
     -- delete_time marks a soft-deleted row when set (AIP-164).
     "delete_time"  TIMESTAMPTZ
 );
+CREATE INDEX "idx_documents_update_time" ON "aip_v1"."documents" ("update_time");
 CREATE INDEX "idx_documents_delete_time" ON "aip_v1"."documents" ("delete_time");
 
 

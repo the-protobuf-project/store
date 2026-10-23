@@ -25,8 +25,9 @@ const Extension = "btree_gist"
 
 // Plan is one exclusion constraint on one table.
 type Plan struct {
-	Name  string   // constraint name
-	Table string   // quoted, schema-qualified table: "allocation"."resource"
+	Name   string   // constraint name
+	Schema string   // the table's schema, unquoted
+	Table  string   // quoted, schema-qualified table: "allocation"."resource"
 	Key   []string // equality column names
 	Start string   // range start column
 	End   string   // range end column
@@ -68,7 +69,7 @@ func plans(s *schema.Schema, t *schema.Table, fx facets.Set) ([]Plan, error) {
 	var out []Plan
 	for i, rule := range opts.GetNoOverlap() {
 		where := fmt.Sprintf("store: %s: (store.v1.table).no_overlap[%d]", t.ProtoMessage, i)
-		p := Plan{Table: quote(s.Name) + "." + quote(t.Name)}
+		p := Plan{Schema: s.Name, Table: quote(s.Name) + "." + quote(t.Name)}
 		for _, k := range rule.GetKey() {
 			c := column(t, k)
 			if c == nil {
@@ -115,6 +116,48 @@ func (p Plan) DDL() string {
 		"    ALTER TABLE " + p.Table + " ADD CONSTRAINT " + quote(p.Name) + " EXCLUDE USING gist (" + strings.Join(cols, ", ") + ");\n" +
 		"  END IF;\n" +
 		"END $$;"
+}
+
+// LockDDL renders the trigger that keeps p's constraint from deadlocking: an
+// exclusion constraint checks a new row against rows other transactions have
+// inserted but not committed, so two writers of conflicting rows can each
+// insert, then each wait for the other -- a deadlock Postgres breaks only after
+// deadlock_timeout, a victim at a time, which under a burst cascades into
+// seconds of waiting. Before a row is inserted, or its key or range changed,
+// the trigger takes a transaction-scoped advisory lock on its key, so writers
+// of one key take turns: the second waits for the first to commit, then fails
+// the constraint check cleanly.
+//
+// The lock key is the constraint's name, then each key column's text, each
+// after a unit separator (0x1F) -- the key gormx.LockKey builds, so a
+// generated Batch can take the same locks up front, in order.
+//
+// Two statements, both re-runnable: the function, then the trigger, created
+// only when the table does not have it yet (as DDL creates the constraint).
+func (p Plan) LockDDL() []string {
+	fn := quote(p.Schema) + "." + quote(truncate(p.Name+"_lock"))
+	key := "'" + strings.ReplaceAll(p.Name, "'", "''") + "'"
+	for _, k := range p.Key {
+		key += " || chr(31) || coalesce(NEW." + quote(k) + "::text, '')"
+	}
+	watched := make([]string, 0, len(p.Key)+2)
+	for _, k := range append(append([]string{}, p.Key...), p.Start, p.End) {
+		watched = append(watched, quote(k))
+	}
+	return []string{
+		"CREATE OR REPLACE FUNCTION " + fn + "() RETURNS trigger LANGUAGE plpgsql AS $$\n" +
+			"BEGIN\n" +
+			"  PERFORM pg_advisory_xact_lock(hashtextextended(" + key + ", 0));\n" +
+			"  RETURN NEW;\n" +
+			"END $$;",
+		"DO $$ BEGIN\n" +
+			"  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = '" + truncate(p.Name+"_lock") + "' AND tgrelid = '" + p.Table + "'::regclass) THEN\n" +
+			"    CREATE TRIGGER " + quote(truncate(p.Name+"_lock")) +
+			" BEFORE INSERT OR UPDATE OF " + strings.Join(watched, ", ") + " ON " + p.Table +
+			" FOR EACH ROW EXECUTE FUNCTION " + fn + "();\n" +
+			"  END IF;\n" +
+			"END $$;",
+	}
 }
 
 // column finds the column a proto field name maps to.

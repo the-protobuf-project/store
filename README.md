@@ -576,8 +576,13 @@ GORM and a GraphQL adapter behind one interface. Besides `Create`, `Get`, `List`
 
 - **Soft delete (AIP-164).** For a resource with an `OUTPUT_ONLY`
   `google.protobuf.Timestamp delete_time`:
-  - `Delete` sets `delete_time` and leaves the row in place;
-  - `Undelete` clears it;
+  - `Delete` sets `delete_time` and leaves the row in place, moving
+    `update_time` to the same instant so a reader by update time sees the
+    delete as the record's latest write;
+  - with an `OUTPUT_ONLY` `expire_time` beside it, `Delete` also sets that
+    to `delete_time` plus the retention the factory was given
+    (`WithRetention(d)`; zero leaves it unset);
+  - `Undelete` clears `delete_time` (and `expire_time`);
   - `Purge` removes the row;
   - `List` skips deleted rows unless `ListInput.ShowDeleted` is set.
 - **`UpdateOutputOnly(ctx, m, paths)`.** Writes the server-owned (`OUTPUT_ONLY`)
@@ -587,7 +592,8 @@ GORM and a GraphQL adapter behind one interface. Besides `Create`, `Get`, `List`
   in `Update`.
 - **`Batch` (`NewBatch(conn)`).** Queues creates, `UpdateOutputOnly` calls and
   deletes across a schema's single-row resources, then applies them together:
-  - on GORM, `Commit` runs everything in one transaction;
+  - on GORM, `Commit` runs everything in one transaction, first taking the
+    `no_overlap` locks of every row it inserts, in order (`gormx.LockKeys`);
   - on GraphQL, `Commit` first applies the etag-guarded updates one by one,
     returning `repox.ErrConflict` before anything else is written, then
     commits the rest as one atomic mutation batch.
@@ -795,7 +801,7 @@ and queried, which no other plugin needs to agree with.
 | Field | Description |
 | --- | --- |
 | `outbox` | Emit a companion `<table>_outbox` table — id, `aggregate_id`, `event_type`, `payload`, `created_at`, `published_at` — so a change event can be written in the same transaction as the row it describes. The table only: draining it belongs to a streams generator. Off by default. |
-| `no_overlap` | Forbid two rows that share `key` from covering overlapping time, as a PostgreSQL exclusion constraint: `EXCLUDE USING gist (key WITH =, tstzrange(start, end, '[)') WITH &&)`. `start` and `end` name `google.protobuf.Timestamp` fields, and ranges are half-open, so back-to-back rows don't overlap. The SQL target writes the constraint, and the gorm `Registry.Migrate` adds it after AutoMigrate (with `btree_gist` installed by `EnsureSchemas`). A write that would overlap fails with SQLSTATE 23P01, which the repositories report as `repox.ErrConflict`. A misspelt field or a non-Timestamp bound fails generation. |
+| `no_overlap` | Forbid two rows that share `key` from covering overlapping time, as a PostgreSQL exclusion constraint: `EXCLUDE USING gist (key WITH =, tstzrange(start, end, '[)') WITH &&)`. `start` and `end` name `google.protobuf.Timestamp` fields, and ranges are half-open, so back-to-back rows don't overlap. The SQL target writes the constraint, and the gorm `Registry.Migrate` adds it after AutoMigrate (with `btree_gist` installed by `EnsureSchemas`). A write that would overlap fails with SQLSTATE 23P01, which the repositories report as `repox.ErrConflict`. Beside it, a `BEFORE INSERT OR UPDATE` trigger takes a transaction-scoped advisory lock on the row's key, so concurrent writers of one key take turns instead of deadlocking (exclusion constraints check against uncommitted rows, so two conflicting inserts can each wait on the other). A misspelt field or a non-Timestamp bound fails generation. |
 
 ### `(store.v1.query)` — field level
 

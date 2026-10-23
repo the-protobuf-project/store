@@ -105,6 +105,11 @@ type columnPlan struct {
 	// the row instead of removing it, Undelete clears the mark, and Purge
 	// removes the row for good.
 	DeleteTime *schema.Column
+	// ExpireTime is AIP-164's expire_time beside DeleteTime: when the
+	// soft-deleted record goes for good. Delete sets it from the repository's
+	// Retention and Undelete clears it, in the same write as delete_time.
+	// It stays in whichever bucket its other traits put it in.
+	ExpireTime *schema.Column
 	Refs       []*schema.Column // resource-reference columns (FKModel set): name↔bare-id mapped
 	Mutable    []*schema.Column // caller-settable data columns (the mask universe)
 	Autos      []*schema.Column // AutoCreate/AutoUpdate audit columns
@@ -303,6 +308,19 @@ func parsePattern(pattern string) ([]patternSegment, error) {
 
 // planColumns classifies t's columns for the generated CRUD bodies.
 func planColumns(t *schema.Table) columnPlan {
+	p := bucketColumns(t)
+	if p.DeleteTime != nil {
+		for _, c := range t.Columns {
+			if c.Name == "expire_time" && isTimestamp(c) && outputOnly(c) {
+				p.ExpireTime = c
+			}
+		}
+	}
+	return p
+}
+
+// bucketColumns sorts t's columns into planColumns' buckets.
+func bucketColumns(t *schema.Table) columnPlan {
 	var p columnPlan
 	for _, c := range t.Columns {
 		switch {

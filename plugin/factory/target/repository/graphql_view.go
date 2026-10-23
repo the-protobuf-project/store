@@ -34,6 +34,7 @@ type gqlResourceView struct {
 	// (SoftDelete only), e.g. "membersql.DeleteTime" and "DeleteTime".
 	DeleteTimePred       string
 	DeleteTimeInputField string
+	ExpireTimeInputField string // AIP-164 expire_time's UpdateInput field (Expiring only)
 	LowerModelV          string // camelCase model for converter func names
 
 	ParentInputField string // CreateInput parent FK field, e.g. "OrganisationId"
@@ -145,6 +146,9 @@ func gqlResourceViews(pb *pbIndex, db *schema.Database, s *schema.Schema, resour
 		if c := r.Cols.DeleteTime; c != nil {
 			v.DeleteTimePred = v.ResPkg + "." + export(camel(c.Name))
 			v.DeleteTimeInputField = export(camel(c.Name))
+		}
+		if c := r.Cols.ExpireTime; c != nil {
+			v.ExpireTimeInputField = export(camel(c.Name))
 		}
 		if v.HasEtag {
 			v.EtagPred = v.ResPkg + ".Etag"

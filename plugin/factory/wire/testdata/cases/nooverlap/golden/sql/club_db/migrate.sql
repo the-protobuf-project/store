@@ -66,9 +66,29 @@ DO $$ BEGIN
     ALTER TABLE "club"."bookings" ADD CONSTRAINT "bookings_court_no_overlap" EXCLUDE USING gist ("court" WITH =, tstzrange("start_time", "end_time", '[)') WITH &&);
   END IF;
 END $$;
+CREATE OR REPLACE FUNCTION "club"."bookings_court_no_overlap_lock"() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtextextended('bookings_court_no_overlap' || chr(31) || coalesce(NEW."court"::text, ''), 0));
+  RETURN NEW;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'bookings_court_no_overlap_lock' AND tgrelid = '"club"."bookings"'::regclass) THEN
+    CREATE TRIGGER "bookings_court_no_overlap_lock" BEFORE INSERT OR UPDATE OF "court", "start_time", "end_time" ON "club"."bookings" FOR EACH ROW EXECUTE FUNCTION "club"."bookings_court_no_overlap_lock"();
+  END IF;
+END $$;
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'one_closure_at_a_time' AND conrelid = '"club"."closures"'::regclass) THEN
     ALTER TABLE "club"."closures" ADD CONSTRAINT "one_closure_at_a_time" EXCLUDE USING gist (tstzrange("begins", "ends", '[)') WITH &&);
+  END IF;
+END $$;
+CREATE OR REPLACE FUNCTION "club"."one_closure_at_a_time_lock"() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtextextended('one_closure_at_a_time', 0));
+  RETURN NEW;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'one_closure_at_a_time_lock' AND tgrelid = '"club"."closures"'::regclass) THEN
+    CREATE TRIGGER "one_closure_at_a_time_lock" BEFORE INSERT OR UPDATE OF "begins", "ends" ON "club"."closures" FOR EACH ROW EXECUTE FUNCTION "club"."one_closure_at_a_time_lock"();
   END IF;
 END $$;
 
