@@ -153,7 +153,7 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 				}
 				for _, t := range s.Tables {
 					sf := p.NewGeneratedFile(fmt.Sprintf("%s/%s/%s", db.Name, pkg, storeFileName(t)), "")
-					if err := renderGo(sf, "store_model.go.tpl", storeModelView(db, s, pkg, t, typeOf, tel)); err != nil {
+					if err := renderGo(sf, "store_model.go.tpl", storeModelView(db, s, pkg, t, typeOf, tel, fx)); err != nil {
 						return fmt.Errorf("gorm: %s/%s/%s: %w", db.Name, pkg, storeFileName(t), err)
 					}
 				}

@@ -39,6 +39,11 @@ type GraphQL{{.Model}}Repository struct {
 	Hooks {{.Model}}Hooks
 	// ListOverrides substitute the generated dispatch for single filter fields.
 	ListOverrides map[string]filterx.GraphQLHandler
+{{- if .Expiring}}
+	// Retention is how long a soft-deleted record stays restorable: Delete
+	// sets expire_time that far ahead. Zero leaves it unset.
+	Retention time.Duration
+{{- end}}
 }
 
 // NewGraphQL{{.Model}}Repository returns the GraphQL adapter bound to svc.
@@ -439,7 +444,9 @@ func (r *GraphQL{{.Model}}Repository) UpdateOutputOnly(ctx context.Context, in *
 
 {{- if .SoftDelete}}
 // Delete soft-deletes the record addressed by its resource name: delete_time
-// is set, the row stays.
+// is set, the row stays.{{if .UpdateTimeField}} The update time is set to the same instant: the
+// delete is the record's latest write, which a reader by update time can tell
+// from any write after it.{{end}}
 func (r *GraphQL{{.Model}}Repository) Delete(ctx context.Context, name string) error {
 	ids, err := repox.SplitName(name, {{.CollectionsExpr}})
 	if err != nil {
@@ -450,7 +457,17 @@ func (r *GraphQL{{.Model}}Repository) Delete(ctx context.Context, name string) e
 			return err
 		}
 	}
-	patch := {{.ResPkg}}.UpdateInput{ {{- .DeleteTimeInputField}}: graphql.Value(time.Now().UTC().Format(time.RFC3339Nano))}
+	at := time.Now().UTC()
+	now := at.Format(time.RFC3339Nano)
+	patch := {{.ResPkg}}.UpdateInput{ {{- .DeleteTimeInputField}}: graphql.Value(now)}
+	{{- if .UpdateTimeField}}
+	patch.{{.UpdateTimeField}} = graphql.Value(now) // the delete is the record's latest write
+	{{- end}}
+	{{- if .Expiring}}
+	if r.Retention > 0 {
+		patch.{{.ExpireTimeInputField}} = graphql.Value(at.Add(r.Retention).Format(time.RFC3339Nano))
+	}
+	{{- end}}
 	{{- if .EtagInputField}}
 	patch.{{.EtagInputField}} = graphql.Value(repox.NewULID())
 	{{- end}}
@@ -471,6 +488,12 @@ func (r *GraphQL{{.Model}}Repository) Undelete(ctx context.Context, name string)
 	}
 	id := ids[len(ids)-1]
 	patch := {{.ResPkg}}.UpdateInput{ {{- .DeleteTimeInputField}}: graphql.Null[string]()}
+	{{- if .UpdateTimeField}}
+	patch.{{.UpdateTimeField}} = graphql.Value(time.Now().UTC().Format(time.RFC3339Nano))
+	{{- end}}
+	{{- if .Expiring}}
+	patch.{{.ExpireTimeInputField}} = graphql.Null[string]()
+	{{- end}}
 	{{- if .EtagInputField}}
 	patch.{{.EtagInputField}} = graphql.Value(repox.NewULID())
 	{{- end}}

@@ -24,7 +24,9 @@ import (
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
 
+	"github.com/the-protobuf-project/store/plugin/factory/facets"
 	"github.com/the-protobuf-project/store/plugin/factory/provenance"
+	"github.com/the-protobuf-project/store/plugin/factory/target/nooverlap"
 	"github.com/the-protobuf-project/store/plugin/factory/target/types"
 	"github.com/the-protobuf-project/store/telemetry"
 )
@@ -66,7 +68,14 @@ func gormxView(db *schema.Database) map[string]any {
 }
 
 // storeModelView assembles the data for one resource's <model>_store.go file.
-func storeModelView(db *schema.Database, s *schema.Schema, pkg string, t *schema.Table, typeOf types.TypeOf, tel telemetry.Set) map[string]any {
+// noOverlapView is one (store.v1.table).no_overlap rule as a store locks it:
+// the constraint's name and the model's Go fields holding its key.
+type noOverlapView struct {
+	Constraint string
+	Fields     []string
+}
+
+func storeModelView(db *schema.Database, s *schema.Schema, pkg string, t *schema.Table, typeOf types.TypeOf, tel telemetry.Set, fx facets.Set) map[string]any {
 	var unique, fks []finderView
 	var pkArgType string
 	hasPK := false
@@ -118,6 +127,17 @@ func storeModelView(db *schema.Database, s *schema.Schema, pkg string, t *schema
 		uniqueCols[name] = true
 	}
 
+	// A table with no_overlap rules serialises its inserts per key (see
+	// gormx.LockKeys), so its store names each rule's key fields.
+	var noOverlap []noOverlapView
+	for _, p := range nooverlap.For(s, t, fx) {
+		v := noOverlapView{Constraint: p.Name}
+		for _, k := range p.Key {
+			v.Fields = append(v.Fields, gormFieldName(colByName[k]))
+		}
+		noOverlap = append(noOverlap, v)
+	}
+
 	// Stores import the shared gormx runtime (ListOptions, Store) alongside gorm.
 	third := []string{gormxImportPath(db), "gorm.io/gorm"}
 	sort.Strings(third)
@@ -154,6 +174,7 @@ func storeModelView(db *schema.Database, s *schema.Schema, pkg string, t *schema
 		"Telemetry":     telEnabled,
 		"Metrics":       telEnabled && telMetrics,
 		"SpanPrefix":    spanPrefix,
+		"NoOverlap":     noOverlap,
 	}
 }
 

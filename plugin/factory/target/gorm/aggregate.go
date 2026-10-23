@@ -69,6 +69,7 @@ func aggregateView(db *schema.Database, fx facets.Set) map[string]any {
 			extensions = append(extensions, nooverlap.Extensions(plans)...)
 			for _, p := range plans {
 				constraints = append(constraints, p.DDL())
+				constraints = append(constraints, p.LockDDL()...)
 			}
 		}
 	}

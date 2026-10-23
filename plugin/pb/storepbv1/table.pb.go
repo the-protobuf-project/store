@@ -57,6 +57,8 @@ type TableOptions struct {
 	// tstzrange(start, end, '[)') WITH &&) -- which settles the race in the one
 	// place every writer passes through. A write that would overlap fails with
 	// SQLSTATE 23P01, which the generated repositories report as a conflict.
+	// A generated trigger has writers of one key take turns (an advisory lock
+	// before each insert), so racing writers fail cleanly rather than deadlock.
 	//
 	// Ranges are half-open, so back-to-back rows (one ending as the next begins)
 	// do not overlap.

@@ -78,6 +78,9 @@ func gormFileView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 			imports["gorm.io/gorm/clause"] = ""
 		}
 	}
+	if gormHasFlat(rs) {
+		imports[dbGormModule(db)+"/gormx"] = "" // the Batch's LockKeys
+	}
 	addPBImports(pb, s, imports)
 	gormPkg := addGormModelsImport(pb, db, s, pkg, imports)
 	return map[string]any{

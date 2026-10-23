@@ -31,7 +31,7 @@ type Document struct {
 	// create_time is set by the server on creation (AIP-148).
 	CreateTime time.Time `gorm:"column:create_time;type:timestamptz;not null;autoCreateTime" json:"create_time"`
 	// update_time is maintained by the server on every write (AIP-148).
-	UpdateTime time.Time `gorm:"column:update_time;type:timestamptz;not null;autoUpdateTime" json:"update_time"`
+	UpdateTime time.Time `gorm:"column:update_time;type:timestamptz;not null;autoUpdateTime;index:idx_documents_update_time" json:"update_time"`
 	// delete_time marks a soft-deleted row when set (AIP-164).
 	DeleteTime *time.Time `gorm:"column:delete_time;type:timestamptz;index:idx_documents_delete_time" json:"delete_time,omitempty"`
 }

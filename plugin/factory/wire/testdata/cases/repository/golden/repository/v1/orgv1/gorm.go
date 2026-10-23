@@ -20,6 +20,7 @@ import (
 	orgv1 "example.com/test/gen"
 	"example.com/test/gen/repox"
 	"example.com/test/gormdb/filterx"
+	"example.com/test/gormdb/gormx"
 	orgv1gorm "example.com/test/gormdb/v1/orgv1"
 	"fmt"
 	"google.golang.org/protobuf/proto"
@@ -780,12 +781,16 @@ var _ UserRepository = (*GormUserRepository)(nil)
 
 // gormBatch is Batch on GORM: queued writes run in one transaction on Commit.
 type gormBatch struct {
-	db  *gorm.DB
-	ops []func(ctx context.Context, tx *gorm.DB) error
-	err error // the first queueing error; Commit returns it and writes nothing
+	db    *gorm.DB
+	ops   []func(ctx context.Context, tx *gorm.DB) error
+	locks []string // no_overlap keys of the rows queued for insert
+	err   error    // the first queueing error; Commit returns it and writes nothing
 }
 
 // Commit runs every queued write in one transaction: all land or none do.
+// It first locks the no_overlap keys of every row it inserts, all at once and
+// in order (gormx.LockKeys), so two batches inserting rows for the same keys
+// in different orders take turns instead of deadlocking.
 func (b *gormBatch) Commit(ctx context.Context) error {
 	if b.err != nil {
 		return b.err
@@ -794,6 +799,9 @@ func (b *gormBatch) Commit(ctx context.Context) error {
 		return nil
 	}
 	return repox.MapGormErr(b.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := gormx.LockKeys(tx, b.locks...); err != nil {
+			return err
+		}
 		for _, op := range b.ops {
 			if err := op(ctx, tx); err != nil {
 				return err
@@ -814,6 +822,9 @@ func (b *gormBatch) CreateUser(in *orgv1.User) (string, error) {
 	m, name, err := (&GormUserRepository{DB: b.db}).newRow(in)
 	if err != nil {
 		return "", err
+	}
+	if k, ok := any(m).(interface{ NoOverlapKeys() []string }); ok {
+		b.locks = append(b.locks, k.NoOverlapKeys()...)
 	}
 	b.ops = append(b.ops, func(ctx context.Context, tx *gorm.DB) error {
 		return orgv1gorm.NewUserStore(tx).Create(ctx, m)

@@ -28,6 +28,12 @@ type gormResourceView struct {
 	// EtagColumn is the etag column name, rewritten by soft delete and
 	// undelete as any other write would.
 	EtagColumn string
+	// UpdateTimeColumn is the auto-update timestamp column, "" when there is
+	// none. Soft delete sets it to the instant it sets delete_time, so a
+	// change feed reading by update time sees the delete as the write it is.
+	UpdateTimeColumn string
+	// ExpireTimeColumn is AIP-164's expire_time (Expiring only).
+	ExpireTimeColumn string
 
 	PKField string // gorm model field of the surrogate key, e.g. "ID"
 
@@ -104,6 +110,14 @@ func gormResourceViews(pb *pbIndex, db *schema.Database, s *schema.Schema, resou
 		if r.Cols.Etag != nil {
 			v.HasEtag, v.EtagField, v.EtagPtr = true, gormField(r.Cols.Etag), r.Cols.Etag.Optional
 			v.EtagColumn = r.Cols.Etag.Name
+		}
+		for _, c := range r.Table.Columns {
+			if c.AutoUpdate {
+				v.UpdateTimeColumn = c.Name
+			}
+		}
+		if c := r.Cols.ExpireTime; c != nil {
+			v.ExpireTimeColumn = c.Name
 		}
 		var formatParts, collections []string
 		for _, seg := range r.Segments {

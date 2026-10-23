@@ -86,6 +86,20 @@ func (s *{{.Store}}) Create(ctx context.Context, m *{{.Name}}) error {
 	return s.DB.WithContext(ctx).Create(m).Error
 {{- end}}
 }
+{{- if .NoOverlap}}
+
+// NoOverlapKeys are the advisory-lock keys of m's no_overlap rules, the ones
+// the table's lock trigger takes on insert. A repository Batch takes them all
+// up front, in order (gormx.LockKeys), so two batches inserting rows for the
+// same keys in different orders take turns instead of deadlocking.
+func (m *{{.Name}}) NoOverlapKeys() []string {
+	return []string{
+{{- range .NoOverlap}}
+		gormx.LockKey("{{.Constraint}}"{{range .Fields}}, m.{{.}}{{end}}),
+{{- end}}
+	}
+}
+{{- end}}
 
 // List returns the {{.Name}} records matching opts.
 func (s *{{.Store}}) List(ctx context.Context, opts gormx.ListOptions) ([]{{.Name}}, error) {

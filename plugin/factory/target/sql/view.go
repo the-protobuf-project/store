@@ -76,6 +76,7 @@ func schemaView(db *schema.Database, s *schema.Schema, typeOf types.TypeOf, fx f
 		extensions = append(extensions, nooverlap.Extensions(plans)...)
 		for _, p := range plans {
 			tv.Indexes = append(tv.Indexes, p.DDL())
+			tv.Indexes = append(tv.Indexes, p.LockDDL()...)
 		}
 		tables = append(tables, tv)
 	}
@@ -240,6 +241,7 @@ func migrateView(db *schema.Database, typeOf types.TypeOf, fx facets.Set) map[st
 			extensions = append(extensions, nooverlap.Extensions(exclusions)...)
 			for _, p := range exclusions {
 				constraints = append(constraints, p.DDL())
+				constraints = append(constraints, p.LockDDL()...)
 			}
 		}
 

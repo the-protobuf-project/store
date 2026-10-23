@@ -22,6 +22,11 @@ type Gorm{{.Model}}Repository struct {
 	// ListOverrides substitute the generated dispatch for single filter fields
 	// (e.g. a derived state computed via subqueries).
 	ListOverrides map[string]filterx.SQLHandler
+{{- if .Expiring}}
+	// Retention is how long a soft-deleted record stays restorable: Delete
+	// sets expire_time that far ahead. Zero leaves it unset.
+	Retention time.Duration
+{{- end}}
 }
 
 // NewGorm{{.Model}}Repository returns the GORM adapter bound to db.
@@ -402,7 +407,9 @@ func (r *Gorm{{.Model}}Repository) newRow({{if .Parented}}parent string, {{end}}
 
 {{- if .SoftDelete}}
 // Delete soft-deletes the record addressed by its resource name: delete_time
-// is set, the row stays.
+// is set, the row stays.{{if .UpdateTimeColumn}} {{.UpdateTimeColumn}} is set to the same instant: the
+// delete is the record's latest write, which a reader by update time can tell
+// from any write after it.{{end}}
 func (r *Gorm{{.Model}}Repository) Delete(ctx context.Context, name string) error {
 	ids, err := repox.SplitName(name, {{.CollectionsExpr}})
 	if err != nil {
@@ -413,9 +420,10 @@ func (r *Gorm{{.Model}}Repository) Delete(ctx context.Context, name string) erro
 			return err
 		}
 	}
+	now := time.Now()
 	res := r.DB.WithContext(ctx).Model(&{{$.GormPkg}}.{{.Model}}{}).
 		Where("id = ? AND delete_time IS NULL", ids[len(ids)-1]).
-		Updates(map[string]any{"delete_time": time.Now(){{if .HasEtag}}, "{{.EtagColumn}}": repox.NewULID(){{end}}})
+		Updates(map[string]any{"delete_time": now{{if .UpdateTimeColumn}}, "{{.UpdateTimeColumn}}": now{{end}}{{if .HasEtag}}, "{{.EtagColumn}}": repox.NewULID(){{end}}{{if .Expiring}}, "{{.ExpireTimeColumn}}": repox.ExpireAt(now, r.Retention){{end}}})
 	if res.Error != nil {
 		return repox.MapGormErr(res.Error)
 	}
@@ -434,7 +442,7 @@ func (r *Gorm{{.Model}}Repository) Undelete(ctx context.Context, name string) (*
 	id := ids[len(ids)-1]
 	res := r.DB.WithContext(ctx).Model(&{{$.GormPkg}}.{{.Model}}{}).
 		Where("id = ? AND delete_time IS NOT NULL", id).
-		Updates(map[string]any{"delete_time": nil{{if .HasEtag}}, "{{.EtagColumn}}": repox.NewULID(){{end}}})
+		Updates(map[string]any{"delete_time": nil{{if .HasEtag}}, "{{.EtagColumn}}": repox.NewULID(){{end}}{{if .Expiring}}, "{{.ExpireTimeColumn}}": nil{{end}}})
 	if res.Error != nil {
 		return nil, repox.MapGormErr(res.Error)
 	}
@@ -489,12 +497,16 @@ var _ {{.Model}}Repository = (*Gorm{{.Model}}Repository)(nil)
 
 // gormBatch is Batch on GORM: queued writes run in one transaction on Commit.
 type gormBatch struct {
-	db  *gorm.DB
-	ops []func(ctx context.Context, tx *gorm.DB) error
-	err error // the first queueing error; Commit returns it and writes nothing
+	db    *gorm.DB
+	ops   []func(ctx context.Context, tx *gorm.DB) error
+	locks []string // no_overlap keys of the rows queued for insert
+	err   error    // the first queueing error; Commit returns it and writes nothing
 }
 
 // Commit runs every queued write in one transaction: all land or none do.
+// It first locks the no_overlap keys of every row it inserts, all at once and
+// in order (gormx.LockKeys), so two batches inserting rows for the same keys
+// in different orders take turns instead of deadlocking.
 func (b *gormBatch) Commit(ctx context.Context) error {
 	if b.err != nil {
 		return b.err
@@ -503,6 +515,9 @@ func (b *gormBatch) Commit(ctx context.Context) error {
 		return nil
 	}
 	return repox.MapGormErr(b.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := gormx.LockKeys(tx, b.locks...); err != nil {
+			return err
+		}
 		for _, op := range b.ops {
 			if err := op(ctx, tx); err != nil {
 				return err
@@ -524,6 +539,9 @@ func (b *gormBatch) Create{{.Model}}({{if .Parented}}parent string, {{end}}in *{
 	m, name, err := (&Gorm{{.Model}}Repository{DB: b.db}).newRow({{if .Parented}}parent, {{end}}in)
 	if err != nil {
 		return "", err
+	}
+	if k, ok := any(m).(interface{ NoOverlapKeys() []string }); ok {
+		b.locks = append(b.locks, k.NoOverlapKeys()...)
 	}
 	b.ops = append(b.ops, func(ctx context.Context, tx *gorm.DB) error {
 		return {{$.GormPkg}}.{{.Store}}(tx).Create(ctx, m)
