@@ -82,18 +82,18 @@ func newPlugin(t *testing.T) (*ddnrefs.Plugin, *[]map[string]any) {
 		Methods: []grpc.MethodDesc{{MethodName: "GetCard", Handler: getCard}},
 	}, struct{}{})
 	storepbv1.RegisterReferenceServiceServer(srv, referrers{})
-	go srv.Serve(lis)
+	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
 
 	// DDN answers the by-key read of a nested resource's name.
 	ddn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct{ Query string }
-		json.NewDecoder(r.Body).Decode(&body)
+		_ = json.NewDecoder(r.Body).Decode(&body)
 		if r.Header.Get("x-hasura-admin-secret") != "admin" || !strings.Contains(body.Query, `catalogBooksById(id: "B1")`) {
-			io.WriteString(w, `{"data":{"r":null}}`)
+			_, _ = io.WriteString(w, `{"data":{"r":null}}`)
 			return
 		}
-		io.WriteString(w, `{"data":{"r":{"name":"shelves/s2/books/b1"}}}`)
+		_, _ = io.WriteString(w, `{"data":{"r":{"name":"shelves/s2/books/b1"}}}`)
 	}))
 	t.Cleanup(ddn.Close)
 
@@ -101,7 +101,7 @@ func newPlugin(t *testing.T) (*ddnrefs.Plugin, *[]map[string]any) {
 	events := &[]map[string]any{}
 	sink := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var e map[string]any
-		json.NewDecoder(r.Body).Decode(&e)
+		_ = json.NewDecoder(r.Body).Decode(&e)
 		if r.Header.Get("Content-Type") == "application/cloudevents+json" {
 			mu.Lock()
 			*events = append(*events, e)
@@ -140,7 +140,7 @@ func call(t *testing.T, h http.Handler, body map[string]any, secret string) (int
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	var out map[string]any
-	json.Unmarshal(rec.Body.Bytes(), &out)
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
 	return rec.Code, out
 }
 

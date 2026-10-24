@@ -500,7 +500,7 @@ func (p *Plugin) nameOf(ctx context.Context, m *Mutation, key string) (string, e
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var out struct {
 		Data struct {
 			R *struct {
@@ -609,7 +609,7 @@ func (p *Plugin) notify(ctx context.Context, d pendingDelete) {
 		p.log.Error("ddnrefs: publishing an event", "error", err, "subject", d.name)
 		return
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		p.log.Error("ddnrefs: the sink refused an event", "status", resp.StatusCode, "subject", d.name)
 	}
@@ -618,5 +618,5 @@ func (p *Plugin) notify(ctx context.Context, d pendingDelete) {
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(v)
+	_ = json.NewEncoder(w).Encode(v)
 }
