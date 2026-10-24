@@ -30,6 +30,7 @@
 - [Plugin options](#plugin-options)
 - [Defaults applied automatically](#defaults-applied-automatically)
 - [Determinism & migrations](#determinism--migrations)
+- [Versioned migrations (`migrate`)](#versioned-migrations-migrate)
 - [Type mapping](#type-mapping)
 - [Examples](#examples)
 - [Building from source](#building-from-source)
@@ -1510,6 +1511,97 @@ adding a new package cannot silently rename an existing model and force a
 destructive migration. The schema-namespaced targets (SQL, GORM) keep the
 bare name, since the schema or Go package already disambiguates it. Recommended
 flow: regenerate, review the diff, then `migrate diff` / `migrate dev`.
+
+## Versioned migrations (`migrate`)
+
+`AutoMigrate` is how a development database gets its tables; it never drops
+anything, so it is not how production changes schema. Package
+[`migrate`](migrate) keeps a directory of versioned SQL migrations in step with
+the generated GORM registries and applies it, with the
+[atlas](https://atlasgo.io) community CLI doing the diffing.
+
+The desired schema is what the registries build (`EnsureSchemas`, `Migrate`,
+then every registry's `MigrateExternal`) on a scratch database; atlas diffs it
+against the directory's history and writes the next file. Atlas's community
+build ignores three things the registries emit, so the package handles them
+itself, read off the scratch database:
+
+- **Extensions** — a `<ts>_extensions.sql` ahead of atlas's file creates the
+  extensions no migration creates yet.
+- **Functions and triggers** (the `no_overlap` lock triggers among them) — a
+  `<ts>_<name>_routines.sql` after atlas's file holds every function
+  (`pg_get_functiondef`, `CREATE OR REPLACE`) and trigger
+  (`DROP TRIGGER IF EXISTS` + `pg_get_triggerdef`) whose definition the history
+  lacks.
+- **NOT VALID foreign keys** — keys `MigrateExternal` adds into another
+  registry's tables are marked `NOT VALID` in atlas's file, so applying it never
+  fails on rows already there. `validate` later writes
+  `<ts>_validate_foreign_keys.sql`: a guarded `VALIDATE CONSTRAINT` (runs only
+  while the key exists unvalidated) for each key no migration validates yet.
+
+`atlas.sum` is rehashed after every file the package writes or edits.
+
+### Wiring it
+
+The registries are your generated code, so the package cannot load them on
+its own and ships no binary: you compile a three-line command that hands them
+over. One registry per database, each from its own proto module or buf run,
+so list every one the database holds:
+
+```go
+// tools/db/migrations/main.go
+package main
+
+import (
+	"github.com/acme/app/internal/database/gorm/app"
+	"github.com/acme/app/internal/database/gorm/rfc"
+	"github.com/the-protobuf-project/store/migrate"
+)
+
+func main() {
+	migrate.Main(migrate.Config{}, migrate.Of(app.Default), migrate.Of(rfc.Default))
+}
+```
+
+`migrate.Of` accepts any generated `Default` registry (its `Migrate` takes the
+package's own `Migrator` interface; `Of` infers it). `migrate.Build(db, ...)`
+runs the same build on any `*gorm.DB` — a dev-only "AutoMigrate everything"
+command is `migrate.Build` over `migrate.Open(dsn)`.
+
+```text
+go run ./tools/db/migrations [flags] diff <name>   # write the next migration, if the models changed
+go run ./tools/db/migrations [flags] validate      # write a migration validating the NOT VALID keys
+go run ./tools/db/migrations [flags] check         # fail if the models changed without a migration (CI)
+go run ./tools/db/migrations [flags] apply [atlas flags]   # e.g. apply --baseline <version>
+```
+
+`check` runs `diff` on a temporary copy of the directory and fails if it would
+write anything — run it in CI after `apply` on a throwaway Postgres.
+
+### Configuration
+
+`migrate.Config` from `main`, then a YAML file (`-config`, `${NAME}` expanded),
+then the environment, then flags — each overriding the one before:
+
+| Field (YAML) | Env / flag | Meaning |
+|---|---|---|
+| `url` | `STORE_MIGRATE_URL` / `-url` | `postgres://` URL of the database `apply` migrates |
+| `scratch_url` | `STORE_MIGRATE_SCRATCH_URL` / `-scratch-url` | a database on the server where `diff`/`validate`/`check` create and drop `<db>_atlas_desired` and `<db>_atlas_dev` (default: `url`) |
+| `dir` | `-dir` | migration directory (default `migrations`) |
+| `header` | — | text prepended to every file written (a license notice), before rehashing |
+| `atlas` | `-atlas` | atlas binary (default `atlas` on `PATH`) |
+| `atlas_version` | — | refuse any other atlas version (`migrate.AtlasVersion`, `v1.3.0`) |
+
+### Atlas
+
+The package is tested with the atlas **community** build `v1.3.0`
+(`migrate.AtlasVersion`): `brew install atlas`, or in CI
+`curl -sSfL -o /usr/local/bin/atlas https://release.ariga.io/atlas/atlas-community-linux-amd64-v1.3.0`.
+Applying in production needs only atlas and the directory — e.g. an image over
+`docker.io/arigaio/atlas:1.3.0-community` with entrypoint
+`/atlas migrate apply --dir file:///migrations` and the deployment adding
+`--url`. (Atlas's Pro build manages functions and triggers itself and would
+duplicate the routines migrations.)
 
 ## Type mapping
 

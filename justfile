@@ -47,11 +47,11 @@ stubs:
 
 # Format Go sources in place.
 fmt:
-    gofmt -w plugin
+    gofmt -w plugin migrate
 
 # Static checks: gofmt diff, go vet, buf lint (mutates nothing).
 lint:
-    @test -z "$(gofmt -l plugin)" || { echo "unformatted files (run: just fmt):"; gofmt -l plugin; exit 1; }
+    @test -z "$(gofmt -l plugin migrate)" || { echo "unformatted files (run: just fmt):"; gofmt -l plugin migrate; exit 1; }
     go vet ./...
     buf lint
 
