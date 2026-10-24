@@ -8,6 +8,7 @@ package repository
 // import list so every emitted file imports exactly what its fragments use.
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/the-protobuf-project/protokit/header"
@@ -56,6 +57,7 @@ func gormFileView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 	imports := map[string]string{
 		"context":                          "",
 		"gorm.io/gorm":                     "",
+		"gorm.io/gorm/clause":              "", // updateTx's row lock
 		"google.golang.org/protobuf/proto": "",
 		dbGoModule(db) + "/" + repoxPkg:    "",
 		dbGormModule(db) + "/filterx":      "",
@@ -68,28 +70,26 @@ func gormFileView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 			imports["fmt"] = ""
 			imports["time"] = ""
 		}
-		if r.OutputOnly || r.Flat {
+		if r.OutputOnly {
 			imports["fmt"] = ""
+		}
+		if r.HasVOs || r.SoftDelete {
+			imports["errors"] = "" // the Batch's idempotent purge, PurgeExpired
 		}
 		for _, cp := range r.CrossVOPkgs {
 			imports[dbGormModule(db)+"/"+db.Name+"/"+cp] = ""
 		}
-		if r.NeedsClause {
-			imports["gorm.io/gorm/clause"] = ""
-		}
-	}
-	if gormHasFlat(rs) {
-		imports[dbGormModule(db)+"/gormx"] = "" // the Batch's LockKeys
 	}
 	addPBImports(pb, s, imports)
 	gormPkg := addGormModelsImport(pb, db, s, pkg, imports)
 	return map[string]any{
-		"Header":    fileHeader(db, s, "GORM adapters composing the generated models, stores, converters, and filterx specs."),
-		"Package":   pkg,
-		"GormPkg":   gormPkg,
-		"Imports":   renderImports(imports),
-		"Resources": rs,
-		"HasBatch":  gormHasFlat(rs),
+		"Header":      fileHeader(db, s, "GORM adapters composing the generated models, stores, converters, and filterx specs."),
+		"Package":     pkg,
+		"GormPkg":     gormPkg,
+		"Imports":     renderImports(imports),
+		"Resources":   rs,
+		"HasBatch":    len(rs) > 0,
+		"HasExpiring": slices.ContainsFunc(rs, func(r gormResourceView) bool { return r.Expiring }),
 	}
 }
 
@@ -165,13 +165,4 @@ func addGormModelsImport(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg
 	qual := gormModelsQual(pb, s, pkg)
 	imports[dbGormModule(db)+"/"+db.Name+"/"+pkg] = qual
 	return qual
-}
-
-func gormHasFlat(rs []gormResourceView) bool {
-	for _, r := range rs {
-		if r.Flat {
-			return true
-		}
-	}
-	return false
 }

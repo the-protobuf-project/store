@@ -1,0 +1,71 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+// Package refdemo.catalog.v1 is the referenced side of the references
+// example: shelves and the books on them, in the "catalog" database.
+package refdemo.catalog.v1;
+
+import "entity/v1/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "example.com/test/gen;refdemov1";
+option java_multiple_files = true;
+option java_outer_classname = "CatalogProto";
+option java_package = "com.refdemo.catalog.v1";
+
+// A shelf holds books.
+message Shelf {
+  option (google.api.resource) = {
+    type: "catalog.example.com/Shelf"
+    pattern: "shelves/{shelf}"
+    singular: "shelf"
+    plural: "shelves"
+  };
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
+
+  // The shelf's resource name.
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  // A label for people.
+  string display_name = 2 [(google.api.field_behavior) = REQUIRED];
+
+  // Optimistic-concurrency token.
+  string etag = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // When the shelf was soft-deleted.
+  google.protobuf.Timestamp delete_time = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // When the soft-deleted shelf goes for good.
+  google.protobuf.Timestamp expire_time = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// A book on a shelf: a nested resource, so a reference to it stores its full
+// name and a foreign key to it targets its name column.
+message Book {
+  option (google.api.resource) = {
+    type: "catalog.example.com/Book"
+    pattern: "shelves/{shelf}/books/{book}"
+    singular: "book"
+    plural: "books"
+  };
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
+
+  // The book's resource name.
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  // The title.
+  string title = 2 [(google.api.field_behavior) = REQUIRED];
+
+  // Optimistic-concurrency token.
+  string etag = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // When the book was soft-deleted.
+  google.protobuf.Timestamp delete_time = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // When the soft-deleted book goes for good.
+  google.protobuf.Timestamp expire_time = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+}

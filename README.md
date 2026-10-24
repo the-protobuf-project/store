@@ -23,6 +23,7 @@
 - [Quick start](#quick-start)
 - [Output layout](#output-layout)
 - [GraphQL client SDK](#graphql-client-sdk)
+- [Reference integrity](#reference-integrity)
 - [Annotations reference](#annotations-reference)
 - [Configuration — `store.yaml`](#configuration--ormyaml)
 - [Plugin options](#plugin-options)
@@ -585,22 +586,76 @@ GORM and a GraphQL adapter behind one interface. Besides `Create`, `Get`, `List`
   - `Undelete` clears `delete_time` (and `expire_time`);
   - `Purge` removes the row;
   - `List` skips deleted rows unless `ListInput.ShowDeleted` is set.
+- **Etag guards hold under concurrency.** `Update` and `UpdateOutputOnly`
+  compare `m.Etag` against the stored one. On GORM the row is read
+  `FOR UPDATE` inside the write's transaction, so two writers holding the same
+  etag take turns and the second gets `repox.ErrConflict`. On GraphQL the
+  write itself carries the guard (`UpdateIfMatch`, an etag pre-check), and a
+  guard that matches no row is `repox.ErrConflict`.
 - **`UpdateOutputOnly(ctx, m, paths)`.** Writes the server-owned (`OUTPUT_ONLY`)
   fields `paths` names, such as a state, an expiry or a computed list. `Update`
   refuses those fields because a client may not set them; this method is for
   the service that owns them. `m.Etag`, when set, guards the write as it does
   in `Update`.
-- **`Batch` (`NewBatch(conn)`).** Queues creates, `UpdateOutputOnly` calls and
-  deletes across a schema's single-row resources, then applies them together:
-  - on GORM, `Commit` runs everything in one transaction, first taking the
-    `no_overlap` locks of every row it inserts, in order (`gormx.LockKeys`);
-  - on GraphQL, `Commit` first applies the etag-guarded updates one by one,
-    returning `repox.ErrConflict` before anything else is written, then
-    commits the rest as one atomic mutation batch.
+- **`UpdateWithOutputOnly(ctx, m, paths, outputPaths)`** (and
+  `Batch.Update<Model>WithOutputOnly`). `Update` plus the server-owned fields
+  `outputPaths` names, in the same write under the same etag guard — on GORM
+  inside `Update`'s `FOR UPDATE` transaction, on GraphQL merged into the one
+  update patch. `paths` keeps `Update`'s meaning (an `OUTPUT_ONLY` path in it
+  is still ignored, AIP-203), and a `BeforeUpdate` hook that sets one of the
+  `outputPaths` fields on the merged record has it written too.
+- **`Batch` and `repox.Unit` (atomic writes across tables and schemas).**
+  Every schema package has a `Batch` covering all of its resources, value
+  objects and deep graphs included: `Create<Model>`, `Update<Model>` (the
+  repository's masked `Update`), `Update<Model>OutputOnly`, and
+  `Delete<Model>` -- a soft delete for an AIP-164 resource, with
+  `Purge<Model>` to remove it for good; a removal for good otherwise. Writes
+  queue into a `repox.Unit`; `NewBatch(conn, opts...)` makes one of its own,
+  and `NewBatchIn(u, opts...)` shares `u`, so writes to several schemas
+  (a calendar and its events) commit as one:
 
-  GraphQL needs the guarded updates separate because the engine reports a
-  failed precheck by touching no row, and that cannot abort a batch. Batch
-  deletes are idempotent, and hooks don't run for queued writes.
+  ```go
+  u := repox.NewUnit(conn)
+  events := event.NewBatchIn(u, event.WithRetention(30*24*time.Hour))
+  events.UpdateEvent(series, nil)            // series.Etag guards it
+  name, err := events.CreateEvent(calendar, override)
+  events.DeleteEvent(oldOverride)
+  calendars := calendar.NewBatchIn(u)
+  calendars.UpdateCalendar(cal, []string{"display_name"})
+  err = u.Commit(ctx)                       // or Commit on any Batch over u
+  ```
+
+  - On GORM, `Commit` runs everything in one transaction, first taking the
+    `no_overlap` locks of every row it inserts, in order (`gormx.LockKeys`).
+    All of it lands or none does.
+  - On GraphQL, `Commit` runs each queued write's reads (the record an update
+    merges onto, the value-object rows it replaces), then sends every
+    mutation in **one request**, which Hasura DDN runs in one transaction when
+    the tables share a connector. An `Update<Model>` guarded by an etag is
+    checked inside that request: a self-update of the key whose post-check
+    asserts the etag fails the request when the record moved on, and the
+    guarded update follows it. `Commit` returns `repox.ErrConflict` for a
+    failed guard (it reads the record again to tell).
+  - Not atomic on GraphQL: a guarded `Update<Model>OutputOnly` is sent ahead
+    of the request, alone, because the engine reports its failed pre-check by
+    touching no row; the reads happen before the transaction (an unguarded
+    update can lose a race, as the repository's own `Update` can); a guarded
+    row purged between the read and the commit is reported after the commit,
+    the rest having landed; and tables on different connectors are separate
+    transactions. The in-request guard relies on the connector rejecting a
+    failed post-check (ndc-postgres does).
+
+  Batch deletes and purges are idempotent, and hooks don't run for queued
+  writes. `Commit` reports every queued record to the connection's
+  `ChangeObserver`, whatever it returns.
+- **Partial reads (`ListInput.ReadMask`, AIP-157).** `List` returns only the
+  fields the mask names, plus `name`; `"start.date_time"` reads all of
+  `start`. Value objects and child rows are read only when named, which on
+  GraphQL removes a query per record each; on GORM the row's unnamed columns
+  are also left out of the `SELECT` (the sort columns stay). A change feed
+  reads keys and timestamps this way at one query per page, and fetches whole
+  records only for what it delivers. A path naming no field is
+  `repox.ErrInvalidArgument`.
 - **Typed list conditions.** `ListInput.Where` takes `filterx.Condition`s,
   which are ANDed with the AIP-160 `Filter`. This adds `filterx.In` for
   batched reads, and `OpLt`/`OpGt` for strict bounds, which the filter grammar
@@ -611,12 +666,21 @@ GORM and a GraphQL adapter behind one interface. Besides `Create`, `Get`, `List`
   event's `start`, its `recurrence`) is a filter field under its own name,
   which supports `IsNull`. Each of its filterable columns is a field under a
   dotted path (`start.date_time`). The GORM engine matches a dotted field with
-  `ref_id IN (SELECT key FROM <object table> WHERE ...)`. The Hasura engine
-  rejects a dotted field with `ErrInvalid`, because DDN metadata has no
-  relationships to traverse. A condition wrapped in `filterx.AsHint` is
-  skipped on a backend that can't apply it. Use hints only to narrow a read
-  whose results the caller checks again in code: GORM then reads fewer rows,
-  and both backends return the same results.
+  `ref_id IN (SELECT key FROM <object table> WHERE ...)`. DDN metadata has no
+  relationships to traverse, so the Hasura engine cannot make that one query;
+  the generated GraphQL repositories register a lookup per value object
+  (`filterx.HasuraEngine.Via`), and the engine matches a dotted field page by
+  page: it reads a page of rows matching the other conditions, asks the value
+  object's table which of the keys those rows point at match (one query per
+  value-object term), and reads the page again keeping the rows that do. The
+  database does the matching; only kept rows are converted and hydrated. The
+  rows of the scope are still paged through (cheaply: one row query each), so
+  pages may come back short or empty with a next-page token. Making the
+  window one query needs DDN relationships between a row and its value
+  objects, which the metadata does not have. A condition wrapped in
+  `filterx.AsHint` is skipped on a backend that can't apply it (an engine
+  without a lookup for it); use hints only to narrow a read whose results the
+  caller checks again in code.
 - **Cross-parent reads (AIP-159).** `List` under a `-` parent
   (`"calendars/-"`) reads across every parent. Each parent is exposed as a
   filter field named after it (`calendar`), so the read can be narrowed with
@@ -708,6 +772,88 @@ Generated files are collision-proof: if a schema name would clash with the
 runtime `graphql`/`runtime` import identifiers, the import is deterministically
 aliased (`gqlnet`/`rtnet`) and its references rewritten, so the output always
 compiles regardless of the source schema's naming.
+
+## Reference integrity
+
+A `google.api.resource_reference` is enforced where it can be, and checked
+above the database where it cannot:
+
+| Target lives… | Enforced by | Rendered as |
+| --- | --- | --- |
+| in the same database, same run | a foreign key with a relation | the usual FK + association |
+| in another database **on the same server** (same provider and URL), this run or [discovered](#top-level-keys) from a reference image | a constraint-only foreign key (`Table.ExternalForeignKeys`) | SQL: an idempotent `DO $$ … ADD CONSTRAINT "fk_<table>_<col>" … NOT VALID` at the end of `migrate.sql`, plus `validate.sql`; GORM: `Registry.MigrateExternal(db)` / `ValidateExternal(db)`. No association anywhere (Prisma, repositories, GraphQL). |
+| in another server or another service | the generated repositories (both GORM and GraphQL), the `store.v1` contract | write-time AIP Get, delete-time `store.v1.ReferenceService`, a reconciler |
+
+Stored values never change: a reference column holds the full resource name
+(AIP-122) and its foreign key targets the target's unique name column; a
+parent FK holds the bare id and targets the primary key. GORM relations to a
+non-PK column carry `references:<Field>`.
+
+**Foreign keys.** Run `MigrateExternal` after *every* registry's `Migrate`
+(its target is another registry's table); a missing target is skipped with a
+log line and picked up on the next start. The constraint is added `NOT VALID`,
+so existing rows are not checked until `ValidateExternal` (or `validate.sql`)
+runs `VALIDATE CONSTRAINT` — do that once the data is clean. A violation
+surfaces as `repox.ErrForeignKey` (PostgreSQL 23503 on GORM; the engine's
+"violates foreign key constraint" on GraphQL).
+
+**Purge keeps referenced rows.** `Purge`, `PurgeExpired(ctx, now)` (resources
+with an AIP-164 `expire_time`) and `Batch.Purge<Model>` leave a row in place —
+and report it through `repox.References.OnKept` and `PurgeResult.Kept` —
+while anything still refers to it: a foreign key of the same server (asked
+with a generated `EXISTS` query on GORM, and caught from the constraint on
+either backend), or a referrer another service reports. A purge never fails
+and never cascades because of a referrer. One exception: a GraphQL *batch*
+purge of a row a same-server foreign key still names fails the batch with
+`ErrForeignKey`, since the engine runs the request as one transaction and
+cannot skip one mutation in it.
+
+**Across services** the contract is language-neutral (`store/v1/reference.proto`,
+`store/v1/reference_service.proto`); the generated Go is one binding of it:
+
+- *On write* — `Create`, `Update`, `UpdateWithOutputOnly` and every Batch
+  create/update resolve each external reference they set with
+  `repox.References.Resolve`, i.e. the target's AIP Get by name. Missing →
+  `repox.ErrReferenceNotFound` (reason `REFERENCE_NOT_FOUND`); no resolver
+  registered → the write goes ahead after a one-time warning.
+- *On delete* — `Delete` (and Batch deletes) ask the registered
+  `ReferrerChecker`s for the resource's type and apply each referrer's
+  `on_delete`: `RESTRICT` → `repox.ErrReferenced` (reason
+  `RESOURCE_REFERENCED`), `NOTIFY` → a CloudEvent after the delete.
+- *Reconcile* — `Reconcile<Model>References(ctx, repo, refs, opts)` pages the
+  rows and re-runs the Get for every stored reference, reporting dangling
+  ones (count + sample + `OnDangling` callback).
+
+```go
+refs := repox.NewReferences().
+	Resolver("vcard.example.com/Card", repox.GRPCGetResolver(cardsConn, "vcard.v1.Cards/GetCard")).
+	Referrers("catalog.example.com/Book", repox.ReferenceServiceChecker(storepbv1.NewReferenceServiceClient(lendingConn))).
+	Publisher("//catalog", webhooks). // NOTIFY: org.the-protobuf-project.store.v1.reference.deleted
+	OnKept(func(ctx context.Context, name, why string) { /* metric */ })
+// or from store.yaml's reference_services: repox.WireEndpoints(refs, repox.ReferenceEndpoints, dial)
+repos := lending.New(repox.Conn{Gorm: db, References: refs})
+
+// The referring side serves who refers to what:
+storepbv1.RegisterReferenceServiceServer(grpcServer, repox.NewReferenceServer(lending.ReferrerSources(repos)...))
+```
+
+The three reference errors (`ErrForeignKey`, `ErrReferenceNotFound`,
+`ErrReferenced`) are `errors.Is`-able sentinels behind `*repox.ReferenceError`,
+whose `Reason()` is the `google.rpc.ErrorInfo` reason (domain
+`store.the-protobuf-project.org`); map all three to `FAILED_PRECONDITION`.
+
+**Writes that bypass the repositories.** `ddn/cmd/store-ddn-references` is a
+Hasura DDN engine plugin (pre-parse + pre-response lifecycle hooks) applying
+the same checks to mutations sent straight to DDN GraphQL. The repository
+target emits its config (`ddn/references.json`) and the hook metadata
+(`ddn/references-plugin.hml`) next to the GraphQL adapters. Limits: it checks
+before the engine runs the mutation, outside its transaction; NOTIFY events
+go out from the asynchronous pre-response hook; and a delete can only be
+refused, not turned into a "keep".
+
+`examples/references` is the whole contract end to end — two databases on one
+server with a cross-database foreign key, a reference to another service —
+compiled and tested against Postgres (`STORE_TEST_POSTGRES_DSN`).
 
 ## Annotations reference
 
@@ -820,6 +966,23 @@ string state = 5 [(store.v1.query) = { filterable: false, sortable: false }];
 | `sortable` | Override the type-derived default in the `order_by` allowlist (scalar, date, timestamp, and numeric columns sort by default). Presence matters, as with `filterable`. |
 | `search` | Include the column in bareword free-text search — a filter term with no field (e.g. `beach resort`) matches it with a case-insensitive contains. Off by default. |
 
+### `(store.v1.reference)` — field level
+
+Says what a `google.api.resource_reference` field asks of a resource **no
+database foreign key can reach** — one in another database server or another
+service. See [Reference integrity](#reference-integrity).
+
+```proto
+string borrower = 3 [
+  (google.api.resource_reference) = { type: "vcard.example.com/Card" },
+  (store.v1.reference) = { on_delete: ON_DELETE_RESTRICT }
+];
+```
+
+| Field | Description |
+| --- | --- |
+| `on_delete` | What a delete of the referenced resource does while this field names it: `ON_DELETE_RESTRICT` refuses it (FAILED_PRECONDITION, reason `RESOURCE_REFERENCED`), `ON_DELETE_ALLOW` (the default) lets it go, `ON_DELETE_NOTIFY` lets it go and publishes a CloudEvent. A purge never fails because of a referrer; it keeps the row. |
+
 ### `(telemetry.v1.telemetry)` — message level
 
 Tunes a table's generated [telemetry](#gorm-stores-and-tracing) — takes effect
@@ -909,6 +1072,8 @@ datasources:
 | `dedupe_schema_table` | bool | Rename a table whose name would stutter with its schema in a schema-qualified identifier (`booking` schema + `bookings` table → `bookingBookings` in tools that join schema+table, e.g. Hasura). The redundant leading schema word is stripped; for the schema's primary table — where stripping leaves nothing — the table is renamed to a generic word (`resource`, then `entity`, …). Only the generated table name changes; proto/model names are untouched. |
 | `telemetry` | map | **gorm only.** Tune the first-party telemetry instrumentation (see the [`telemetry` plugin opt](#plugin-options)). `enabled` (bool) overrides the opt's master switch. `metrics` (bool, default `true`) — set `false` to drop the per-operation ops counter/duration histogram tree-wide; narrow further per table with [`(telemetry.v1.telemetry).metrics`](#telemetryv1telemetry--message-level). `logs` (bool, default `true`) — set `false` to drop the telemetry adapter's trace-correlated error logging. |
 | `graphql` | map | Configures the [GraphQL source](#graphql-client-sdk): `endpoint` **xor** `schema` (a cached GraphQL SDL `.graphql` file), `admin_secret` (`env:VAR` or literal), `headers` (`Key: Value` list), `dialect` (default `hasura`), `max_depth`, `scalars` (`Name=GoType` list). Read by the `target=graphql` plugin entry. |
+| `references` | list | Descriptor images (binary `FileDescriptorSet`s, e.g. `buf build buf.build/the-protobuf-project/rfc:<commit> -o rfc.binpb`) read **only** to discover the target of a `resource_reference` this run does not generate, so a reference into another module of the same server becomes a real foreign key. Nothing in them is generated. Paths are relative to where buf runs. The `references=a.binpb,b.binpb` plugin opt adds to it. |
+| `reference_services` | list | Deployment facts about resource types in other databases/services (see [Reference integrity](#reference-integrity)): `type` (AIP type), `get` (its AIP Get, `pkg.Service/GetThing`), `target` (gRPC dial target; `${ENV}` read at startup), `referrers` (this run's resource types that service refers to — it serves `store.v1.ReferenceService` for them), `database` (documentation). Rendered into `repox.ReferenceEndpoints` and the DDN plugin's config. |
 | `generate` | list | Per-target settings, keyed by `target`: `go_module`, `package`, `runtime_module`, `dump_schema` for the `graphql` target; the gorm knobs are set as plugin opts instead. buf owns each entry's output dir (`out:`), so it isn't set here. |
 
 Config is **validated** on load: unknown keys are rejected (strict decode), and
@@ -998,6 +1163,7 @@ Passed via `opt:` in `buf.gen.yaml`.
 | `strict` | Per-rule severity for schema problems. `""` (default) warns on everything; `true` makes every rule a hard error; a spec like `ref:error,collision:warn,index:error,lint:warn` sets severity per rule. Rules: **ref** (unresolved/dropped references), **collision** (global name qualification), **index** (index names an unknown column), **lint** (validate-on-generate advisories). |
 | `config` | Path to a [`store.yaml`](#configuration--ormyaml) layout config. |
 | `license_header` | Copyright/licence lines to place above the banner of every generated file — `\n`-separated, e.g. `license_header=Copyright 2026 Me.\nSPDX-License-Identifier: Apache-2.0`. Write them **without** comment markers: each target applies its own (`//` for Go, Prisma and TypeScript, `--` for SQL), so one value covers the whole output tree. Unset (the default) stamps nothing, because generated code belongs to whoever ran the generator, not to this plugin. |
+| `references` | Comma-separated descriptor images for reference discovery, added to `store.yaml`'s [`references`](#top-level-keys). |
 | `M<proto>=<import>` | Go import-path mapping for a proto file, required when protos omit `option go_package`. |
 
 > [!NOTE]

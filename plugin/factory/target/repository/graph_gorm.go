@@ -27,6 +27,7 @@ type graphGorm struct {
 	BeforeCreates  []string // singular value objects, before the resource insert
 	AfterCreates   []string // has-many children, after the resource insert
 	Preloads       string   // .Preload chain for every node of the graph
+	ReadPreloads   []readPreload
 	StaleVars      []string // stale-subtree captures, top of the update transaction
 	Updates        []string // masked subtree replacement, before the row update
 	Detach         []string // association fields cleared so Save writes only the row
@@ -56,7 +57,9 @@ func graphGormFragments(pkg string, r *resource) graphGorm {
 	}
 	g := &gormGraphRenderer{r: r, pkg: pkg, cross: map[string]bool{}, out: &out}
 	for _, e := range r.Graph {
+		from := len(g.preload)
 		g.preloads(e, "")
+		out.ReadPreloads = append(out.ReadPreloads, readPreload{Field: e.FieldName, Chain: strings.Join(g.preload[from:], "")})
 	}
 	out.Preloads = strings.Join(g.preload, "")
 

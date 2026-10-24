@@ -332,10 +332,16 @@ func {{.LowerModelV}}ToUpdatePatch(merged *{{.PB}}) {{.ResPkg}}.UpdateInput {
 // a patch, for UpdateOutputOnly: every other column is left as it is.
 func {{.LowerModelV}}ToOutputPatch(merged *{{.PB}}, paths []string) {{.ResPkg}}.UpdateInput {
 	var patch {{.ResPkg}}.UpdateInput
+	{{.LowerModelV}}AddOutputPatch(&patch, merged, paths)
+	return patch
+}
+
+// {{.LowerModelV}}AddOutputPatch sets the server-owned fields paths names on
+// patch, for UpdateWithOutputOnly: an update patch carrying them too.
+func {{.LowerModelV}}AddOutputPatch(patch *{{.ResPkg}}.UpdateInput, merged *{{.PB}}, paths []string) {
 	{{- range .OutputPatchAssigns}}
 	{{.}}
 	{{- end}}
-	return patch
 }
 {{- end}}
 

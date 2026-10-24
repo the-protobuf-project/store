@@ -8,6 +8,7 @@ package repository
 
 import (
 	"github.com/the-protobuf-project/protokit/schema"
+	"slices"
 	"strings"
 )
 
@@ -70,23 +71,17 @@ func graphqlFileView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg str
 		imports["time"] = ""
 		imports["google.golang.org/protobuf/types/known/timestamppb"] = ""
 	}
-	hasBatch := false
-	for _, r := range rs {
-		hasBatch = hasBatch || r.Flat
-	}
-	if hasBatch {
-		imports[graphqlRuntimeModule] = ""
-	}
 	addPBImports(pb, s, imports)
 	gormPkg := addGormModelsImport(pb, db, s, pkg, imports)
 	return map[string]any{
-		"Header":    fileHeader(db, s, "GraphQL adapters over the generated client — same repository surface as the gorm adapters."),
-		"Package":   pkg,
-		"GormPkg":   gormPkg,
-		"ClientPkg": clientPkgName(client),
-		"Imports":   renderImports(imports),
-		"Resources": rs,
-		"HasBatch":  hasBatch,
+		"Header":      fileHeader(db, s, "GraphQL adapters over the generated client — same repository surface as the gorm adapters."),
+		"Package":     pkg,
+		"GormPkg":     gormPkg,
+		"ClientPkg":   clientPkgName(client),
+		"Imports":     renderImports(imports),
+		"Resources":   rs,
+		"HasBatch":    len(rs) > 0,
+		"HasExpiring": slices.ContainsFunc(rs, func(r gqlResourceView) bool { return r.Expiring }),
 	}
 }
 
@@ -166,5 +161,6 @@ func graphqlConvertView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg 
 	}
 }
 
-// graphqlRuntimeModule holds runtime.Tx, the mutation batch a Batch commits.
+// graphqlRuntimeModule holds runtime.Tx, the mutation request a repox.Unit
+// commits.
 const graphqlRuntimeModule = "github.com/the-protobuf-project/runtime-go/network/runtime"

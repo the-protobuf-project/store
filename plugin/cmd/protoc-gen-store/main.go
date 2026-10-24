@@ -125,6 +125,10 @@ func main() {
 	graphqlModule := flags.String("graphql_module", "",
 		"repository target only: Go import path of the generated GraphQL client the "+
 			"graphql repository adapters compose; empty emits gorm-only repositories")
+	references := flags.String("references", "",
+		"comma-separated descriptor images (binary FileDescriptorSets, e.g. from "+
+			"`buf build <module> -o x.binpb`) read only to discover the targets of "+
+			"resource references this run does not generate; added to store.yaml's references:")
 	licenseHeader := flags.String("license_header", "",
 		"copyright/licence lines to place above the banner of every generated file, "+
 			"separated by \\n (e.g. \"Copyright 2026 Me.\\nSPDX-License-Identifier: Apache-2.0\"). "+
@@ -164,7 +168,7 @@ func main() {
 		reader := backend.New(cfg, *goModule, *stores, *telemetry, *converters, *filters).
 			WithRepositoryModules(*gormModule, *graphqlModule)
 		reg := wire.Registry(
-			protokit.Options{Target: *target, Strict: *strict, Version: v},
+			protokit.Options{Target: *target, Strict: *strict, Version: v, References: referenceImages(cfg, *references)},
 			backend.Readers(reader),
 			backend.NewLayout(cfg))
 
@@ -256,6 +260,25 @@ func runGraphQL(p *protogen.Plugin, configPath, goModuleOpt, version string) err
 		return sink(filepath.Join(target.PackageName(), "schema.json"), data)
 	}
 	return nil
+}
+
+// referenceImages merges store.yaml's references: with the references= opt,
+// in that order, dropping blanks and repeats.
+func referenceImages(cfg *backend.Config, opt string) []string {
+	var all []string
+	if cfg != nil {
+		all = append(all, cfg.References...)
+	}
+	all = append(all, strings.Split(opt, ",")...)
+	var out []string
+	seen := map[string]bool{}
+	for _, p := range all {
+		if p = strings.TrimSpace(p); p != "" && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // parseScalars converts "Name=GoType" entries into a map.

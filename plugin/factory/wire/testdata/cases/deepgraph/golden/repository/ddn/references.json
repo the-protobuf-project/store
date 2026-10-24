@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "mutations": [
+    {
+      "field": "deleteDeepV1AgendasById",
+      "kind": "delete",
+      "resourceType": "deep.v1/Agenda",
+      "pattern": "agendas/{agenda}",
+      "keyArgument": "keyId",
+      "byIdQuery": "deepV1AgendasById"
+    },
+    {
+      "field": "deleteDeepV1MeetingsById",
+      "kind": "delete",
+      "resourceType": "deep.v1/Meeting",
+      "pattern": "agendas/{agenda}/meetings/{meeting}",
+      "keyArgument": "keyId",
+      "byIdQuery": "deepV1MeetingsById"
+    }
+  ]
+}

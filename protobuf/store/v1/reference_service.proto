@@ -1,0 +1,112 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package store.v1;
+
+import "google/api/annotations.proto";
+import "google/api/client.proto";
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "store/v1/reference.proto";
+
+option go_package = "github.com/the-protobuf-project/store/plugin/pb/storepbv1;storepbv1";
+option java_multiple_files = true;
+option java_outer_classname = "ReferenceServiceProto";
+option java_package = "com.store.v1";
+
+// ReferenceService answers, for a resource another service owns, which of
+// this service's resources refer to it. A service serves it for every
+// resource type its google.api.resource_reference fields name in another
+// database; the owner of those resources calls it before a delete and applies
+// each referrer's on_delete policy (see store.v1.ReferenceOptions).
+service ReferenceService {
+  option (google.api.default_host) = "store.the-protobuf-project.org";
+
+  // Lists the resources of this service that refer to the resource named by
+  // parent. Soft-deleted referrers (AIP-164) are included: they may be
+  // restored, and a purge keeps them.
+  rpc ListReferrers(ListReferrersRequest) returns (ListReferrersResponse) {
+    option (google.api.http) = {get: "/v1/{parent=**}/referrers"};
+    option (google.api.method_signature) = "parent";
+  }
+}
+
+// A resource that refers to another through one of its fields. Not a resource
+// itself: an answer about one.
+message Referrer {
+  // The referring resource's full name ("reservations/123").
+  string referrer = 1 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (google.api.resource_reference) = {type: "*"}
+  ];
+
+  // The referring resource's AIP type ("freebusy.example.com/Reservation").
+  string resource_type = 2 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // The field path holding the reference ("customer").
+  string field = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // What the field asks of a delete of the referenced resource.
+  ReferenceOptions.OnDelete on_delete = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// Request for ListReferrers.
+message ListReferrersRequest {
+  // The referenced resource, by its full resource name
+  // ("cards/42"). Not a resource of this service.
+  string parent = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference) = {type: "*"}
+  ];
+
+  // The maximum number of referrers to return. The service may return fewer;
+  // 0 means a default of 100, and values above 1000 are coerced to 1000.
+  int32 page_size = 2 [(google.api.field_behavior) = OPTIONAL];
+
+  // A page token from a previous ListReferrers call, to get the next page.
+  // Every other field must match the call that returned it.
+  string page_token = 3 [(google.api.field_behavior) = OPTIONAL];
+
+  // An AIP-160 filter. Every implementation supports
+  // `resource_type = "<type>"`, naming the AIP type of the resource parent
+  // names ("vcard.example.com/Card"): names are unique only within their own
+  // service, so a caller always sends it. Without it, referrers of every type
+  // whose name equals parent are returned.
+  string filter = 4 [(google.api.field_behavior) = OPTIONAL];
+}
+
+// Response for ListReferrers.
+message ListReferrersResponse {
+  // The referrers, ordered by the referring field and then by name.
+  repeated Referrer referrers = 1;
+
+  // A token to retrieve the next page, or empty when there are no more.
+  string next_page_token = 2;
+}
+
+// ReferencedResourceDeleted is the data of the CloudEvent a delete publishes
+// when a referrer's on_delete is ON_DELETE_NOTIFY.
+//
+// CloudEvents attributes (structured JSON mode, specversion 1.0):
+//
+//	type            org.the-protobuf-project.store.v1.reference.deleted
+//	source          the deleting service (configurable)
+//	subject         the deleted resource's name
+//	datacontenttype application/json (this message in proto3 JSON)
+//	dataschema      type.googleapis.com/store.v1.ReferencedResourceDeleted
+message ReferencedResourceDeleted {
+  // The deleted resource's full name.
+  string target = 1 [(google.api.resource_reference) = {type: "*"}];
+
+  // The deleted resource's AIP type.
+  string target_type = 2;
+
+  // True when the row was removed for good (a purge or hard delete); false
+  // for a soft delete (AIP-164), which may still be undone.
+  bool purged = 3;
+
+  // The referrers whose on_delete is ON_DELETE_NOTIFY.
+  repeated Referrer referrers = 4;
+}

@@ -13,6 +13,7 @@ package repository
 import (
 	"bytes"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"go/format"
 	"io"
@@ -25,6 +26,7 @@ import (
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
 	"github.com/the-protobuf-project/protokit/templates"
+	"github.com/the-protobuf-project/store/ddn/ddnrefs"
 	"github.com/the-protobuf-project/store/plugin/factory/provenance"
 	"github.com/the-protobuf-project/store/plugin/factory/target/gopkg"
 )
@@ -53,6 +55,20 @@ func dbGraphQLModule(db *schema.Database) string { return db.Opt("graphql_module
 func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 	repoxEmitted := false
 	pb := newPbIndex(p)
+	rev := referrerIndex(dbs)
+	// The gRPC binding of the reference contract (repox/grpc.go) is emitted
+	// only when something uses it: an external reference, or a
+	// reference_services: entry. It brings google.golang.org/grpc and
+	// store.v1's stubs into the generated code.
+	var (
+		needGRPC  bool
+		endpoints []referenceService
+		grpcDB    *schema.Database
+		// The DDN reference plugin's config (ddn/references.json), emitted
+		// with the GraphQL adapters.
+		ddnDB   *schema.Database
+		ddnMuts []ddnrefs.Mutation
+	)
 	for _, db := range dbs {
 		if dbGoModule(db) == "" || dbGormModule(db) == "" {
 			return fmt.Errorf("repository: database %q needs the go_module and gorm_module opts "+
@@ -62,6 +78,7 @@ func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 		if err != nil {
 			return err
 		}
+		planReferences(pb, resources, rev)
 		if len(resources) == 0 {
 			continue
 		}
@@ -70,7 +87,24 @@ func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 			if err := renderGo(f, "repox.go.tpl", repoxView(db)); err != nil {
 				return fmt.Errorf("repository: %s: %w", repoxPkg, err)
 			}
+			rf := p.NewGeneratedFile(repoxPkg+"/references.go", "")
+			if err := renderGo(rf, "references.go.tpl", repoxView(db)); err != nil {
+				return fmt.Errorf("repository: %s/references.go: %w", repoxPkg, err)
+			}
 			repoxEmitted = true
+			grpcDB = db
+		}
+		eps, err := referenceServices(db)
+		if err != nil {
+			return err
+		}
+		if len(eps) > 0 && len(endpoints) == 0 {
+			endpoints = eps
+		}
+		for _, r := range resources {
+			if len(r.ExtRefs) > 0 {
+				needGRPC = true
+			}
 		}
 		for _, s := range db.Schemas {
 			view, err := schemaView(pb, db, s, resources)
@@ -94,7 +128,20 @@ func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 				"mask.go":       {"mask.go.tpl", maskView(pb, db, s, pkg, gormViews)},
 				"gorm.go":       {"gorm.go.tpl", gormFileView(pb, db, s, pkg, gormViews)},
 			}
+			if view.HasExtRefs {
+				files["references.go"] = struct {
+					tpl  string
+					view any
+				}{"schema_references.go.tpl", map[string]any{
+					"Header":    fileHeader(db, s, "Reference integrity across databases and services: ReferenceService sources and reconcilers."),
+					"Package":   pkg,
+					"Imports":   renderImports(map[string]string{"context": "", dbGoModule(db) + "/" + repoxPkg: "", dbGormModule(db) + "/filterx": ""}),
+					"Resources": view.Resources,
+				}}
+			}
 			if dbGraphQLModule(db) != "" {
+				ddnDB = db
+				ddnMuts = append(ddnMuts, ddnMutations(s, sortedResources(s, resources))...)
 				gqlViews, needs, err := gqlResourceViews(pb, db, s, resources, gormViews)
 				if err != nil {
 					return err
@@ -123,6 +170,27 @@ func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 			}
 		}
 	}
+	if ddnDB != nil {
+		cfg := ddnrefs.Config{Version: ddnrefs.Version, Mutations: ddnMuts, Endpoints: ddnEndpoints(endpoints)}
+		b, err := json.MarshalIndent(cfg, "", "  ")
+		if err != nil {
+			return err
+		}
+		if _, err := p.NewGeneratedFile("ddn/references.json", "").Write(append(b, '\n')); err != nil {
+			return err
+		}
+		if _, err := p.NewGeneratedFile("ddn/references-plugin.hml", "").Write([]byte(ddnHookMetadata)); err != nil {
+			return err
+		}
+	}
+	if grpcDB != nil && (needGRPC || len(endpoints) > 0) {
+		view := repoxView(grpcDB)
+		view["Endpoints"] = endpoints
+		f := p.NewGeneratedFile(repoxPkg+"/grpc.go", "")
+		if err := renderGo(f, "grpc.go.tpl", view); err != nil {
+			return fmt.Errorf("repository: %s/grpc.go: %w", repoxPkg, err)
+		}
+	}
 	return nil
 }
 
@@ -138,9 +206,12 @@ func repoxView(db *schema.Database) map[string]any {
 			Schema:        repoxPkg,
 			Notes:         []string{"Shared runtime for the generated proto-facing repositories."},
 		}),
-		"FilterxImport": dbGormModule(db) + "/filterx",
-		"GraphQLModule": dbGraphQLModule(db),
-		"GraphQLPkg":    clientPkgName(dbGraphQLModule(db)),
+		"FilterxImport":        dbGormModule(db) + "/filterx",
+		"GormxImport":          dbGormModule(db) + "/gormx",
+		"GraphQLDSLImport":     graphqlDSLModule,
+		"GraphQLRuntimeImport": graphqlRuntimeModule,
+		"GraphQLModule":        dbGraphQLModule(db),
+		"GraphQLPkg":           clientPkgName(dbGraphQLModule(db)),
 	}
 }
 

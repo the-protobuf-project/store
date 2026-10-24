@@ -23,6 +23,7 @@ import (
 	"github.com/the-protobuf-project/protokit/schema"
 	"github.com/the-protobuf-project/protokit/templates"
 	"github.com/the-protobuf-project/store/plugin/factory/facets"
+	"github.com/the-protobuf-project/store/plugin/factory/target/externalfk"
 	"github.com/the-protobuf-project/store/plugin/factory/target/types"
 )
 
@@ -69,17 +70,28 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 		if err := templates.Render(tmpl, mf, "migrate.sql.tpl", migrateView(db, typeOf, fx)); err != nil {
 			return fmt.Errorf("sql: %s: %w", migratePath, err)
 		}
+		if len(externalfk.For(db)) > 0 {
+			vp := db.Name + "/validate.sql"
+			vf := p.NewGeneratedFile(vp, "")
+			if err := templates.Render(tmpl, vf, "validate.sql.tpl", validateView(db)); err != nil {
+				return fmt.Errorf("sql: %s: %w", vp, err)
+			}
+		}
 		rf := p.NewGeneratedFile(db.Name+"/README.md", "")
+		outputs := []string{
+			"`migrate.sql` — the whole database in one transactional file; apply with `psql -f migrate.sql`.",
+			"`<schema>.postgres.sql` — one DDL file per schema (apply referenced tables before referencing ones).",
+			"Auto-update triggers keep updated-at columns current; COMMENT ON persists field docs to the catalog.",
+		}
+		if len(externalfk.For(db)) > 0 {
+			outputs = append(outputs, "Foreign keys into another database on the same server are added NOT VALID at the end of `migrate.sql`, when missing and once their target table exists; `validate.sql` validates them when the rows that predate them are clean.")
+		}
 		md := docs.Render(db, docs.Meta{
 			Title:   "PostgreSQL schema",
 			Tagline: "CREATE SCHEMA / TYPE / TABLE DDL with foreign keys and indexes.",
-			Outputs: []string{
-				"`migrate.sql` — the whole database in one transactional file; apply with `psql -f migrate.sql`.",
-				"`<schema>.postgres.sql` — one DDL file per schema (apply referenced tables before referencing ones).",
-				"Auto-update triggers keep updated-at columns current; COMMENT ON persists field docs to the catalog.",
-			},
-			Naming: docs.Local(db),
-			TypeOf: typeOf,
+			Outputs: outputs,
+			Naming:  docs.Local(db),
+			TypeOf:  typeOf,
 		})
 		if _, err := rf.Write([]byte(md)); err != nil {
 			return fmt.Errorf("sql: %s/README.md: %w", db.Name, err)

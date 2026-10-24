@@ -1,0 +1,18 @@
+# Two databases on one server (no URLs: both read the same one at run time),
+# so a loan's book reference becomes a cross-database foreign key. The card
+# service is somewhere else entirely; its deployment facts live here.
+strip_version: true
+datasources:
+  - match: "refdemo.catalog.**"
+    database: catalog
+    schema: catalog
+  - match: "refdemo.lending.**"
+    database: lending
+    schema: lending
+
+reference_services:
+  - type: vcard.example.com/Card
+    get: vcard.v1.Cards/GetCard
+    target: ${CARDS_GRPC}
+    referrers: []
+    database: cards

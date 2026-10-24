@@ -105,7 +105,7 @@ func packageView(db *schema.Database, s *schema.Schema, pkg string, typeOf types
 				}
 				m.Fields = append(m.Fields, fieldView{
 					Decl: bt.Field + " *" + typ +
-						" `gorm:\"foreignKey:" + goField + constraintTag(t, col.Name) +
+						" `gorm:\"foreignKey:" + goField + referencesTag(t, col.Name, bt.Target) + constraintTag(t, col.Name) +
 						"\" json:\"" + jsonName + ",omitempty\"`",
 				})
 			}
@@ -118,10 +118,14 @@ func packageView(db *schema.Database, s *schema.Schema, pkg string, typeOf types
 		// child's belongs-to struct field instead and break the relation.
 		for _, hm := range hms {
 			childModel := loc(hm.Ref.Model)
+			refs := ""
+			if child := tableByModelFunc(db)(hm.Ref.Model); child != nil {
+				refs = referencesTag(child, hm.Ref.ViaFK, t)
+			}
 			m.Fields = append(m.Fields, fieldView{
 				Comment: "Back-relation: " + childModel + " records that reference this via " + hm.Ref.ViaFK + ".",
 				Decl: hm.Field + " []" + childModel +
-					" `gorm:\"foreignKey:" + naming.PascalGo(naming.FKFieldBase(hm.Ref.ViaFK, true)) + "\" json:\"" + strings.ToLower(hm.Field) + ",omitempty\"`",
+					" `gorm:\"foreignKey:" + naming.PascalGo(naming.FKFieldBase(hm.Ref.ViaFK, true)) + refs + "\" json:\"" + strings.ToLower(hm.Field) + ",omitempty\"`",
 			})
 		}
 		models = append(models, m)

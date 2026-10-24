@@ -12,6 +12,8 @@ import (
 {{- end}}
 
 {{if .Constraints}}	"errors"
+{{end}}{{if .External}}	"fmt"
+	"log/slog"
 {{end}}	"gorm.io/gorm"
 {{- if .Telemetry}}
 	"{{.TelemetryImport}}"
@@ -60,6 +62,31 @@ var constraints = []string{
 }
 {{- end}}
 
+{{- if .External}}
+
+// externalForeignKey is one foreign key into a table of another database on
+// this server (or one found only by its resource type): a constraint, never an
+// association.
+type externalForeignKey struct {
+	name, table, target string
+	add, validate       string
+}
+
+// externalForeignKeys are this database's constraint-only foreign keys, which
+// MigrateExternal adds and ValidateExternal validates.
+var externalForeignKeys = []externalForeignKey{
+{{- range .External}}
+	{
+		name:   "{{.Name}}",
+		table:  `{{.Table}}`,
+		target: `{{.Target}}`,
+		add: `{{.Add}}`,
+		validate: `{{.Validate}}`,
+	},
+{{- end}}
+}
+{{- end}}
+
 // Registry collects GORM models so they migrate together.
 type Registry struct {
 	models []any
@@ -100,6 +127,57 @@ func (r *Registry) Migrate(db Migrator) error {
 func (r *Registry) Migrate(db Migrator) error {
 	return db.AutoMigrate(r.models...)
 }
+{{- end}}
+
+{{- if .External}}
+// MigrateExternal adds this database's foreign keys into tables of other
+// databases on the same server: a constraint only, NOT VALID, and only when it
+// is missing. Run it after every database's Migrate, since its target is
+// another registry's table; a target that does not exist yet is skipped with
+// a log line and picked up on the next start. Safe to run on every start.
+//
+//	for _, r := range []*Registry{a.Default, b.Default} { r.Migrate(db) }
+//	a.Default.MigrateExternal(db)
+//	b.Default.MigrateExternal(db)
+func (*Registry) MigrateExternal(db *gorm.DB) error {
+	for _, fk := range externalForeignKeys {
+		var present bool
+		if err := db.Raw("SELECT to_regclass(?) IS NOT NULL", fk.target).Scan(&present).Error; err != nil {
+			return fmt.Errorf("migrate external %s: %w", fk.name, err)
+		}
+		if !present {
+			slog.Warn("store: skipping foreign key; its target table does not exist yet",
+				"constraint", fk.name, "table", fk.table, "target", fk.target)
+			continue
+		}
+		if err := db.Exec(fk.add).Error; err != nil {
+			return fmt.Errorf("migrate external %s: %w", fk.name, err)
+		}
+	}
+	return nil
+}
+
+// ValidateExternal validates the constraints MigrateExternal added NOT VALID:
+// it checks the rows written before each was added (later rows are checked
+// already). A row naming a missing target fails it; fix or remove the row and
+// run it again. Each constraint is validated once; an already-valid or
+// missing one is skipped.
+func (*Registry) ValidateExternal(db *gorm.DB) error {
+	for _, fk := range externalForeignKeys {
+		if err := db.Exec(fk.validate).Error; err != nil {
+			return fmt.Errorf("validate external %s: %w", fk.name, err)
+		}
+	}
+	return nil
+}
+{{- else}}
+// MigrateExternal adds this database's foreign keys into other databases'
+// tables after every registry's Migrate. This database has none, so it does
+// nothing; it exists so startup code can call it on every registry alike.
+func (*Registry) MigrateExternal(*gorm.DB) error { return nil }
+
+// ValidateExternal validates what MigrateExternal added. Nothing here.
+func (*Registry) ValidateExternal(*gorm.DB) error { return nil }
 {{- end}}
 
 // EnsureSchemas creates every Postgres schema the registered models live in, if

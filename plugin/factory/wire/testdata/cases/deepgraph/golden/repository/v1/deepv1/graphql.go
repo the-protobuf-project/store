@@ -52,6 +52,9 @@ func mapGraphQLErr(err error) error {
 		return fmt.Errorf("%w: %v", repox.ErrConflict, err)
 	case strings.Contains(err.Error(), "violates unique constraint"):
 		return fmt.Errorf("%w: %v", repox.ErrAlreadyExists, err)
+	// A foreign key: repox.ErrForeignKey, with the constraint named.
+	case strings.Contains(err.Error(), "violates foreign key constraint"):
+		return repox.ForeignKeyError(err)
 	default:
 		return err
 	}
@@ -63,6 +66,9 @@ func mapGraphQLErr(err error) error {
 type GraphQLAgendaRepository struct {
 	Svc   *genql.Service
 	Hooks AgendaHooks
+	// Refs, when set, is asked before a purge whether anything in another
+	// database or service still refers to the record (see Purge).
+	Refs *repox.References
 	// ListOverrides substitute the generated dispatch for single filter fields.
 	ListOverrides map[string]filterx.GraphQLHandler
 }
@@ -130,11 +136,11 @@ func (r *GraphQLAgendaRepository) Create(ctx context.Context, in *deepv1.Agenda)
 		}
 		gtx.Add(r.Svc.Mutation.DeepV1.Slots.CreateOp(n6, new(slotsql.InsertDeepV1SlotsResponse)))
 	}
-	for _, v21 := range in.GetNotes() {
-		n22 := deepV1NoteToCreateInput(v21)
-		n22.Id = repox.NewULID()
-		n22.AgendaId = id
-		gtx.Add(r.Svc.Mutation.DeepV1.Notes.CreateOp(n22, new(notesql.InsertDeepV1NotesResponse)))
+	for _, v25 := range in.GetNotes() {
+		n26 := deepV1NoteToCreateInput(v25)
+		n26.Id = repox.NewULID()
+		n26.AgendaId = id
+		gtx.Add(r.Svc.Mutation.DeepV1.Notes.CreateOp(n26, new(notesql.InsertDeepV1NotesResponse)))
 	}
 	if err := gtx.Commit(ctx); err != nil {
 		return nil, mapGraphQLErr(err)
@@ -161,61 +167,68 @@ func (r *GraphQLAgendaRepository) get(ctx context.Context, id string) (*deepv1.A
 	if row == nil {
 		return nil, repox.ErrNotFound
 	}
-	return r.toProto(ctx, row)
+	return r.toProto(ctx, row, nil)
 }
 
-// toProto converts a loaded row, hydrating value objects through their
-// stored references, and runs the AfterRead hook.
-func (r *GraphQLAgendaRepository) toProto(ctx context.Context, row *agendasql.DeepV1Agendas) (*deepv1.Agenda, error) {
+// toProto converts a loaded row, hydrating the value objects mask reads (all
+// of them for an empty mask) through their stored references, and runs the
+// AfterRead hook.
+func (r *GraphQLAgendaRepository) toProto(ctx context.Context, row *agendasql.DeepV1Agendas, mask []string) (*deepv1.Agenda, error) {
 	out := agendaFromRow(row)
-	if id := repox.Deref(row.ZoneId); id != "" {
-		got3, err := r.Svc.Query.DeepV1.Zones.Get(ctx, id)
-		if err != nil {
-			return nil, mapGraphQLErr(err)
-		}
-		if got3 != nil {
-			p4 := deepV1ZoneFromRow(got3)
-			out.Zone = p4
+	if repox.Reads(mask, "zone") {
+		if id := repox.Deref(row.ZoneId); id != "" {
+			got3, err := r.Svc.Query.DeepV1.Zones.Get(ctx, id)
+			if err != nil {
+				return nil, mapGraphQLErr(err)
+			}
+			if got3 != nil {
+				p4 := deepV1ZoneFromRow(got3)
+				out.Zone = p4
+			}
 		}
 	}
-	{
-		rows11, err := r.Svc.Query.DeepV1.Slots.List(ctx, slotsql.List().Where(slotsql.AgendaId.Eq(row.Id)).OrderBy(slotsql.Id.Asc()))
-		if err != nil {
-			return nil, mapGraphQLErr(err)
-		}
-		for i := range rows11 {
-			p12 := deepV1SlotFromRow(&rows11[i])
-			if id := (&rows11[i]).StartId; id != "" {
-				got13, err := r.Svc.Query.DeepV1.Moments.Get(ctx, id)
-				if err != nil {
-					return nil, mapGraphQLErr(err)
-				}
-				if got13 != nil {
-					p14 := deepV1MomentFromRow(got13)
-					p12.Start = p14
-				}
+	if repox.Reads(mask, "slots") {
+		{
+			rows11, err := r.Svc.Query.DeepV1.Slots.List(ctx, slotsql.List().Where(slotsql.AgendaId.Eq(row.Id)).OrderBy(slotsql.Id.Asc()))
+			if err != nil {
+				return nil, mapGraphQLErr(err)
 			}
-			if id := repox.Deref((&rows11[i]).EndId); id != "" {
-				got15, err := r.Svc.Query.DeepV1.Moments.Get(ctx, id)
-				if err != nil {
-					return nil, mapGraphQLErr(err)
+			for i := range rows11 {
+				p12 := deepV1SlotFromRow(&rows11[i])
+				if id := (&rows11[i]).StartId; id != "" {
+					got13, err := r.Svc.Query.DeepV1.Moments.Get(ctx, id)
+					if err != nil {
+						return nil, mapGraphQLErr(err)
+					}
+					if got13 != nil {
+						p14 := deepV1MomentFromRow(got13)
+						p12.Start = p14
+					}
 				}
-				if got15 != nil {
-					p16 := deepV1MomentFromRow(got15)
-					p12.End = p16
+				if id := repox.Deref((&rows11[i]).EndId); id != "" {
+					got15, err := r.Svc.Query.DeepV1.Moments.Get(ctx, id)
+					if err != nil {
+						return nil, mapGraphQLErr(err)
+					}
+					if got15 != nil {
+						p16 := deepV1MomentFromRow(got15)
+						p12.End = p16
+					}
 				}
+				out.Slots = append(out.Slots, p12)
 			}
-			out.Slots = append(out.Slots, p12)
 		}
 	}
-	{
-		rows23, err := r.Svc.Query.DeepV1.Notes.List(ctx, notesql.List().Where(notesql.AgendaId.Eq(row.Id)).OrderBy(notesql.Id.Asc()))
-		if err != nil {
-			return nil, mapGraphQLErr(err)
-		}
-		for i := range rows23 {
-			p24 := deepV1NoteFromRow(&rows23[i])
-			out.Notes = append(out.Notes, p24)
+	if repox.Reads(mask, "notes") {
+		{
+			rows27, err := r.Svc.Query.DeepV1.Notes.List(ctx, notesql.List().Where(notesql.AgendaId.Eq(row.Id)).OrderBy(notesql.Id.Asc()))
+			if err != nil {
+				return nil, mapGraphQLErr(err)
+			}
+			for i := range rows27 {
+				p28 := deepV1NoteFromRow(&rows27[i])
+				out.Notes = append(out.Notes, p28)
+			}
 		}
 	}
 	if h := r.Hooks.AfterRead; h != nil {
@@ -240,6 +253,9 @@ func (r *GraphQLAgendaRepository) list(ctx context.Context, in repox.ListInput, 
 		return nil, "", repox.MapFilterxErr(err)
 	}
 	conds = append(conds, in.Where...)
+	if err := repox.CheckReadMask((*deepv1.Agenda)(nil), in.ReadMask); err != nil {
+		return nil, "", err
+	}
 	eng := filterx.Hasura[agendasql.DeepV1Agendas](deepv1gorm.AgendaFilterSpec, r.Svc.Query.DeepV1.Agendas).Scope(scope...)
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)
@@ -255,10 +271,11 @@ func (r *GraphQLAgendaRepository) list(ctx context.Context, in repox.ListInput, 
 	}
 	items := make([]*deepv1.Agenda, 0, len(rows))
 	for i := range rows {
-		out, err := r.toProto(ctx, &rows[i])
+		out, err := r.toProto(ctx, &rows[i], in.ReadMask)
 		if err != nil {
 			return nil, "", err
 		}
+		repox.Narrow(out, in.ReadMask)
 		items = append(items, out)
 	}
 	return items, next, nil
@@ -268,6 +285,12 @@ func (r *GraphQLAgendaRepository) list(ctx context.Context, in repox.ListInput, 
 // mutable field. When in.Etag is set the write is guarded server-side
 // (UpdateIfMatch); a stale etag returns repox.ErrConflict.
 func (r *GraphQLAgendaRepository) Update(ctx context.Context, in *deepv1.Agenda, paths []string) (*deepv1.Agenda, error) {
+	return r.update(ctx, in, paths, nil)
+}
+
+// update is Update's write, with the server-owned fields outputPaths names
+// (UpdateWithOutputOnly) merged into its patch.
+func (r *GraphQLAgendaRepository) update(ctx context.Context, in *deepv1.Agenda, paths, outputPaths []string) (*deepv1.Agenda, error) {
 	ids, err := repox.SplitName(in.GetName(), "agendas")
 	if err != nil {
 		return nil, err
@@ -280,28 +303,28 @@ func (r *GraphQLAgendaRepository) Update(ctx context.Context, in *deepv1.Agenda,
 	if row == nil {
 		return nil, repox.ErrNotFound
 	}
-	var old29 []string
+	var old35 []string
 	{
-		rows30, err := r.Svc.Query.DeepV1.Slots.List(ctx, slotsql.List().Where(slotsql.AgendaId.Eq(id)))
+		rows36, err := r.Svc.Query.DeepV1.Slots.List(ctx, slotsql.List().Where(slotsql.AgendaId.Eq(id)))
 		if err != nil {
 			return nil, mapGraphQLErr(err)
 		}
-		for i := range rows30 {
-			old29 = append(old29, rows30[i].Id)
+		for i := range rows36 {
+			old35 = append(old35, rows36[i].Id)
 		}
 	}
-	staleSlots := old29
-	var old40 []string
+	staleSlots := old35
+	var old46 []string
 	{
-		rows41, err := r.Svc.Query.DeepV1.Notes.List(ctx, notesql.List().Where(notesql.AgendaId.Eq(id)))
+		rows47, err := r.Svc.Query.DeepV1.Notes.List(ctx, notesql.List().Where(notesql.AgendaId.Eq(id)))
 		if err != nil {
 			return nil, mapGraphQLErr(err)
 		}
-		for i := range rows41 {
-			old40 = append(old40, rows41[i].Id)
+		for i := range rows47 {
+			old46 = append(old46, rows47[i].Id)
 		}
 	}
-	staleNotes := old40
+	staleNotes := old46
 	existingPB := agendaFromRow(row)
 	merged := proto.Clone(existingPB).(*deepv1.Agenda)
 	applyAgendaMask(merged, in, paths)
@@ -319,14 +342,14 @@ func (r *GraphQLAgendaRepository) Update(ctx context.Context, in *deepv1.Agenda,
 	atx := r.Svc.Mutation.Tx()
 	if repox.GroupTouched(paths, "zone") {
 		patch.ZoneId = graphql.Null[string]()
-		if v27 := merged.GetZone(); v27 != nil {
-			if key := v27.GetId(); key != "" {
-				got28, err := r.Svc.Query.DeepV1.Zones.Get(ctx, key)
+		if v33 := merged.GetZone(); v33 != nil {
+			if key := v33.GetId(); key != "" {
+				got34, err := r.Svc.Query.DeepV1.Zones.Get(ctx, key)
 				if err != nil {
 					return nil, mapGraphQLErr(err)
 				}
-				if got28 == nil {
-					if _, err := r.Svc.Mutation.DeepV1.Zones.Create(ctx, deepV1ZoneToCreateInput(v27)); err != nil {
+				if got34 == nil {
+					if _, err := r.Svc.Mutation.DeepV1.Zones.Create(ctx, deepV1ZoneToCreateInput(v33)); err != nil {
 						// Lost a race to insert the shared row: fine if it now exists.
 						if again, gerr := r.Svc.Query.DeepV1.Zones.Get(ctx, key); gerr != nil || again == nil {
 							return nil, mapGraphQLErr(err)
@@ -340,69 +363,69 @@ func (r *GraphQLAgendaRepository) Update(ctx context.Context, in *deepv1.Agenda,
 	if repox.GroupTouched(paths, "slots") {
 		for _, oid := range staleSlots {
 			if id := oid; id != "" {
-				got31, err := r.Svc.Query.DeepV1.Slots.Get(ctx, id)
+				got37, err := r.Svc.Query.DeepV1.Slots.Get(ctx, id)
 				if err != nil {
 					return nil, mapGraphQLErr(err)
 				}
-				if got31 != nil {
-					atx.Add(r.Svc.Mutation.DeepV1.Slots.DeleteOp(got31.Id, new(slotsql.DeleteDeepV1SlotsByIdResponse)))
-					if id := got31.StartId; id != "" {
-						got32, err := r.Svc.Query.DeepV1.Moments.Get(ctx, id)
+				if got37 != nil {
+					atx.Add(r.Svc.Mutation.DeepV1.Slots.DeleteOp(got37.Id, new(slotsql.DeleteDeepV1SlotsByIdResponse)))
+					if id := got37.StartId; id != "" {
+						got38, err := r.Svc.Query.DeepV1.Moments.Get(ctx, id)
 						if err != nil {
 							return nil, mapGraphQLErr(err)
 						}
-						if got32 != nil {
-							atx.Add(r.Svc.Mutation.DeepV1.Moments.DeleteOp(got32.Id, new(momentsql.DeleteDeepV1MomentsByIdResponse)))
+						if got38 != nil {
+							atx.Add(r.Svc.Mutation.DeepV1.Moments.DeleteOp(got38.Id, new(momentsql.DeleteDeepV1MomentsByIdResponse)))
 						}
 					}
-					if id := repox.Deref(got31.EndId); id != "" {
-						got33, err := r.Svc.Query.DeepV1.Moments.Get(ctx, id)
+					if id := repox.Deref(got37.EndId); id != "" {
+						got39, err := r.Svc.Query.DeepV1.Moments.Get(ctx, id)
 						if err != nil {
 							return nil, mapGraphQLErr(err)
 						}
-						if got33 != nil {
-							atx.Add(r.Svc.Mutation.DeepV1.Moments.DeleteOp(got33.Id, new(momentsql.DeleteDeepV1MomentsByIdResponse)))
+						if got39 != nil {
+							atx.Add(r.Svc.Mutation.DeepV1.Moments.DeleteOp(got39.Id, new(momentsql.DeleteDeepV1MomentsByIdResponse)))
 						}
 					}
 				}
 			}
 		}
-		for _, v34 := range merged.GetSlots() {
-			n35 := deepV1SlotToCreateInput(v34)
-			n35.Id = repox.NewULID()
-			n35.AgendaId = id
-			if v36 := v34.GetStart(); v36 != nil {
-				n37 := deepV1MomentToCreateInput(v36)
-				n37.Id = repox.NewULID()
-				atx.Add(r.Svc.Mutation.DeepV1.Moments.CreateOp(n37, new(momentsql.InsertDeepV1MomentsResponse)))
-				n35.StartId = n37.Id
+		for _, v40 := range merged.GetSlots() {
+			n41 := deepV1SlotToCreateInput(v40)
+			n41.Id = repox.NewULID()
+			n41.AgendaId = id
+			if v42 := v40.GetStart(); v42 != nil {
+				n43 := deepV1MomentToCreateInput(v42)
+				n43.Id = repox.NewULID()
+				atx.Add(r.Svc.Mutation.DeepV1.Moments.CreateOp(n43, new(momentsql.InsertDeepV1MomentsResponse)))
+				n41.StartId = n43.Id
 			}
-			if v38 := v34.GetEnd(); v38 != nil {
-				n39 := deepV1MomentToCreateInput(v38)
-				n39.Id = repox.NewULID()
-				atx.Add(r.Svc.Mutation.DeepV1.Moments.CreateOp(n39, new(momentsql.InsertDeepV1MomentsResponse)))
-				n35.EndId = n39.Id
+			if v44 := v40.GetEnd(); v44 != nil {
+				n45 := deepV1MomentToCreateInput(v44)
+				n45.Id = repox.NewULID()
+				atx.Add(r.Svc.Mutation.DeepV1.Moments.CreateOp(n45, new(momentsql.InsertDeepV1MomentsResponse)))
+				n41.EndId = n45.Id
 			}
-			atx.Add(r.Svc.Mutation.DeepV1.Slots.CreateOp(n35, new(slotsql.InsertDeepV1SlotsResponse)))
+			atx.Add(r.Svc.Mutation.DeepV1.Slots.CreateOp(n41, new(slotsql.InsertDeepV1SlotsResponse)))
 		}
 	}
 	if repox.GroupTouched(paths, "notes") {
 		for _, oid := range staleNotes {
 			if id := oid; id != "" {
-				got42, err := r.Svc.Query.DeepV1.Notes.Get(ctx, id)
+				got48, err := r.Svc.Query.DeepV1.Notes.Get(ctx, id)
 				if err != nil {
 					return nil, mapGraphQLErr(err)
 				}
-				if got42 != nil {
-					atx.Add(r.Svc.Mutation.DeepV1.Notes.DeleteOp(got42.Id, new(notesql.DeleteDeepV1NotesByIdResponse)))
+				if got48 != nil {
+					atx.Add(r.Svc.Mutation.DeepV1.Notes.DeleteOp(got48.Id, new(notesql.DeleteDeepV1NotesByIdResponse)))
 				}
 			}
 		}
-		for _, v43 := range merged.GetNotes() {
-			n44 := deepV1NoteToCreateInput(v43)
-			n44.Id = repox.NewULID()
-			n44.AgendaId = id
-			atx.Add(r.Svc.Mutation.DeepV1.Notes.CreateOp(n44, new(notesql.InsertDeepV1NotesResponse)))
+		for _, v49 := range merged.GetNotes() {
+			n50 := deepV1NoteToCreateInput(v49)
+			n50.Id = repox.NewULID()
+			n50.AgendaId = id
+			atx.Add(r.Svc.Mutation.DeepV1.Notes.CreateOp(n50, new(notesql.InsertDeepV1NotesResponse)))
 		}
 	}
 	if err := utx.Commit(ctx); err != nil {
@@ -430,6 +453,308 @@ func (r *GraphQLAgendaRepository) Update(ctx context.Context, in *deepv1.Agenda,
 	return r.get(ctx, id)
 }
 
+// newInput builds the insert a Batch queues for in, and
+// the record it stands for, named: the same resolution Create applies.
+func (r *GraphQLAgendaRepository) newInput(in *deepv1.Agenda) (agendasql.CreateInput, *deepv1.Agenda, error) {
+	var ci agendasql.CreateInput
+	id := repox.NewULID()
+	if in.GetName() != "" {
+		ids, err := repox.SplitName(in.GetName(), "agendas")
+		if err != nil {
+			return ci, nil, err
+		}
+		id = ids[len(ids)-1]
+	}
+	in = proto.Clone(in).(*deepv1.Agenda)
+	in.Name = FormatAgendaName(id)
+	ci = agendaToCreateInput(in)
+	ci.Id = id
+	ci.Etag = repox.NewULID()
+	return ci, in, nil
+}
+
+// insertOps queues the inserts that create in onto gtx, for a Batch: the
+// value objects it points at, its row (ci), then its children.
+func (r *GraphQLAgendaRepository) insertOps(ctx context.Context, gtx *repox.Ops, in *deepv1.Agenda, ci agendasql.CreateInput) (repox.Check, error) {
+	id := ci.Id
+	_ = id
+	if v1 := in.GetZone(); v1 != nil {
+		if key := v1.GetId(); key != "" {
+			got2, err := r.Svc.Query.DeepV1.Zones.Get(ctx, key)
+			if err != nil {
+				return nil, mapGraphQLErr(err)
+			}
+			if got2 == nil {
+				if _, err := r.Svc.Mutation.DeepV1.Zones.Create(ctx, deepV1ZoneToCreateInput(v1)); err != nil {
+					// Lost a race to insert the shared row: fine if it now exists.
+					if again, gerr := r.Svc.Query.DeepV1.Zones.Get(ctx, key); gerr != nil || again == nil {
+						return nil, mapGraphQLErr(err)
+					}
+				}
+			}
+			ci.ZoneId = key
+		}
+	}
+	gtx.Add(r.Svc.Mutation.DeepV1.Agendas.CreateOp(ci, new(agendasql.InsertDeepV1AgendasResponse)))
+	for _, v5 := range in.GetSlots() {
+		n6 := deepV1SlotToCreateInput(v5)
+		n6.Id = repox.NewULID()
+		n6.AgendaId = id
+		if v7 := v5.GetStart(); v7 != nil {
+			n8 := deepV1MomentToCreateInput(v7)
+			n8.Id = repox.NewULID()
+			gtx.Add(r.Svc.Mutation.DeepV1.Moments.CreateOp(n8, new(momentsql.InsertDeepV1MomentsResponse)))
+			n6.StartId = n8.Id
+		}
+		if v9 := v5.GetEnd(); v9 != nil {
+			n10 := deepV1MomentToCreateInput(v9)
+			n10.Id = repox.NewULID()
+			gtx.Add(r.Svc.Mutation.DeepV1.Moments.CreateOp(n10, new(momentsql.InsertDeepV1MomentsResponse)))
+			n6.EndId = n10.Id
+		}
+		gtx.Add(r.Svc.Mutation.DeepV1.Slots.CreateOp(n6, new(slotsql.InsertDeepV1SlotsResponse)))
+	}
+	for _, v25 := range in.GetNotes() {
+		n26 := deepV1NoteToCreateInput(v25)
+		n26.Id = repox.NewULID()
+		n26.AgendaId = id
+		gtx.Add(r.Svc.Mutation.DeepV1.Notes.CreateOp(n26, new(notesql.InsertDeepV1NotesResponse)))
+	}
+	return nil, nil
+}
+
+// updateOps queues Update's writes onto ops, for a Batch: the value-object
+// rows that replace the masked ones, the row update, then the removal of what
+// they replaced. With in.Etag set the update is guarded inside the batch: a
+// self-update of the key whose post-check asserts the etag fails the request
+// when the record moved on, and the guarded update after it writes the row.
+//
+// outputPaths names the server-owned fields written alongside
+// (Update<Model>WithOutputOnly); nil for Update.
+func (r *GraphQLAgendaRepository) updateOps(ctx context.Context, ops *repox.Ops, id string, in *deepv1.Agenda, paths, outputPaths []string) (repox.Check, error) {
+	row, err := r.Svc.Query.DeepV1.Agendas.Get(ctx, id)
+	if err != nil {
+		return nil, mapGraphQLErr(err)
+	}
+	if row == nil {
+		return nil, repox.ErrNotFound
+	}
+	existingPB := agendaFromRow(row)
+	if in.GetEtag() != "" && existingPB.GetEtag() != in.GetEtag() {
+		return nil, repox.ErrConflict
+	}
+	var old35 []string
+	{
+		rows36, err := r.Svc.Query.DeepV1.Slots.List(ctx, slotsql.List().Where(slotsql.AgendaId.Eq(id)))
+		if err != nil {
+			return nil, mapGraphQLErr(err)
+		}
+		for i := range rows36 {
+			old35 = append(old35, rows36[i].Id)
+		}
+	}
+	staleSlots := old35
+	var old46 []string
+	{
+		rows47, err := r.Svc.Query.DeepV1.Notes.List(ctx, notesql.List().Where(notesql.AgendaId.Eq(id)))
+		if err != nil {
+			return nil, mapGraphQLErr(err)
+		}
+		for i := range rows47 {
+			old46 = append(old46, rows47[i].Id)
+		}
+	}
+	staleNotes := old46
+	merged := proto.Clone(existingPB).(*deepv1.Agenda)
+	applyAgendaMask(merged, in, paths)
+	patch := agendaToUpdatePatch(merged)
+	patch.Etag = graphql.Value(repox.NewULID())
+	var utx, atx repox.Ops
+	if repox.GroupTouched(paths, "zone") {
+		patch.ZoneId = graphql.Null[string]()
+		if v33 := merged.GetZone(); v33 != nil {
+			if key := v33.GetId(); key != "" {
+				got34, err := r.Svc.Query.DeepV1.Zones.Get(ctx, key)
+				if err != nil {
+					return nil, mapGraphQLErr(err)
+				}
+				if got34 == nil {
+					if _, err := r.Svc.Mutation.DeepV1.Zones.Create(ctx, deepV1ZoneToCreateInput(v33)); err != nil {
+						// Lost a race to insert the shared row: fine if it now exists.
+						if again, gerr := r.Svc.Query.DeepV1.Zones.Get(ctx, key); gerr != nil || again == nil {
+							return nil, mapGraphQLErr(err)
+						}
+					}
+				}
+				patch.ZoneId = graphql.Value(key)
+			}
+		}
+	}
+	if repox.GroupTouched(paths, "slots") {
+		for _, oid := range staleSlots {
+			if id := oid; id != "" {
+				got37, err := r.Svc.Query.DeepV1.Slots.Get(ctx, id)
+				if err != nil {
+					return nil, mapGraphQLErr(err)
+				}
+				if got37 != nil {
+					atx.Add(r.Svc.Mutation.DeepV1.Slots.DeleteOp(got37.Id, new(slotsql.DeleteDeepV1SlotsByIdResponse)))
+					if id := got37.StartId; id != "" {
+						got38, err := r.Svc.Query.DeepV1.Moments.Get(ctx, id)
+						if err != nil {
+							return nil, mapGraphQLErr(err)
+						}
+						if got38 != nil {
+							atx.Add(r.Svc.Mutation.DeepV1.Moments.DeleteOp(got38.Id, new(momentsql.DeleteDeepV1MomentsByIdResponse)))
+						}
+					}
+					if id := repox.Deref(got37.EndId); id != "" {
+						got39, err := r.Svc.Query.DeepV1.Moments.Get(ctx, id)
+						if err != nil {
+							return nil, mapGraphQLErr(err)
+						}
+						if got39 != nil {
+							atx.Add(r.Svc.Mutation.DeepV1.Moments.DeleteOp(got39.Id, new(momentsql.DeleteDeepV1MomentsByIdResponse)))
+						}
+					}
+				}
+			}
+		}
+		for _, v40 := range merged.GetSlots() {
+			n41 := deepV1SlotToCreateInput(v40)
+			n41.Id = repox.NewULID()
+			n41.AgendaId = id
+			if v42 := v40.GetStart(); v42 != nil {
+				n43 := deepV1MomentToCreateInput(v42)
+				n43.Id = repox.NewULID()
+				atx.Add(r.Svc.Mutation.DeepV1.Moments.CreateOp(n43, new(momentsql.InsertDeepV1MomentsResponse)))
+				n41.StartId = n43.Id
+			}
+			if v44 := v40.GetEnd(); v44 != nil {
+				n45 := deepV1MomentToCreateInput(v44)
+				n45.Id = repox.NewULID()
+				atx.Add(r.Svc.Mutation.DeepV1.Moments.CreateOp(n45, new(momentsql.InsertDeepV1MomentsResponse)))
+				n41.EndId = n45.Id
+			}
+			atx.Add(r.Svc.Mutation.DeepV1.Slots.CreateOp(n41, new(slotsql.InsertDeepV1SlotsResponse)))
+		}
+	}
+	if repox.GroupTouched(paths, "notes") {
+		for _, oid := range staleNotes {
+			if id := oid; id != "" {
+				got48, err := r.Svc.Query.DeepV1.Notes.Get(ctx, id)
+				if err != nil {
+					return nil, mapGraphQLErr(err)
+				}
+				if got48 != nil {
+					atx.Add(r.Svc.Mutation.DeepV1.Notes.DeleteOp(got48.Id, new(notesql.DeleteDeepV1NotesByIdResponse)))
+				}
+			}
+		}
+		for _, v49 := range merged.GetNotes() {
+			n50 := deepV1NoteToCreateInput(v49)
+			n50.Id = repox.NewULID()
+			n50.AgendaId = id
+			atx.Add(r.Svc.Mutation.DeepV1.Notes.CreateOp(n50, new(notesql.InsertDeepV1NotesResponse)))
+		}
+	}
+	*ops = append(*ops, utx...)
+	resp := new(agendasql.UpdateDeepV1AgendasByIdResponse)
+	etag := in.GetEtag()
+	if etag != "" {
+		ops.Add(r.Svc.Mutation.DeepV1.Agendas.UpdateOp(id, agendasql.UpdateInput{Id: graphql.Value(id)}, new(agendasql.UpdateDeepV1AgendasByIdResponse), agendasql.Update().PostCheck(agendasql.Etag.Eq(etag))))
+		ops.Add(r.Svc.Mutation.DeepV1.Agendas.UpdateOp(id, patch, resp, agendasql.Update().PreCheck(agendasql.Etag.Eq(etag))))
+	} else {
+		ops.Add(r.Svc.Mutation.DeepV1.Agendas.UpdateOp(id, patch, resp))
+	}
+	*ops = append(*ops, atx...)
+	return func(ctx context.Context, failed error) error {
+		if failed == nil {
+			if resp.AffectedRows == 0 {
+				if etag != "" {
+					return repox.ErrConflict
+				}
+				return repox.ErrNotFound
+			}
+			return nil
+		}
+		// The request failed; if this guard is why, say so.
+		if etag != "" {
+			if now, err := r.Svc.Query.DeepV1.Agendas.Get(ctx, id); err == nil && (now == nil || agendaFromRow(now).GetEtag() != etag) {
+				return repox.ErrConflict
+			}
+		}
+		return nil
+	}, nil
+}
+
+// purgeOps queues the removal of row id and of the value-object rows it owns
+// onto dtx, for a Batch. A row already gone queues nothing.
+func (r *GraphQLAgendaRepository) purgeOps(ctx context.Context, dtx *repox.Ops, id string) (repox.Check, error) {
+	row, err := r.Svc.Query.DeepV1.Agendas.Get(ctx, id)
+	if err != nil {
+		return nil, mapGraphQLErr(err)
+	}
+	if row == nil {
+		return nil, nil
+	}
+	dtx.Add(r.Svc.Mutation.DeepV1.Agendas.DeleteOp(id, new(agendasql.DeleteDeepV1AgendasByIdResponse)))
+	_ = repox.Deref(row.ZoneId)
+	{
+		rows21, err := r.Svc.Query.DeepV1.Slots.List(ctx, slotsql.List().Where(slotsql.AgendaId.Eq(id)))
+		if err != nil {
+			return nil, mapGraphQLErr(err)
+		}
+		for i := range rows21 {
+			if id := rows21[i].Id; id != "" {
+				got22, err := r.Svc.Query.DeepV1.Slots.Get(ctx, id)
+				if err != nil {
+					return nil, mapGraphQLErr(err)
+				}
+				if got22 != nil {
+					dtx.Add(r.Svc.Mutation.DeepV1.Slots.DeleteOp(got22.Id, new(slotsql.DeleteDeepV1SlotsByIdResponse)))
+					if id := got22.StartId; id != "" {
+						got23, err := r.Svc.Query.DeepV1.Moments.Get(ctx, id)
+						if err != nil {
+							return nil, mapGraphQLErr(err)
+						}
+						if got23 != nil {
+							dtx.Add(r.Svc.Mutation.DeepV1.Moments.DeleteOp(got23.Id, new(momentsql.DeleteDeepV1MomentsByIdResponse)))
+						}
+					}
+					if id := repox.Deref(got22.EndId); id != "" {
+						got24, err := r.Svc.Query.DeepV1.Moments.Get(ctx, id)
+						if err != nil {
+							return nil, mapGraphQLErr(err)
+						}
+						if got24 != nil {
+							dtx.Add(r.Svc.Mutation.DeepV1.Moments.DeleteOp(got24.Id, new(momentsql.DeleteDeepV1MomentsByIdResponse)))
+						}
+					}
+				}
+			}
+		}
+	}
+	{
+		rows31, err := r.Svc.Query.DeepV1.Notes.List(ctx, notesql.List().Where(notesql.AgendaId.Eq(id)))
+		if err != nil {
+			return nil, mapGraphQLErr(err)
+		}
+		for i := range rows31 {
+			if id := rows31[i].Id; id != "" {
+				got32, err := r.Svc.Query.DeepV1.Notes.Get(ctx, id)
+				if err != nil {
+					return nil, mapGraphQLErr(err)
+				}
+				if got32 != nil {
+					dtx.Add(r.Svc.Mutation.DeepV1.Notes.DeleteOp(got32.Id, new(notesql.DeleteDeepV1NotesByIdResponse)))
+				}
+			}
+		}
+	}
+	return nil, nil
+}
+
 // Delete soft-deletes the record addressed by its resource name: delete_time
 // is set, the row stays.
 func (r *GraphQLAgendaRepository) Delete(ctx context.Context, name string) error {
@@ -442,17 +767,23 @@ func (r *GraphQLAgendaRepository) Delete(ctx context.Context, name string) error
 			return err
 		}
 	}
-	at := time.Now().UTC()
-	now := at.Format(time.RFC3339Nano)
-	patch := agendasql.UpdateInput{DeleteTime: graphql.Value(now)}
-	patch.Etag = graphql.Value(repox.NewULID())
-	if _, err := r.Svc.Mutation.DeepV1.Agendas.UpdateIfMatch(ctx, ids[len(ids)-1], patch, agendasql.DeleteTime.IsNull(true)); err != nil {
+	if _, err := r.Svc.Mutation.DeepV1.Agendas.UpdateIfMatch(ctx, ids[len(ids)-1], r.deletePatch(), agendasql.DeleteTime.IsNull(true)); err != nil {
 		if errors.Is(err, graphql.ErrConflict) {
 			return repox.ErrNotFound
 		}
 		return mapGraphQLErr(err)
 	}
 	return nil
+}
+
+// deletePatch is the write that soft-deletes a record now: Delete's, and a
+// Batch's.
+func (r *GraphQLAgendaRepository) deletePatch() agendasql.UpdateInput {
+	at := time.Now().UTC()
+	now := at.Format(time.RFC3339Nano)
+	patch := agendasql.UpdateInput{DeleteTime: graphql.Value(now)}
+	patch.Etag = graphql.Value(repox.NewULID())
+	return patch
 }
 
 // Undelete clears the soft-delete mark and returns the restored record.
@@ -488,6 +819,30 @@ func (r *GraphQLAgendaRepository) Purge(ctx context.Context, name string) error 
 		}
 	}
 	id := ids[len(ids)-1]
+	_, err = r.purge(ctx, id, name, true)
+	return err
+}
+
+// purge removes row id, named name, for good -- unless something still
+// refers to it, when it keeps the row and reports kept: when askReferrers, a
+// referrer in another database or service (r.Refs), and, caught from the
+// database's own refusal, a row holding a foreign key to it. A purge never
+// fails, and never cascades, because of a referrer. repox.ErrNotFound when
+// there is no such row.
+func (r *GraphQLAgendaRepository) purge(ctx context.Context, id, name string, askReferrers bool) (kept bool, err error) {
+	if askReferrers && r.Refs.KeepOnPurge(ctx, "deep.v1/Agenda", name) {
+		return true, nil
+	}
+	err = r.remove(ctx, id)
+	if repox.IsForeignKeyViolation(err) {
+		r.Refs.Kept(ctx, name, "foreign key")
+		return true, nil
+	}
+	return false, err
+}
+
+// remove deletes row id with the value-object rows it owns.
+func (r *GraphQLAgendaRepository) remove(ctx context.Context, id string) error {
 	resp, err := r.Svc.Mutation.DeepV1.Agendas.Delete(ctx, id)
 	if err != nil {
 		return mapGraphQLErr(err)
@@ -535,18 +890,18 @@ func (r *GraphQLAgendaRepository) Purge(ctx context.Context, name string) error 
 		}
 	}
 	{
-		rows25, err := r.Svc.Query.DeepV1.Notes.List(ctx, notesql.List().Where(notesql.AgendaId.Eq(id)))
+		rows29, err := r.Svc.Query.DeepV1.Notes.List(ctx, notesql.List().Where(notesql.AgendaId.Eq(id)))
 		if err != nil {
 			return mapGraphQLErr(err)
 		}
-		for i := range rows25 {
-			if id := rows25[i].Id; id != "" {
-				got26, err := r.Svc.Query.DeepV1.Notes.Get(ctx, id)
+		for i := range rows29 {
+			if id := rows29[i].Id; id != "" {
+				got30, err := r.Svc.Query.DeepV1.Notes.Get(ctx, id)
 				if err != nil {
 					return mapGraphQLErr(err)
 				}
-				if got26 != nil {
-					dtx.Add(r.Svc.Mutation.DeepV1.Notes.DeleteOp(got26.Id, new(notesql.DeleteDeepV1NotesByIdResponse)))
+				if got30 != nil {
+					dtx.Add(r.Svc.Mutation.DeepV1.Notes.DeleteOp(got30.Id, new(notesql.DeleteDeepV1NotesByIdResponse)))
 				}
 			}
 		}
@@ -566,6 +921,9 @@ var _ AgendaRepository = (*GraphQLAgendaRepository)(nil)
 type GraphQLMeetingRepository struct {
 	Svc   *genql.Service
 	Hooks MeetingHooks
+	// Refs, when set, is asked before a purge whether anything in another
+	// database or service still refers to the record (see Purge).
+	Refs *repox.References
 	// ListOverrides substitute the generated dispatch for single filter fields.
 	ListOverrides map[string]filterx.GraphQLHandler
 }
@@ -669,59 +1027,66 @@ func (r *GraphQLMeetingRepository) get(ctx context.Context, id string) (*deepv1.
 	if row == nil {
 		return nil, repox.ErrNotFound
 	}
-	return r.toProto(ctx, row)
+	return r.toProto(ctx, row, nil)
 }
 
-// toProto converts a loaded row, hydrating value objects through their
-// stored references, and runs the AfterRead hook.
-func (r *GraphQLMeetingRepository) toProto(ctx context.Context, row *meetingsql.DeepV1Meetings) (*deepv1.Meeting, error) {
+// toProto converts a loaded row, hydrating the value objects mask reads (all
+// of them for an empty mask) through their stored references, and runs the
+// AfterRead hook.
+func (r *GraphQLMeetingRepository) toProto(ctx context.Context, row *meetingsql.DeepV1Meetings, mask []string) (*deepv1.Meeting, error) {
 	out := meetingFromRow(row)
-	if id := row.StartId; id != "" {
-		w, err := r.Svc.Query.DeepV1.Moments.Get(ctx, id)
-		if err != nil {
-			return nil, mapGraphQLErr(err)
-		}
-		if w != nil {
-			out.Start = deepV1MomentFromRow(w)
+	if repox.Reads(mask, "start") {
+		if id := row.StartId; id != "" {
+			w, err := r.Svc.Query.DeepV1.Moments.Get(ctx, id)
+			if err != nil {
+				return nil, mapGraphQLErr(err)
+			}
+			if w != nil {
+				out.Start = deepV1MomentFromRow(w)
+			}
 		}
 	}
-	if id := repox.Deref(row.EndId); id != "" {
-		w, err := r.Svc.Query.DeepV1.Moments.Get(ctx, id)
-		if err != nil {
-			return nil, mapGraphQLErr(err)
-		}
-		if w != nil {
-			out.Ends = &deepv1.Meeting_End{End: deepV1MomentFromRow(w)}
+	if repox.Reads(mask, "end") {
+		if id := repox.Deref(row.EndId); id != "" {
+			w, err := r.Svc.Query.DeepV1.Moments.Get(ctx, id)
+			if err != nil {
+				return nil, mapGraphQLErr(err)
+			}
+			if w != nil {
+				out.Ends = &deepv1.Meeting_End{End: deepV1MomentFromRow(w)}
+			}
 		}
 	}
-	if id := repox.Deref(row.RuleId); id != "" {
-		got7, err := r.Svc.Query.DeepV1.Rules.Get(ctx, id)
-		if err != nil {
-			return nil, mapGraphQLErr(err)
-		}
-		if got7 != nil {
-			p8 := deepV1RuleFromRow(got7)
-			if id := repox.Deref(got7.UntilId); id != "" {
-				got9, err := r.Svc.Query.DeepV1.Moments.Get(ctx, id)
-				if err != nil {
-					return nil, mapGraphQLErr(err)
-				}
-				if got9 != nil {
-					p10 := deepV1MomentFromRow(got9)
-					p8.Bound = &deepv1.Rule_Until{Until: p10}
-				}
+	if repox.Reads(mask, "rule") {
+		if id := repox.Deref(row.RuleId); id != "" {
+			got7, err := r.Svc.Query.DeepV1.Rules.Get(ctx, id)
+			if err != nil {
+				return nil, mapGraphQLErr(err)
 			}
-			{
-				rows11, err := r.Svc.Query.DeepV1.Days.List(ctx, daysql.List().Where(daysql.RuleId.Eq(got7.Id)).OrderBy(daysql.Id.Asc()))
-				if err != nil {
-					return nil, mapGraphQLErr(err)
+			if got7 != nil {
+				p8 := deepV1RuleFromRow(got7)
+				if id := repox.Deref(got7.UntilId); id != "" {
+					got9, err := r.Svc.Query.DeepV1.Moments.Get(ctx, id)
+					if err != nil {
+						return nil, mapGraphQLErr(err)
+					}
+					if got9 != nil {
+						p10 := deepV1MomentFromRow(got9)
+						p8.Bound = &deepv1.Rule_Until{Until: p10}
+					}
 				}
-				for i := range rows11 {
-					p12 := deepV1DayFromRow(&rows11[i])
-					p8.Days = append(p8.Days, p12)
+				{
+					rows11, err := r.Svc.Query.DeepV1.Days.List(ctx, daysql.List().Where(daysql.RuleId.Eq(got7.Id)).OrderBy(daysql.Id.Asc()))
+					if err != nil {
+						return nil, mapGraphQLErr(err)
+					}
+					for i := range rows11 {
+						p12 := deepV1DayFromRow(&rows11[i])
+						p8.Days = append(p8.Days, p12)
+					}
 				}
+				out.Rule = p8
 			}
-			out.Rule = p8
 		}
 	}
 	if h := r.Hooks.AfterRead; h != nil {
@@ -751,10 +1116,37 @@ func (r *GraphQLMeetingRepository) list(ctx context.Context, in repox.ListInput,
 		return nil, "", repox.MapFilterxErr(err)
 	}
 	conds = append(conds, in.Where...)
+	if err := repox.CheckReadMask((*deepv1.Meeting)(nil), in.ReadMask); err != nil {
+		return nil, "", err
+	}
 	eng := filterx.Hasura[meetingsql.DeepV1Meetings](deepv1gorm.MeetingFilterSpec, r.Svc.Query.DeepV1.Meetings).Scope(scope...)
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)
 	}
+	eng.Via("start", func(ctx context.Context, keys []string, where graphql.Predicate) ([]string, error) {
+		rows, err := r.Svc.Query.DeepV1.Moments.List(ctx, momentsql.List().Where(graphql.And(momentsql.Id.In(keys...), where)))
+		ids := make([]string, 0, len(rows))
+		for i := range rows {
+			ids = append(ids, rows[i].Id)
+		}
+		return ids, err
+	})
+	eng.Via("end", func(ctx context.Context, keys []string, where graphql.Predicate) ([]string, error) {
+		rows, err := r.Svc.Query.DeepV1.Moments.List(ctx, momentsql.List().Where(graphql.And(momentsql.Id.In(keys...), where)))
+		ids := make([]string, 0, len(rows))
+		for i := range rows {
+			ids = append(ids, rows[i].Id)
+		}
+		return ids, err
+	})
+	eng.Via("rule", func(ctx context.Context, keys []string, where graphql.Predicate) ([]string, error) {
+		rows, err := r.Svc.Query.DeepV1.Rules.List(ctx, rulesql.List().Where(graphql.And(rulesql.Id.In(keys...), where)))
+		ids := make([]string, 0, len(rows))
+		for i := range rows {
+			ids = append(ids, rows[i].Id)
+		}
+		return ids, err
+	})
 	rows, next, err := eng.List(ctx, filterx.ListInput{
 		PageSize:  in.PageSize,
 		PageToken: in.PageToken,
@@ -766,10 +1158,11 @@ func (r *GraphQLMeetingRepository) list(ctx context.Context, in repox.ListInput,
 	}
 	items := make([]*deepv1.Meeting, 0, len(rows))
 	for i := range rows {
-		out, err := r.toProto(ctx, &rows[i])
+		out, err := r.toProto(ctx, &rows[i], in.ReadMask)
 		if err != nil {
 			return nil, "", err
 		}
+		repox.Narrow(out, in.ReadMask)
 		items = append(items, out)
 	}
 	return items, next, nil
@@ -779,6 +1172,12 @@ func (r *GraphQLMeetingRepository) list(ctx context.Context, in repox.ListInput,
 // mutable field. When in.Etag is set the write is guarded server-side
 // (UpdateIfMatch); a stale etag returns repox.ErrConflict.
 func (r *GraphQLMeetingRepository) Update(ctx context.Context, in *deepv1.Meeting, paths []string) (*deepv1.Meeting, error) {
+	return r.update(ctx, in, paths, nil)
+}
+
+// update is Update's write, with the server-owned fields outputPaths names
+// (UpdateWithOutputOnly) merged into its patch.
+func (r *GraphQLMeetingRepository) update(ctx context.Context, in *deepv1.Meeting, paths, outputPaths []string) (*deepv1.Meeting, error) {
 	ids, err := repox.SplitName(in.GetName(), "agendas", "meetings")
 	if err != nil {
 		return nil, err
@@ -835,59 +1234,59 @@ func (r *GraphQLMeetingRepository) Update(ctx context.Context, in *deepv1.Meetin
 	atx := r.Svc.Mutation.Tx()
 	if repox.GroupTouched(paths, "rule") {
 		if id := staleRule; id != "" {
-			got17, err := r.Svc.Query.DeepV1.Rules.Get(ctx, id)
+			got21, err := r.Svc.Query.DeepV1.Rules.Get(ctx, id)
 			if err != nil {
 				return nil, mapGraphQLErr(err)
 			}
-			if got17 != nil {
+			if got21 != nil {
 				{
-					rows18, err := r.Svc.Query.DeepV1.Days.List(ctx, daysql.List().Where(daysql.RuleId.Eq(got17.Id)))
+					rows22, err := r.Svc.Query.DeepV1.Days.List(ctx, daysql.List().Where(daysql.RuleId.Eq(got21.Id)))
 					if err != nil {
 						return nil, mapGraphQLErr(err)
 					}
-					for i := range rows18 {
-						if id := rows18[i].Id; id != "" {
-							got19, err := r.Svc.Query.DeepV1.Days.Get(ctx, id)
+					for i := range rows22 {
+						if id := rows22[i].Id; id != "" {
+							got23, err := r.Svc.Query.DeepV1.Days.Get(ctx, id)
 							if err != nil {
 								return nil, mapGraphQLErr(err)
 							}
-							if got19 != nil {
-								atx.Add(r.Svc.Mutation.DeepV1.Days.DeleteOp(got19.Id, new(daysql.DeleteDeepV1DaysByIdResponse)))
+							if got23 != nil {
+								atx.Add(r.Svc.Mutation.DeepV1.Days.DeleteOp(got23.Id, new(daysql.DeleteDeepV1DaysByIdResponse)))
 							}
 						}
 					}
 				}
-				atx.Add(r.Svc.Mutation.DeepV1.Rules.DeleteOp(got17.Id, new(rulesql.DeleteDeepV1RulesByIdResponse)))
-				if id := repox.Deref(got17.UntilId); id != "" {
-					got20, err := r.Svc.Query.DeepV1.Moments.Get(ctx, id)
+				atx.Add(r.Svc.Mutation.DeepV1.Rules.DeleteOp(got21.Id, new(rulesql.DeleteDeepV1RulesByIdResponse)))
+				if id := repox.Deref(got21.UntilId); id != "" {
+					got24, err := r.Svc.Query.DeepV1.Moments.Get(ctx, id)
 					if err != nil {
 						return nil, mapGraphQLErr(err)
 					}
-					if got20 != nil {
-						atx.Add(r.Svc.Mutation.DeepV1.Moments.DeleteOp(got20.Id, new(momentsql.DeleteDeepV1MomentsByIdResponse)))
+					if got24 != nil {
+						atx.Add(r.Svc.Mutation.DeepV1.Moments.DeleteOp(got24.Id, new(momentsql.DeleteDeepV1MomentsByIdResponse)))
 					}
 				}
 			}
 		}
 		patch.RuleId = graphql.Null[string]()
-		if v21 := merged.GetRule(); v21 != nil {
-			n22 := deepV1RuleToCreateInput(v21)
-			n22.Id = repox.NewULID()
-			if v23 := v21.GetUntil(); v23 != nil {
-				n24 := deepV1MomentToCreateInput(v23)
-				n24.Id = repox.NewULID()
-				utx.Add(r.Svc.Mutation.DeepV1.Moments.CreateOp(n24, new(momentsql.InsertDeepV1MomentsResponse)))
-				n22.UntilId = n24.Id
-				n22.BoundCase = "UNTIL"
+		if v25 := merged.GetRule(); v25 != nil {
+			n26 := deepV1RuleToCreateInput(v25)
+			n26.Id = repox.NewULID()
+			if v27 := v25.GetUntil(); v27 != nil {
+				n28 := deepV1MomentToCreateInput(v27)
+				n28.Id = repox.NewULID()
+				utx.Add(r.Svc.Mutation.DeepV1.Moments.CreateOp(n28, new(momentsql.InsertDeepV1MomentsResponse)))
+				n26.UntilId = n28.Id
+				n26.BoundCase = "UNTIL"
 			}
-			utx.Add(r.Svc.Mutation.DeepV1.Rules.CreateOp(n22, new(rulesql.InsertDeepV1RulesResponse)))
-			for _, v25 := range v21.GetDays() {
-				n26 := deepV1DayToCreateInput(v25)
-				n26.Id = repox.NewULID()
-				n26.RuleId = n22.Id
-				utx.Add(r.Svc.Mutation.DeepV1.Days.CreateOp(n26, new(daysql.InsertDeepV1DaysResponse)))
+			utx.Add(r.Svc.Mutation.DeepV1.Rules.CreateOp(n26, new(rulesql.InsertDeepV1RulesResponse)))
+			for _, v29 := range v25.GetDays() {
+				n30 := deepV1DayToCreateInput(v29)
+				n30.Id = repox.NewULID()
+				n30.RuleId = n26.Id
+				utx.Add(r.Svc.Mutation.DeepV1.Days.CreateOp(n30, new(daysql.InsertDeepV1DaysResponse)))
 			}
-			patch.RuleId = graphql.Value(n22.Id)
+			patch.RuleId = graphql.Value(n26.Id)
 		}
 	}
 	if err := utx.Commit(ctx); err != nil {
@@ -935,6 +1334,273 @@ func (r *GraphQLMeetingRepository) Update(ctx context.Context, in *deepv1.Meetin
 	return r.get(ctx, id)
 }
 
+// newInput builds the insert a Batch queues for in under parent, and
+// the record it stands for, named: the same resolution Create applies.
+func (r *GraphQLMeetingRepository) newInput(parent string, in *deepv1.Meeting) (meetingsql.CreateInput, *deepv1.Meeting, error) {
+	var ci meetingsql.CreateInput
+	parentIDs, err := repox.SplitName(parent, "agendas")
+	if err != nil {
+		return ci, nil, err
+	}
+	id := repox.NewULID()
+	if in.GetName() != "" {
+		ids, err := repox.SplitName(in.GetName(), "agendas", "meetings")
+		if err != nil {
+			return ci, nil, err
+		}
+		for i := range parentIDs {
+			if ids[i] != parentIDs[i] {
+				return ci, nil, fmt.Errorf("%w: name %q is not under parent %q", repox.ErrInvalidArgument, in.GetName(), parent)
+			}
+		}
+		id = ids[len(ids)-1]
+	}
+	in = proto.Clone(in).(*deepv1.Meeting)
+	in.Name = FormatMeetingName(parentIDs[0], id)
+	ci = meetingToCreateInput(in)
+	ci.Id = id
+	ci.AgendaId = parentIDs[0]
+	ci.Etag = repox.NewULID()
+	return ci, in, nil
+}
+
+// insertOps queues the inserts that create in onto gtx, for a Batch: the
+// value objects it points at, its row (ci), then its children.
+func (r *GraphQLMeetingRepository) insertOps(ctx context.Context, gtx *repox.Ops, in *deepv1.Meeting, ci meetingsql.CreateInput) (repox.Check, error) {
+	id := ci.Id
+	_ = id
+	if v := in.GetStart(); v != nil {
+		vi := deepV1MomentToCreateInput(v)
+		vi.Id = repox.NewULID()
+		gtx.Add(r.Svc.Mutation.DeepV1.Moments.CreateOp(vi, new(momentsql.InsertDeepV1MomentsResponse)))
+		ci.StartId = vi.Id
+	}
+	if v := in.GetEnd(); v != nil {
+		vi := deepV1MomentToCreateInput(v)
+		vi.Id = repox.NewULID()
+		gtx.Add(r.Svc.Mutation.DeepV1.Moments.CreateOp(vi, new(momentsql.InsertDeepV1MomentsResponse)))
+		ci.EndId = vi.Id
+		ci.EndsCase = "END"
+	}
+	if v1 := in.GetRule(); v1 != nil {
+		n2 := deepV1RuleToCreateInput(v1)
+		n2.Id = repox.NewULID()
+		if v3 := v1.GetUntil(); v3 != nil {
+			n4 := deepV1MomentToCreateInput(v3)
+			n4.Id = repox.NewULID()
+			gtx.Add(r.Svc.Mutation.DeepV1.Moments.CreateOp(n4, new(momentsql.InsertDeepV1MomentsResponse)))
+			n2.UntilId = n4.Id
+			n2.BoundCase = "UNTIL"
+		}
+		gtx.Add(r.Svc.Mutation.DeepV1.Rules.CreateOp(n2, new(rulesql.InsertDeepV1RulesResponse)))
+		for _, v5 := range v1.GetDays() {
+			n6 := deepV1DayToCreateInput(v5)
+			n6.Id = repox.NewULID()
+			n6.RuleId = n2.Id
+			gtx.Add(r.Svc.Mutation.DeepV1.Days.CreateOp(n6, new(daysql.InsertDeepV1DaysResponse)))
+		}
+		ci.RuleId = n2.Id
+	}
+	gtx.Add(r.Svc.Mutation.DeepV1.Meetings.CreateOp(ci, new(meetingsql.InsertDeepV1MeetingsResponse)))
+	return nil, nil
+}
+
+// updateOps queues Update's writes onto ops, for a Batch: the value-object
+// rows that replace the masked ones, the row update, then the removal of what
+// they replaced. With in.Etag set the update is guarded inside the batch: a
+// self-update of the key whose post-check asserts the etag fails the request
+// when the record moved on, and the guarded update after it writes the row.
+//
+// outputPaths names the server-owned fields written alongside
+// (Update<Model>WithOutputOnly); nil for Update.
+func (r *GraphQLMeetingRepository) updateOps(ctx context.Context, ops *repox.Ops, id string, in *deepv1.Meeting, paths, outputPaths []string) (repox.Check, error) {
+	row, err := r.Svc.Query.DeepV1.Meetings.Get(ctx, id)
+	if err != nil {
+		return nil, mapGraphQLErr(err)
+	}
+	if row == nil {
+		return nil, repox.ErrNotFound
+	}
+	existingPB := meetingFromRow(row)
+	if in.GetEtag() != "" && existingPB.GetEtag() != in.GetEtag() {
+		return nil, repox.ErrConflict
+	}
+	var staleStart string
+	var staleEnd string
+	staleRule := repox.Deref(row.RuleId)
+	merged := proto.Clone(existingPB).(*deepv1.Meeting)
+	applyMeetingMask(merged, in, paths)
+	patch := meetingToUpdatePatch(merged)
+	patch.Etag = graphql.Value(repox.NewULID())
+	var utx, atx repox.Ops
+	if repox.GroupTouched(paths, "start") {
+		staleStart = row.StartId
+		if v := merged.GetStart(); v != nil {
+			vi := deepV1MomentToCreateInput(v)
+			vi.Id = repox.NewULID()
+			utx.Add(r.Svc.Mutation.DeepV1.Moments.CreateOp(vi, new(momentsql.InsertDeepV1MomentsResponse)))
+			patch.StartId = graphql.Value(vi.Id)
+		}
+	}
+	if repox.GroupTouched(paths, "end") || repox.GroupTouched(paths, "duration") {
+		staleEnd = repox.Deref(row.EndId)
+		patch.EndId = graphql.Null[string]()
+		if v := merged.GetEnd(); v != nil {
+			vi := deepV1MomentToCreateInput(v)
+			vi.Id = repox.NewULID()
+			utx.Add(r.Svc.Mutation.DeepV1.Moments.CreateOp(vi, new(momentsql.InsertDeepV1MomentsResponse)))
+			patch.EndId = graphql.Value(vi.Id)
+			patch.EndsCase = graphql.Value("END")
+		}
+	}
+	if repox.GroupTouched(paths, "rule") {
+		if id := staleRule; id != "" {
+			got21, err := r.Svc.Query.DeepV1.Rules.Get(ctx, id)
+			if err != nil {
+				return nil, mapGraphQLErr(err)
+			}
+			if got21 != nil {
+				{
+					rows22, err := r.Svc.Query.DeepV1.Days.List(ctx, daysql.List().Where(daysql.RuleId.Eq(got21.Id)))
+					if err != nil {
+						return nil, mapGraphQLErr(err)
+					}
+					for i := range rows22 {
+						if id := rows22[i].Id; id != "" {
+							got23, err := r.Svc.Query.DeepV1.Days.Get(ctx, id)
+							if err != nil {
+								return nil, mapGraphQLErr(err)
+							}
+							if got23 != nil {
+								atx.Add(r.Svc.Mutation.DeepV1.Days.DeleteOp(got23.Id, new(daysql.DeleteDeepV1DaysByIdResponse)))
+							}
+						}
+					}
+				}
+				atx.Add(r.Svc.Mutation.DeepV1.Rules.DeleteOp(got21.Id, new(rulesql.DeleteDeepV1RulesByIdResponse)))
+				if id := repox.Deref(got21.UntilId); id != "" {
+					got24, err := r.Svc.Query.DeepV1.Moments.Get(ctx, id)
+					if err != nil {
+						return nil, mapGraphQLErr(err)
+					}
+					if got24 != nil {
+						atx.Add(r.Svc.Mutation.DeepV1.Moments.DeleteOp(got24.Id, new(momentsql.DeleteDeepV1MomentsByIdResponse)))
+					}
+				}
+			}
+		}
+		patch.RuleId = graphql.Null[string]()
+		if v25 := merged.GetRule(); v25 != nil {
+			n26 := deepV1RuleToCreateInput(v25)
+			n26.Id = repox.NewULID()
+			if v27 := v25.GetUntil(); v27 != nil {
+				n28 := deepV1MomentToCreateInput(v27)
+				n28.Id = repox.NewULID()
+				utx.Add(r.Svc.Mutation.DeepV1.Moments.CreateOp(n28, new(momentsql.InsertDeepV1MomentsResponse)))
+				n26.UntilId = n28.Id
+				n26.BoundCase = "UNTIL"
+			}
+			utx.Add(r.Svc.Mutation.DeepV1.Rules.CreateOp(n26, new(rulesql.InsertDeepV1RulesResponse)))
+			for _, v29 := range v25.GetDays() {
+				n30 := deepV1DayToCreateInput(v29)
+				n30.Id = repox.NewULID()
+				n30.RuleId = n26.Id
+				utx.Add(r.Svc.Mutation.DeepV1.Days.CreateOp(n30, new(daysql.InsertDeepV1DaysResponse)))
+			}
+			patch.RuleId = graphql.Value(n26.Id)
+		}
+	}
+	*ops = append(*ops, utx...)
+	resp := new(meetingsql.UpdateDeepV1MeetingsByIdResponse)
+	etag := in.GetEtag()
+	if etag != "" {
+		ops.Add(r.Svc.Mutation.DeepV1.Meetings.UpdateOp(id, meetingsql.UpdateInput{Id: graphql.Value(id)}, new(meetingsql.UpdateDeepV1MeetingsByIdResponse), meetingsql.Update().PostCheck(meetingsql.Etag.Eq(etag))))
+		ops.Add(r.Svc.Mutation.DeepV1.Meetings.UpdateOp(id, patch, resp, meetingsql.Update().PreCheck(meetingsql.Etag.Eq(etag))))
+	} else {
+		ops.Add(r.Svc.Mutation.DeepV1.Meetings.UpdateOp(id, patch, resp))
+	}
+	if staleStart != "" {
+		atx.Add(r.Svc.Mutation.DeepV1.Moments.DeleteOp(staleStart, new(momentsql.DeleteDeepV1MomentsByIdResponse)))
+	}
+	if staleEnd != "" {
+		atx.Add(r.Svc.Mutation.DeepV1.Moments.DeleteOp(staleEnd, new(momentsql.DeleteDeepV1MomentsByIdResponse)))
+	}
+	*ops = append(*ops, atx...)
+	return func(ctx context.Context, failed error) error {
+		if failed == nil {
+			if resp.AffectedRows == 0 {
+				if etag != "" {
+					return repox.ErrConflict
+				}
+				return repox.ErrNotFound
+			}
+			return nil
+		}
+		// The request failed; if this guard is why, say so.
+		if etag != "" {
+			if now, err := r.Svc.Query.DeepV1.Meetings.Get(ctx, id); err == nil && (now == nil || meetingFromRow(now).GetEtag() != etag) {
+				return repox.ErrConflict
+			}
+		}
+		return nil
+	}, nil
+}
+
+// purgeOps queues the removal of row id and of the value-object rows it owns
+// onto dtx, for a Batch. A row already gone queues nothing.
+func (r *GraphQLMeetingRepository) purgeOps(ctx context.Context, dtx *repox.Ops, id string) (repox.Check, error) {
+	row, err := r.Svc.Query.DeepV1.Meetings.Get(ctx, id)
+	if err != nil {
+		return nil, mapGraphQLErr(err)
+	}
+	if row == nil {
+		return nil, nil
+	}
+	dtx.Add(r.Svc.Mutation.DeepV1.Meetings.DeleteOp(id, new(meetingsql.DeleteDeepV1MeetingsByIdResponse)))
+	if id := row.StartId; id != "" {
+		dtx.Add(r.Svc.Mutation.DeepV1.Moments.DeleteOp(id, new(momentsql.DeleteDeepV1MomentsByIdResponse)))
+	}
+	if id := repox.Deref(row.EndId); id != "" {
+		dtx.Add(r.Svc.Mutation.DeepV1.Moments.DeleteOp(id, new(momentsql.DeleteDeepV1MomentsByIdResponse)))
+	}
+	if id := repox.Deref(row.RuleId); id != "" {
+		got17, err := r.Svc.Query.DeepV1.Rules.Get(ctx, id)
+		if err != nil {
+			return nil, mapGraphQLErr(err)
+		}
+		if got17 != nil {
+			{
+				rows18, err := r.Svc.Query.DeepV1.Days.List(ctx, daysql.List().Where(daysql.RuleId.Eq(got17.Id)))
+				if err != nil {
+					return nil, mapGraphQLErr(err)
+				}
+				for i := range rows18 {
+					if id := rows18[i].Id; id != "" {
+						got19, err := r.Svc.Query.DeepV1.Days.Get(ctx, id)
+						if err != nil {
+							return nil, mapGraphQLErr(err)
+						}
+						if got19 != nil {
+							dtx.Add(r.Svc.Mutation.DeepV1.Days.DeleteOp(got19.Id, new(daysql.DeleteDeepV1DaysByIdResponse)))
+						}
+					}
+				}
+			}
+			dtx.Add(r.Svc.Mutation.DeepV1.Rules.DeleteOp(got17.Id, new(rulesql.DeleteDeepV1RulesByIdResponse)))
+			if id := repox.Deref(got17.UntilId); id != "" {
+				got20, err := r.Svc.Query.DeepV1.Moments.Get(ctx, id)
+				if err != nil {
+					return nil, mapGraphQLErr(err)
+				}
+				if got20 != nil {
+					dtx.Add(r.Svc.Mutation.DeepV1.Moments.DeleteOp(got20.Id, new(momentsql.DeleteDeepV1MomentsByIdResponse)))
+				}
+			}
+		}
+	}
+	return nil, nil
+}
+
 // Delete removes the record addressed by its resource name.
 func (r *GraphQLMeetingRepository) Delete(ctx context.Context, name string) error {
 	ids, err := repox.SplitName(name, "agendas", "meetings")
@@ -947,6 +1613,11 @@ func (r *GraphQLMeetingRepository) Delete(ctx context.Context, name string) erro
 		}
 	}
 	id := ids[len(ids)-1]
+	return r.remove(ctx, id)
+}
+
+// remove deletes row id with the value-object rows it owns.
+func (r *GraphQLMeetingRepository) remove(ctx context.Context, id string) error {
 	resp, err := r.Svc.Mutation.DeepV1.Meetings.Delete(ctx, id)
 	if err != nil {
 		return mapGraphQLErr(err)
@@ -1014,3 +1685,135 @@ func (r *GraphQLMeetingRepository) Delete(ctx context.Context, name string) erro
 
 // Compile-time proof the adapter satisfies the interface.
 var _ MeetingRepository = (*GraphQLMeetingRepository)(nil)
+
+// graphQLBatch is Batch on GraphQL: queued writes go into the Unit's mutation
+// request on Commit (see repox.Unit.Commit). A guarded UpdateOutputOnly runs
+// ahead of it, one by one: the engine reports its failed guard by touching no
+// row, which cannot abort a request.
+type graphQLBatch struct {
+	u   *repox.Unit
+	svc *genql.Service
+}
+
+// Commit applies the Unit's writes; see repox.Unit.Commit.
+func (b *graphQLBatch) Commit(ctx context.Context) error { return b.u.Commit(ctx) }
+
+// CreateAgenda queues a create and returns the name the record will have.
+func (b *graphQLBatch) CreateAgenda(in *deepv1.Agenda) (string, error) {
+	r := &GraphQLAgendaRepository{Svc: b.svc}
+	ci, named, err := r.newInput(in)
+	if err != nil {
+		return "", err
+	}
+	queueAgendaReferences(b.u, named, nil)
+	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		return r.insertOps(ctx, ops, named, ci)
+	})
+	b.u.Touch(named.GetName())
+	return named.GetName(), nil
+}
+
+// UpdateAgenda queues Update; in.Etag, when set, guards it inside the
+// batch's request (see updateOps).
+func (b *graphQLBatch) UpdateAgenda(in *deepv1.Agenda, paths []string) {
+	ids, err := repox.SplitName(in.GetName(), "agendas")
+	if err != nil {
+		b.u.Fail(err)
+		return
+	}
+	r := &GraphQLAgendaRepository{Svc: b.svc}
+	queueAgendaReferences(b.u, in, paths)
+	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, nil)
+	})
+	b.u.Touch(in.GetName())
+}
+
+// DeleteAgenda queues a soft delete. A record already deleted or gone is
+// not an error.
+func (b *graphQLBatch) DeleteAgenda(name string) {
+	ids, err := repox.SplitName(name, "agendas")
+	if err != nil {
+		b.u.Fail(err)
+		return
+	}
+	r := &GraphQLAgendaRepository{Svc: b.svc}
+	queueAgendaDelete(b.u, name, false)
+	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		ops.Add(b.svc.Mutation.DeepV1.Agendas.UpdateOp(ids[len(ids)-1], r.deletePatch(), new(agendasql.UpdateDeepV1AgendasByIdResponse), agendasql.Update().PreCheck(agendasql.DeleteTime.IsNull(true))))
+		return nil, nil
+	})
+	b.u.Touch(name)
+}
+
+// PurgeAgenda queues the record's removal for good. A record already
+// gone is not an error.
+func (b *graphQLBatch) PurgeAgenda(name string) {
+	ids, err := repox.SplitName(name, "agendas")
+	if err != nil {
+		b.u.Fail(err)
+		return
+	}
+	id := ids[len(ids)-1]
+	// A record a referrer in another database or service names is kept, as
+	// Purge keeps it. One a foreign key of this database still names fails
+	// the commit with repox.ErrForeignKey: the request is one transaction,
+	// and the engine cannot skip one of its mutations.
+	keep := queueAgendaPurge(b.u, name)
+	r := &GraphQLAgendaRepository{Svc: b.svc}
+	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		if *keep {
+			return nil, nil
+		}
+		return r.purgeOps(ctx, ops, id)
+	})
+	b.u.Touch(name)
+}
+
+// CreateMeeting queues a create and returns the name the record will have.
+func (b *graphQLBatch) CreateMeeting(parent string, in *deepv1.Meeting) (string, error) {
+	r := &GraphQLMeetingRepository{Svc: b.svc}
+	ci, named, err := r.newInput(parent, in)
+	if err != nil {
+		return "", err
+	}
+	queueMeetingReferences(b.u, named, nil)
+	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		return r.insertOps(ctx, ops, named, ci)
+	})
+	b.u.Touch(named.GetName())
+	return named.GetName(), nil
+}
+
+// UpdateMeeting queues Update; in.Etag, when set, guards it inside the
+// batch's request (see updateOps).
+func (b *graphQLBatch) UpdateMeeting(in *deepv1.Meeting, paths []string) {
+	ids, err := repox.SplitName(in.GetName(), "agendas", "meetings")
+	if err != nil {
+		b.u.Fail(err)
+		return
+	}
+	r := &GraphQLMeetingRepository{Svc: b.svc}
+	queueMeetingReferences(b.u, in, paths)
+	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, nil)
+	})
+	b.u.Touch(in.GetName())
+}
+
+// DeleteMeeting queues the record's removal for good. A record already
+// gone is not an error.
+func (b *graphQLBatch) DeleteMeeting(name string) {
+	ids, err := repox.SplitName(name, "agendas", "meetings")
+	if err != nil {
+		b.u.Fail(err)
+		return
+	}
+	id := ids[len(ids)-1]
+	queueMeetingDelete(b.u, name, true)
+	r := &GraphQLMeetingRepository{Svc: b.svc}
+	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		return r.purgeOps(ctx, ops, id)
+	})
+	b.u.Touch(name)
+}

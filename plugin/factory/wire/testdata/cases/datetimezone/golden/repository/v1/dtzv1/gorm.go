@@ -20,11 +20,11 @@ import (
 	dtzv1 "example.com/test/gen"
 	"example.com/test/gen/repox"
 	"example.com/test/gormdb/filterx"
-	"example.com/test/gormdb/gormx"
 	dtzv1gorm "example.com/test/gormdb/v1/dtzv1"
 	"fmt"
 	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // GormSessionRepository is the GORM adapter of SessionRepository: flat
@@ -36,6 +36,9 @@ import (
 type GormSessionRepository struct {
 	DB    *gorm.DB
 	Hooks SessionHooks
+	// Refs, when set, is asked before a purge whether anything in another
+	// database or service still refers to the record (see Purge).
+	Refs *repox.References
 	// ListOverrides substitute the generated dispatch for single filter fields
 	// (e.g. a derived state computed via subqueries).
 	ListOverrides map[string]filterx.SQLHandler
@@ -119,7 +122,10 @@ func (r *GormSessionRepository) list(ctx context.Context, scope *gorm.DB, in rep
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)
 	}
-	rows, next, err := eng.List(ctx, scope, filterx.ListInput{
+	if err := repox.CheckReadMask((*dtzv1.Session)(nil), in.ReadMask); err != nil {
+		return nil, "", err
+	}
+	rows, next, err := eng.List(ctx, r.reads(scope, in), filterx.ListInput{
 		PageSize:  in.PageSize,
 		PageToken: in.PageToken,
 		OrderBy:   in.OrderBy,
@@ -134,9 +140,31 @@ func (r *GormSessionRepository) list(ctx context.Context, scope *gorm.DB, in rep
 		if err != nil {
 			return nil, "", err
 		}
+		repox.Narrow(out, in.ReadMask)
 		items = append(items, out)
 	}
 	return items, next, nil
+}
+
+// reads is the query a List reads rows through: every column and value object
+// without a read mask; with one, only the columns and value objects of the
+// fields it names, and the columns the page is sorted by.
+func (r *GormSessionRepository) reads(db *gorm.DB, in repox.ListInput) *gorm.DB {
+	if len(in.ReadMask) == 0 {
+		return db
+	}
+	if omit := repox.Unread(sessionColumns, in.ReadMask, repox.OrderColumns(dtzv1gorm.SessionFilterSpec, in.OrderBy)...); len(omit) > 0 {
+		db = db.Omit(omit...)
+	}
+	return db
+}
+
+// sessionColumns are the row's columns by the field each stores, for
+// a read mask to leave out.
+var sessionColumns = map[string][]string{
+	"starts":  {"starts"},
+	"checked": {"checked"},
+	"etag":    {"etag"},
 }
 
 // Update persists the masked fields of in; an empty mask replaces every
@@ -147,34 +175,64 @@ func (r *GormSessionRepository) Update(ctx context.Context, in *dtzv1.Session, p
 		return nil, err
 	}
 	id := ids[len(ids)-1]
-	err = r.DB.Transaction(func(tx *gorm.DB) error {
-		var existing dtzv1gorm.Session
-		if err := tx.WithContext(ctx).First(&existing, "id = ?", id).Error; err != nil {
-			return err
-		}
-		if in.GetEtag() != "" && existing.Etag != nil && *existing.Etag != in.GetEtag() {
-			return repox.ErrConflict
-		}
-		existingPB := dtzv1gorm.SessionToProto(&existing)
-		merged := proto.Clone(existingPB).(*dtzv1.Session)
-		applySessionMask(merged, in, paths)
-		if h := r.Hooks.BeforeUpdate; h != nil {
-			if err := h(ctx, existingPB, merged, paths); err != nil {
-				return err
-			}
-		}
-		next := dtzv1gorm.SessionFromProto(merged)
-		_ = next
-		existing.Name = next.Name
-		existing.Starts = next.Starts
-		existing.StartsZone = next.StartsZone
-		existing.Etag = repox.Ptr(repox.NewULID())
-		return dtzv1gorm.NewSessionStore(tx).Update(ctx, &existing)
-	})
+	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, id, in, paths, nil) })
 	if err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	return r.get(ctx, id)
+}
+
+// UpdateWithOutputOnly is Update plus the server-owned fields outputPaths
+// names, in Update's transaction and under its etag guard.
+func (r *GormSessionRepository) UpdateWithOutputOnly(ctx context.Context, in *dtzv1.Session, paths, outputPaths []string) (*dtzv1.Session, error) {
+	ids, err := repox.SplitName(in.GetName(), "sessions")
+	if err != nil {
+		return nil, err
+	}
+	id := ids[len(ids)-1]
+	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, id, in, paths, outputPaths) })
+	if err != nil {
+		return nil, repox.MapGormErr(err)
+	}
+	return r.get(ctx, id)
+}
+
+// updateTx is Update's write inside tx, which a Batch shares with other
+// writes. The row is read FOR UPDATE: a concurrent update of the same record
+// waits for this transaction and then sees the etag it wrote, so two writers
+// holding the same etag cannot both pass the guard. outputPaths names the
+// server-owned fields written alongside (UpdateWithOutputOnly); nil for Update.
+func (r *GormSessionRepository) updateTx(ctx context.Context, tx *gorm.DB, id string, in *dtzv1.Session, paths, outputPaths []string) error {
+	var existing dtzv1gorm.Session
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "id = ?", id).Error; err != nil {
+		return err
+	}
+	if in.GetEtag() != "" && existing.Etag != nil && *existing.Etag != in.GetEtag() {
+		return repox.ErrConflict
+	}
+	existingPB := dtzv1gorm.SessionToProto(&existing)
+	merged := proto.Clone(existingPB).(*dtzv1.Session)
+	applySessionMask(merged, in, paths)
+	repox.CopyFields(merged, in, outputPaths)
+	if h := r.Hooks.BeforeUpdate; h != nil {
+		if err := h(ctx, existingPB, merged, paths); err != nil {
+			return err
+		}
+	}
+	next := dtzv1gorm.SessionFromProto(merged)
+	_ = next
+	existing.Name = next.Name
+	existing.Starts = next.Starts
+	existing.StartsZone = next.StartsZone
+	if len(outputPaths) > 0 {
+		paths := outputPaths
+		if repox.InMask(paths, "checked") {
+			existing.Checked = next.Checked
+			existing.CheckedZone = next.CheckedZone
+		}
+	}
+	existing.Etag = repox.Ptr(repox.NewULID())
+	return dtzv1gorm.NewSessionStore(tx).Update(ctx, &existing)
 }
 
 // UpdateOutputOnly persists the server-owned fields of in that paths names, in
@@ -204,7 +262,9 @@ func (r *GormSessionRepository) updateOutputOnlyTx(ctx context.Context, tx *gorm
 	id := ids[len(ids)-1]
 	{
 		var existing dtzv1gorm.Session
-		if err := tx.WithContext(ctx).First(&existing, "id = ?", id).Error; err != nil {
+		// FOR UPDATE, as in updateTx: concurrent writers holding one etag
+		// take turns, and only the first passes the guard.
+		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "id = ?", id).Error; err != nil {
 			return err
 		}
 		if in.GetEtag() != "" && existing.Etag != nil && *existing.Etag != in.GetEtag() {
@@ -221,13 +281,13 @@ func (r *GormSessionRepository) updateOutputOnlyTx(ctx context.Context, tx *gorm
 }
 
 // newRow builds the row a Batch inserts for in, and the
-// name the record will have: the same resolution Create applies.
-func (r *GormSessionRepository) newRow(in *dtzv1.Session) (*dtzv1gorm.Session, string, error) {
+// record it stands for, named: the same resolution Create applies.
+func (r *GormSessionRepository) newRow(in *dtzv1.Session) (*dtzv1gorm.Session, *dtzv1.Session, error) {
 	id := repox.NewULID()
 	if in.GetName() != "" {
 		ids, err := repox.SplitName(in.GetName(), "sessions")
 		if err != nil {
-			return nil, "", err
+			return nil, nil, err
 		}
 		id = ids[len(ids)-1]
 	}
@@ -237,7 +297,7 @@ func (r *GormSessionRepository) newRow(in *dtzv1.Session) (*dtzv1gorm.Session, s
 	m.ID = id
 	m.Name = in.GetName()
 	m.Etag = repox.Ptr(repox.NewULID())
-	return m, in.GetName(), nil
+	return m, in, nil
 }
 
 // Delete removes the record addressed by its resource name.
@@ -262,65 +322,74 @@ func (r *GormSessionRepository) Delete(ctx context.Context, name string) error {
 // Compile-time proof the adapter satisfies the interface.
 var _ SessionRepository = (*GormSessionRepository)(nil)
 
-// gormBatch is Batch on GORM: queued writes run in one transaction on Commit.
+// gormBatch is Batch on GORM: queued writes run in the Unit's transaction on
+// Commit.
 type gormBatch struct {
-	db    *gorm.DB
-	ops   []func(ctx context.Context, tx *gorm.DB) error
-	locks []string // no_overlap keys of the rows queued for insert
-	err   error    // the first queueing error; Commit returns it and writes nothing
+	u  *repox.Unit
+	db *gorm.DB
 }
 
-// Commit runs every queued write in one transaction: all land or none do.
-// It first locks the no_overlap keys of every row it inserts, all at once and
-// in order (gormx.LockKeys), so two batches inserting rows for the same keys
-// in different orders take turns instead of deadlocking.
-func (b *gormBatch) Commit(ctx context.Context) error {
-	if b.err != nil {
-		return b.err
-	}
-	if len(b.ops) == 0 {
-		return nil
-	}
-	return repox.MapGormErr(b.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := gormx.LockKeys(tx, b.locks...); err != nil {
-			return err
-		}
-		for _, op := range b.ops {
-			if err := op(ctx, tx); err != nil {
-				return err
-			}
-		}
-		return nil
-	}))
-}
-
-func (b *gormBatch) fail(err error) {
-	if b.err == nil {
-		b.err = err
-	}
-}
+// Commit applies the Unit's writes; see repox.Unit.Commit.
+func (b *gormBatch) Commit(ctx context.Context) error { return b.u.Commit(ctx) }
 
 // CreateSession queues a create and returns the name the record will have.
 func (b *gormBatch) CreateSession(in *dtzv1.Session) (string, error) {
-	m, name, err := (&GormSessionRepository{DB: b.db}).newRow(in)
+	r := &GormSessionRepository{DB: b.db}
+	m, named, err := r.newRow(in)
 	if err != nil {
 		return "", err
 	}
+	var locks []string
 	if k, ok := any(m).(interface{ NoOverlapKeys() []string }); ok {
-		b.locks = append(b.locks, k.NoOverlapKeys()...)
+		locks = k.NoOverlapKeys()
 	}
-	b.ops = append(b.ops, func(ctx context.Context, tx *gorm.DB) error {
+	queueSessionReferences(b.u, named, nil)
+	b.u.QueueGorm(locks, func(ctx context.Context, tx *gorm.DB) error {
 		return dtzv1gorm.NewSessionStore(tx).Create(ctx, m)
 	})
-	return name, nil
+	b.u.Touch(named.GetName())
+	return named.GetName(), nil
+}
+
+// UpdateSession queues Update; in.Etag, when set, guards it, and a guard
+// that fails rolls the whole batch back.
+func (b *gormBatch) UpdateSession(in *dtzv1.Session, paths []string) {
+	ids, err := repox.SplitName(in.GetName(), "sessions")
+	if err != nil {
+		b.u.Fail(err)
+		return
+	}
+	r := &GormSessionRepository{DB: b.db}
+	queueSessionReferences(b.u, in, paths)
+	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
+		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, nil)
+	})
+	b.u.Touch(in.GetName())
+}
+
+// UpdateSessionWithOutputOnly queues UpdateWithOutputOnly; in.Etag, when
+// set, guards it, and a guard that fails rolls the whole batch back.
+func (b *gormBatch) UpdateSessionWithOutputOnly(in *dtzv1.Session, paths, outputPaths []string) {
+	ids, err := repox.SplitName(in.GetName(), "sessions")
+	if err != nil {
+		b.u.Fail(err)
+		return
+	}
+	r := &GormSessionRepository{DB: b.db}
+	queueSessionReferences(b.u, in, paths)
+	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
+		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, outputPaths)
+	})
+	b.u.Touch(in.GetName())
 }
 
 // UpdateSessionOutputOnly queues UpdateOutputOnly; in.Etag, when set, guards it.
 func (b *gormBatch) UpdateSessionOutputOnly(in *dtzv1.Session, paths []string) {
 	r := &GormSessionRepository{DB: b.db}
-	b.ops = append(b.ops, func(ctx context.Context, tx *gorm.DB) error {
+	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.updateOutputOnlyTx(ctx, tx, in, paths)
 	})
+	b.u.Touch(in.GetName())
 }
 
 // DeleteSession queues the record's removal for good. A record already
@@ -329,11 +398,13 @@ func (b *gormBatch) UpdateSessionOutputOnly(in *dtzv1.Session, paths []string) {
 func (b *gormBatch) DeleteSession(name string) {
 	ids, err := repox.SplitName(name, "sessions")
 	if err != nil {
-		b.fail(err)
+		b.u.Fail(err)
 		return
 	}
 	id := ids[len(ids)-1]
-	b.ops = append(b.ops, func(ctx context.Context, tx *gorm.DB) error {
+	queueSessionDelete(b.u, name, true)
+	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return tx.WithContext(ctx).Delete(&dtzv1gorm.Session{}, "id = ?", id).Error
 	})
+	b.u.Touch(name)
 }

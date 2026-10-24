@@ -39,6 +39,44 @@ type Config struct {
 	// filterx observer, Registry.Instrument). Nil leaves the telemetry plugin
 	// opt in charge. Replaces the removed `otel:` block.
 	Telemetry *telemetryConfig `yaml:"telemetry"`
+
+	// References are descriptor images (binary FileDescriptorSets, e.g. from
+	// `buf build <module> -o rfc.binpb`) read only to discover the target of a
+	// google.api.resource_reference no table of this run matches; nothing in
+	// them is generated. Paths are relative to the working directory buf runs
+	// the plugin in, like the config= opt itself. Passed to
+	// protokit.Options.References; the plugin opt references=a.binpb,b.binpb
+	// adds to them.
+	References []string `yaml:"references"`
+
+	// ReferenceServices are deployment facts about resource types that live in
+	// another database or service: where the AIP Get that proves one exists is
+	// served, and whether that service also serves store.v1.ReferenceService
+	// (so this side's deletes can ask it for referrers). What happens on delete
+	// is not configured here: it is (store.v1.reference).on_delete on the
+	// referring field. The repository target renders these into
+	// repox.ReferenceEndpoints; the DDN plugin config carries them too.
+	ReferenceServices []ReferenceService `yaml:"reference_services"`
+}
+
+// ReferenceService is one store.yaml `reference_services:` entry.
+type ReferenceService struct {
+	// Type is the AIP resource type whose Get is served there ("vcard.example.com/User").
+	Type string `yaml:"type" json:"type"`
+	// Get is the full gRPC method of the type's AIP Get
+	// ("users.v1.UserService/GetUser"); its request carries the resource name
+	// in field 1 (AIP-131).
+	Get string `yaml:"get" json:"get,omitempty"`
+	// Target is the default gRPC dial target ("dns:///users:9090"). A value
+	// of the form ${NAME} is read from the environment at startup.
+	Target string `yaml:"target" json:"target,omitempty"`
+	// Referrers are resource types of this run that the service at Target
+	// refers to. It serves store.v1.ReferenceService for them, and this side's
+	// Delete and Purge of one ask it for referrers first. An entry may carry
+	// only Target and Referrers.
+	Referrers []string `yaml:"referrers" json:"referrers,omitempty"`
+	// Database is where the type is stored; documentation only.
+	Database string `yaml:"database" json:"database,omitempty"`
 }
 
 // telemetryConfig is the store.yaml `telemetry:` block. Every field is a pointer

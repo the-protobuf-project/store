@@ -43,6 +43,14 @@ type gqlVOPlan struct {
 	StaleDels      []string // stale-row deletions after a successful update
 	DeleteCleanups []string // VO-row removals after the owner row's delete
 	VOs            []gqlVO
+
+	// The same writes queued onto a Batch's mutation list instead of sent:
+	// creates onto gtx, the update's new rows onto utx (before the row
+	// update) and its stale rows onto atx (after it), a purge's onto dtx.
+	QueuedCreates   []string
+	QueuedUpdates   []string
+	QueuedStaleDels []string
+	QueuedPurges    []string
 }
 
 // gqlVOFor resolves the client-side naming of one planned VO for a resource
@@ -99,9 +107,17 @@ func gqlVOFragments(pb *pbIndex, s *schema.Schema, r *resource) gqlVOPlan {
 
 	for _, g := range plan.VOs {
 		plan.Creates = append(plan.Creates, gqlVOCreate(g, "in", "ci"))
-		plan.Hydrates = append(plan.Hydrates, gqlVOHydrate(g))
+		plan.Hydrates = append(plan.Hydrates, readGuard(g.vo.FieldName, gqlVOHydrate(g)))
 		plan.StaleVars = append(plan.StaleVars, fmt.Sprintf("var stale%s string", g.vo.PBGoName))
 		plan.DeleteCleanups = append(plan.DeleteCleanups, gqlVODeleteCleanup(g))
+		nm := gqlNamesOf(g.vo.Target)
+		plan.QueuedCreates = append(plan.QueuedCreates, gqlVOCreateQueued(g, nm))
+		plan.QueuedStaleDels = append(plan.QueuedStaleDels, fmt.Sprintf(
+			"if stale%s != \"\" {\n\t\tatx.Add(r.Svc.Mutation.%s.%s.DeleteOp(stale%s, new(%s)))\n\t}",
+			g.vo.PBGoName, g.VODomain, g.VOResource, g.vo.PBGoName, nm.DeleteResp))
+		plan.QueuedPurges = append(plan.QueuedPurges, fmt.Sprintf(
+			"if id := %s; id != \"\" {\n\t\tdtx.Add(r.Svc.Mutation.%s.%s.DeleteOp(id, new(%s)))\n\t}",
+			rowFK("row", g.vo.Col), g.VODomain, g.VOResource, nm.DeleteResp))
 		plan.StaleDels = append(plan.StaleDels, fmt.Sprintf(
 			"if stale%s != \"\" {\n\t\tif _, err := r.Svc.Mutation.%s.%s.Delete(ctx, stale%s); err != nil {\n\t\t\treturn nil, mapGraphQLErr(err)\n\t\t}\n\t}",
 			g.vo.PBGoName, g.VODomain, g.VOResource, g.vo.PBGoName))
@@ -115,6 +131,7 @@ func gqlVOFragments(pb *pbIndex, s *schema.Schema, r *resource) gqlVOPlan {
 		}
 		if len(gs) > 0 {
 			plan.Updates = append(plan.Updates, gqlVOUpdate(gs))
+			plan.QueuedUpdates = append(plan.QueuedUpdates, gqlVOUpdateQueued(gs))
 		}
 	}
 	return plan
@@ -153,6 +170,55 @@ func gqlVOCreate(g gqlVO, src, dst string) string {
 	fmt.Fprintf(&b, "\t\t%s.%s = vi.Id\n", dst, g.FKInput)
 	if g.vo.Case != nil {
 		fmt.Fprintf(&b, "\t\t%s.%s = %q\n", dst, caseInputField(g.vo), caseValue(g.vo))
+	}
+	b.WriteString("\t}")
+	return b.String()
+}
+
+// gqlVOCreateQueued is gqlVOCreate for a Batch: the VO insert is queued onto
+// gtx ahead of the resource's own.
+func gqlVOCreateQueued(g gqlVO, nm gqlNames) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "if v := in.Get%s(); v != nil {\n", g.vo.PBGoName)
+	fmt.Fprintf(&b, "\t\tvi := %sToCreateInput(v)\n", g.ConvName)
+	b.WriteString("\t\tvi.Id = repox.NewULID()\n")
+	fmt.Fprintf(&b, "\t\tgtx.Add(r.Svc.Mutation.%s.%s.CreateOp(vi, new(%s)))\n", g.VODomain, g.VOResource, nm.InsertResp)
+	fmt.Fprintf(&b, "\t\tci.%s = vi.Id\n", g.FKInput)
+	if g.vo.Case != nil {
+		fmt.Fprintf(&b, "\t\tci.%s = %q\n", caseInputField(g.vo), caseValue(g.vo))
+	}
+	b.WriteString("\t}")
+	return b.String()
+}
+
+// gqlVOUpdateQueued is gqlVOUpdate for a Batch: the replacement row is queued
+// onto utx, ahead of the row update that points at it.
+func gqlVOUpdateQueued(grp []gqlVO) string {
+	var fields []string
+	for _, g := range grp {
+		fields = append(fields, g.vo.FieldName)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "if %s {\n", touchedAny(fields, grp[0].vo.Case))
+	for _, g := range grp {
+		if g.vo.Col.Optional {
+			fmt.Fprintf(&b, "\t\tstale%s = repox.Deref(row.%s)\n", g.vo.PBGoName, g.FKInput)
+			fmt.Fprintf(&b, "\t\tpatch.%s = graphql.Null[string]()\n", g.FKInput)
+		} else {
+			fmt.Fprintf(&b, "\t\tstale%s = row.%s\n", g.vo.PBGoName, g.FKInput)
+		}
+	}
+	for _, g := range grp {
+		nm := gqlNamesOf(g.vo.Target)
+		fmt.Fprintf(&b, "\t\tif v := merged.Get%s(); v != nil {\n", g.vo.PBGoName)
+		fmt.Fprintf(&b, "\t\t\tvi := %sToCreateInput(v)\n", g.ConvName)
+		b.WriteString("\t\t\tvi.Id = repox.NewULID()\n")
+		fmt.Fprintf(&b, "\t\t\tutx.Add(r.Svc.Mutation.%s.%s.CreateOp(vi, new(%s)))\n", g.VODomain, g.VOResource, nm.InsertResp)
+		fmt.Fprintf(&b, "\t\t\tpatch.%s = graphql.Value(vi.Id)\n", g.FKInput)
+		if g.vo.Case != nil {
+			fmt.Fprintf(&b, "\t\t\tpatch.%s = graphql.Value(%q)\n", caseInputField(g.vo), caseValue(g.vo))
+		}
+		b.WriteString("\t\t}\n")
 	}
 	b.WriteString("\t}")
 	return b.String()
@@ -291,4 +357,10 @@ func gqlVOConvs(pb *pbIndex, db *schema.Database, s *schema.Schema, resources ma
 		}
 	}
 	return out
+}
+
+// readGuard wraps a toProto read of one field so a List under a read mask
+// skips it unless the mask names the field (mask is toProto's parameter).
+func readGuard(field, code string) string {
+	return fmt.Sprintf("if repox.Reads(mask, %q) {\n%s\n}", field, code)
 }

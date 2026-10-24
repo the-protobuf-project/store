@@ -199,3 +199,32 @@ func commentOr(comment, fallback string) string {
 	}
 	return fallback
 }
+
+// referencesTag is the ";references:<Field>" a GORM association needs when the
+// foreign key on t's column colName targets a column of target other than its
+// primary key -- the unique name column of a nested resource, whose full
+// resource name the column stores. GORM otherwise assumes the primary key and
+// migrates a constraint against the wrong column. Empty for a PK target.
+func referencesTag(t *schema.Table, colName string, target *schema.Table) string {
+	if target == nil {
+		return ""
+	}
+	for _, fk := range t.ForeignKeys {
+		if fk.Column != colName || fk.ReferencedColumn == "" {
+			continue
+		}
+		pk := target.PKColumn
+		if pk == "" {
+			pk = "id"
+		}
+		if fk.ReferencedColumn == pk {
+			return ""
+		}
+		for _, c := range target.Columns {
+			if c.Name == fk.ReferencedColumn {
+				return ";references:" + gormFieldName(c)
+			}
+		}
+	}
+	return ""
+}

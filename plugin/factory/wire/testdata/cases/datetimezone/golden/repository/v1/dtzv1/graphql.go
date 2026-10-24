@@ -26,7 +26,6 @@ import (
 	dtzv1gorm "example.com/test/gormdb/v1/dtzv1"
 	"fmt"
 	"github.com/the-protobuf-project/runtime-go/network/graphql"
-	"github.com/the-protobuf-project/runtime-go/network/runtime"
 	"google.golang.org/protobuf/proto"
 	"strings"
 )
@@ -46,6 +45,9 @@ func mapGraphQLErr(err error) error {
 		return fmt.Errorf("%w: %v", repox.ErrConflict, err)
 	case strings.Contains(err.Error(), "violates unique constraint"):
 		return fmt.Errorf("%w: %v", repox.ErrAlreadyExists, err)
+	// A foreign key: repox.ErrForeignKey, with the constraint named.
+	case strings.Contains(err.Error(), "violates foreign key constraint"):
+		return repox.ForeignKeyError(err)
 	default:
 		return err
 	}
@@ -57,6 +59,9 @@ func mapGraphQLErr(err error) error {
 type GraphQLSessionRepository struct {
 	Svc   *genql.Service
 	Hooks SessionHooks
+	// Refs, when set, is asked before a purge whether anything in another
+	// database or service still refers to the record (see Purge).
+	Refs *repox.References
 	// ListOverrides substitute the generated dispatch for single filter fields.
 	ListOverrides map[string]filterx.GraphQLHandler
 }
@@ -111,12 +116,13 @@ func (r *GraphQLSessionRepository) get(ctx context.Context, id string) (*dtzv1.S
 	if row == nil {
 		return nil, repox.ErrNotFound
 	}
-	return r.toProto(ctx, row)
+	return r.toProto(ctx, row, nil)
 }
 
-// toProto converts a loaded row, hydrating value objects through their
-// stored references, and runs the AfterRead hook.
-func (r *GraphQLSessionRepository) toProto(ctx context.Context, row *sessionsql.DtzV1Sessions) (*dtzv1.Session, error) {
+// toProto converts a loaded row, hydrating the value objects mask reads (all
+// of them for an empty mask) through their stored references, and runs the
+// AfterRead hook.
+func (r *GraphQLSessionRepository) toProto(ctx context.Context, row *sessionsql.DtzV1Sessions, mask []string) (*dtzv1.Session, error) {
 	out := sessionFromRow(row)
 	if h := r.Hooks.AfterRead; h != nil {
 		if err := h(ctx, out); err != nil {
@@ -137,6 +143,9 @@ func (r *GraphQLSessionRepository) list(ctx context.Context, in repox.ListInput,
 		return nil, "", repox.MapFilterxErr(err)
 	}
 	conds = append(conds, in.Where...)
+	if err := repox.CheckReadMask((*dtzv1.Session)(nil), in.ReadMask); err != nil {
+		return nil, "", err
+	}
 	eng := filterx.Hasura[sessionsql.DtzV1Sessions](dtzv1gorm.SessionFilterSpec, r.Svc.Query.DtzV1.Sessions).Scope(scope...)
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)
@@ -152,10 +161,11 @@ func (r *GraphQLSessionRepository) list(ctx context.Context, in repox.ListInput,
 	}
 	items := make([]*dtzv1.Session, 0, len(rows))
 	for i := range rows {
-		out, err := r.toProto(ctx, &rows[i])
+		out, err := r.toProto(ctx, &rows[i], in.ReadMask)
 		if err != nil {
 			return nil, "", err
 		}
+		repox.Narrow(out, in.ReadMask)
 		items = append(items, out)
 	}
 	return items, next, nil
@@ -165,6 +175,18 @@ func (r *GraphQLSessionRepository) list(ctx context.Context, in repox.ListInput,
 // mutable field. When in.Etag is set the write is guarded server-side
 // (UpdateIfMatch); a stale etag returns repox.ErrConflict.
 func (r *GraphQLSessionRepository) Update(ctx context.Context, in *dtzv1.Session, paths []string) (*dtzv1.Session, error) {
+	return r.update(ctx, in, paths, nil)
+}
+
+// UpdateWithOutputOnly is Update plus the server-owned fields outputPaths
+// names, in the same patch and under the same guard.
+func (r *GraphQLSessionRepository) UpdateWithOutputOnly(ctx context.Context, in *dtzv1.Session, paths, outputPaths []string) (*dtzv1.Session, error) {
+	return r.update(ctx, in, paths, outputPaths)
+}
+
+// update is Update's write, with the server-owned fields outputPaths names
+// (UpdateWithOutputOnly) merged into its patch.
+func (r *GraphQLSessionRepository) update(ctx context.Context, in *dtzv1.Session, paths, outputPaths []string) (*dtzv1.Session, error) {
 	ids, err := repox.SplitName(in.GetName(), "sessions")
 	if err != nil {
 		return nil, err
@@ -180,12 +202,16 @@ func (r *GraphQLSessionRepository) Update(ctx context.Context, in *dtzv1.Session
 	existingPB := sessionFromRow(row)
 	merged := proto.Clone(existingPB).(*dtzv1.Session)
 	applySessionMask(merged, in, paths)
+	repox.CopyFields(merged, in, outputPaths)
 	if h := r.Hooks.BeforeUpdate; h != nil {
 		if err := h(ctx, existingPB, merged, paths); err != nil {
 			return nil, err
 		}
 	}
 	patch := sessionToUpdatePatch(merged)
+	if len(outputPaths) > 0 {
+		sessionAddOutputPatch(&patch, merged, outputPaths)
+	}
 	patch.Etag = graphql.Value(repox.NewULID())
 	if in.GetEtag() != "" {
 		if _, err := r.Svc.Mutation.DtzV1.Sessions.UpdateIfMatch(ctx, id, patch, sessionsql.Etag.Eq(in.GetEtag())); err != nil {
@@ -204,14 +230,14 @@ func (r *GraphQLSessionRepository) Update(ctx context.Context, in *dtzv1.Session
 }
 
 // newInput builds the insert a Batch queues for in, and
-// the name the record will have: the same resolution Create applies.
-func (r *GraphQLSessionRepository) newInput(in *dtzv1.Session) (sessionsql.CreateInput, string, error) {
+// the record it stands for, named: the same resolution Create applies.
+func (r *GraphQLSessionRepository) newInput(in *dtzv1.Session) (sessionsql.CreateInput, *dtzv1.Session, error) {
 	var ci sessionsql.CreateInput
 	id := repox.NewULID()
 	if in.GetName() != "" {
 		ids, err := repox.SplitName(in.GetName(), "sessions")
 		if err != nil {
-			return ci, "", err
+			return ci, nil, err
 		}
 		id = ids[len(ids)-1]
 	}
@@ -220,7 +246,66 @@ func (r *GraphQLSessionRepository) newInput(in *dtzv1.Session) (sessionsql.Creat
 	ci = sessionToCreateInput(in)
 	ci.Id = id
 	ci.Etag = repox.NewULID()
-	return ci, in.GetName(), nil
+	return ci, in, nil
+}
+
+// updateOps queues Update's writes onto ops, for a Batch: the value-object
+// rows that replace the masked ones, the row update, then the removal of what
+// they replaced. With in.Etag set the update is guarded inside the batch: a
+// self-update of the key whose post-check asserts the etag fails the request
+// when the record moved on, and the guarded update after it writes the row.
+//
+// outputPaths names the server-owned fields written alongside
+// (Update<Model>WithOutputOnly); nil for Update.
+func (r *GraphQLSessionRepository) updateOps(ctx context.Context, ops *repox.Ops, id string, in *dtzv1.Session, paths, outputPaths []string) (repox.Check, error) {
+	row, err := r.Svc.Query.DtzV1.Sessions.Get(ctx, id)
+	if err != nil {
+		return nil, mapGraphQLErr(err)
+	}
+	if row == nil {
+		return nil, repox.ErrNotFound
+	}
+	existingPB := sessionFromRow(row)
+	if in.GetEtag() != "" && existingPB.GetEtag() != in.GetEtag() {
+		return nil, repox.ErrConflict
+	}
+	merged := proto.Clone(existingPB).(*dtzv1.Session)
+	applySessionMask(merged, in, paths)
+	repox.CopyFields(merged, in, outputPaths)
+	patch := sessionToUpdatePatch(merged)
+	if len(outputPaths) > 0 {
+		sessionAddOutputPatch(&patch, merged, outputPaths)
+	}
+	patch.Etag = graphql.Value(repox.NewULID())
+	var utx, atx repox.Ops
+	*ops = append(*ops, utx...)
+	resp := new(sessionsql.UpdateDtzV1SessionsByIdResponse)
+	etag := in.GetEtag()
+	if etag != "" {
+		ops.Add(r.Svc.Mutation.DtzV1.Sessions.UpdateOp(id, sessionsql.UpdateInput{Id: graphql.Value(id)}, new(sessionsql.UpdateDtzV1SessionsByIdResponse), sessionsql.Update().PostCheck(sessionsql.Etag.Eq(etag))))
+		ops.Add(r.Svc.Mutation.DtzV1.Sessions.UpdateOp(id, patch, resp, sessionsql.Update().PreCheck(sessionsql.Etag.Eq(etag))))
+	} else {
+		ops.Add(r.Svc.Mutation.DtzV1.Sessions.UpdateOp(id, patch, resp))
+	}
+	*ops = append(*ops, atx...)
+	return func(ctx context.Context, failed error) error {
+		if failed == nil {
+			if resp.AffectedRows == 0 {
+				if etag != "" {
+					return repox.ErrConflict
+				}
+				return repox.ErrNotFound
+			}
+			return nil
+		}
+		// The request failed; if this guard is why, say so.
+		if etag != "" {
+			if now, err := r.Svc.Query.DtzV1.Sessions.Get(ctx, id); err == nil && (now == nil || sessionFromRow(now).GetEtag() != etag) {
+				return repox.ErrConflict
+			}
+		}
+		return nil
+	}, nil
 }
 
 // UpdateOutputOnly persists the server-owned fields of in that paths names.
@@ -264,6 +349,11 @@ func (r *GraphQLSessionRepository) Delete(ctx context.Context, name string) erro
 		}
 	}
 	id := ids[len(ids)-1]
+	return r.remove(ctx, id)
+}
+
+// remove deletes row id with the value-object rows it owns.
+func (r *GraphQLSessionRepository) remove(ctx context.Context, id string) error {
 	resp, err := r.Svc.Mutation.DtzV1.Sessions.Delete(ctx, id)
 	if err != nil {
 		return mapGraphQLErr(err)
@@ -277,79 +367,93 @@ func (r *GraphQLSessionRepository) Delete(ctx context.Context, name string) erro
 // Compile-time proof the adapter satisfies the interface.
 var _ SessionRepository = (*GraphQLSessionRepository)(nil)
 
-// graphQLBatch is Batch on GraphQL. Etag-guarded updates run first, one by
-// one: the engine reports a failed guard by touching no row, which cannot
-// abort a mutation batch, so a guard has to stand alone to fail loudly. The
-// rest commits as one mutation batch, which the engine applies atomically.
+// graphQLBatch is Batch on GraphQL: queued writes go into the Unit's mutation
+// request on Commit (see repox.Unit.Commit). A guarded UpdateOutputOnly runs
+// ahead of it, one by one: the engine reports its failed guard by touching no
+// row, which cannot abort a request.
 type graphQLBatch struct {
-	svc     *genql.Service
-	guarded []func(ctx context.Context) error
-	tx      *runtime.Tx
-	err     error // the first queueing error; Commit returns it and writes nothing
+	u   *repox.Unit
+	svc *genql.Service
 }
 
-// Commit applies the guarded updates, then the batch; see graphQLBatch.
-func (b *graphQLBatch) Commit(ctx context.Context) error {
-	if b.err != nil {
-		return b.err
-	}
-	for _, g := range b.guarded {
-		if err := g(ctx); err != nil {
-			return err
-		}
-	}
-	if err := b.batch().Commit(ctx); err != nil {
-		return mapGraphQLErr(err)
-	}
-	return nil
-}
-
-func (b *graphQLBatch) batch() *runtime.Tx {
-	if b.tx == nil {
-		b.tx = b.svc.Mutation.Tx()
-	}
-	return b.tx
-}
-
-func (b *graphQLBatch) fail(err error) {
-	if b.err == nil {
-		b.err = err
-	}
-}
+// Commit applies the Unit's writes; see repox.Unit.Commit.
+func (b *graphQLBatch) Commit(ctx context.Context) error { return b.u.Commit(ctx) }
 
 // CreateSession queues a create and returns the name the record will have.
 func (b *graphQLBatch) CreateSession(in *dtzv1.Session) (string, error) {
-	ci, name, err := (&GraphQLSessionRepository{Svc: b.svc}).newInput(in)
+	r := &GraphQLSessionRepository{Svc: b.svc}
+	ci, named, err := r.newInput(in)
 	if err != nil {
 		return "", err
 	}
-	b.batch().Add(b.svc.Mutation.DtzV1.Sessions.CreateOp(ci, new(sessionsql.InsertDtzV1SessionsResponse)))
-	return name, nil
+	queueSessionReferences(b.u, named, nil)
+	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		ops.Add(b.svc.Mutation.DtzV1.Sessions.CreateOp(ci, new(sessionsql.InsertDtzV1SessionsResponse)))
+		return nil, nil
+	})
+	b.u.Touch(named.GetName())
+	return named.GetName(), nil
+}
+
+// UpdateSession queues Update; in.Etag, when set, guards it inside the
+// batch's request (see updateOps).
+func (b *graphQLBatch) UpdateSession(in *dtzv1.Session, paths []string) {
+	ids, err := repox.SplitName(in.GetName(), "sessions")
+	if err != nil {
+		b.u.Fail(err)
+		return
+	}
+	r := &GraphQLSessionRepository{Svc: b.svc}
+	queueSessionReferences(b.u, in, paths)
+	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, nil)
+	})
+	b.u.Touch(in.GetName())
+}
+
+// UpdateSessionWithOutputOnly queues UpdateWithOutputOnly; in.Etag, when
+// set, guards it inside the batch's request, as UpdateSession's does.
+func (b *graphQLBatch) UpdateSessionWithOutputOnly(in *dtzv1.Session, paths, outputPaths []string) {
+	ids, err := repox.SplitName(in.GetName(), "sessions")
+	if err != nil {
+		b.u.Fail(err)
+		return
+	}
+	r := &GraphQLSessionRepository{Svc: b.svc}
+	queueSessionReferences(b.u, in, paths)
+	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, outputPaths)
+	})
+	b.u.Touch(in.GetName())
 }
 
 // UpdateSessionOutputOnly queues UpdateOutputOnly; in.Etag, when set, guards
 // it, and a guarded update runs ahead of the batch (see graphQLBatch).
 func (b *graphQLBatch) UpdateSessionOutputOnly(in *dtzv1.Session, paths []string) {
 	if len(paths) == 0 {
-		b.fail(fmt.Errorf("%w: UpdateOutputOnly needs the fields to write", repox.ErrInvalidArgument))
+		b.u.Fail(fmt.Errorf("%w: UpdateOutputOnly needs the fields to write", repox.ErrInvalidArgument))
 		return
 	}
 	ids, err := repox.SplitName(in.GetName(), "sessions")
 	if err != nil {
-		b.fail(err)
+		b.u.Fail(err)
 		return
 	}
 	id := ids[len(ids)-1]
 	patch := sessionToOutputPatch(in, paths)
 	patch.Etag = graphql.Value(repox.NewULID())
+	b.u.Touch(in.GetName())
 	if etag := in.GetEtag(); etag != "" {
-		b.guarded = append(b.guarded, func(ctx context.Context) error {
+		b.u.QueueGraphQLAhead(func(ctx context.Context) error {
 			_, err := b.svc.Mutation.DtzV1.Sessions.UpdateIfMatch(ctx, id, patch, sessionsql.Etag.Eq(etag))
 			return mapGraphQLErr(err)
 		})
 		return
 	}
-	b.batch().Add(b.svc.Mutation.DtzV1.Sessions.UpdateOp(id, patch, new(sessionsql.UpdateDtzV1SessionsByIdResponse)))
+	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		ops.Add(b.svc.Mutation.DtzV1.Sessions.UpdateOp(id, patch, new(sessionsql.UpdateDtzV1SessionsByIdResponse)))
+		return nil, nil
+	})
 }
 
 // DeleteSession queues the record's removal for good. A record already
@@ -357,8 +461,14 @@ func (b *graphQLBatch) UpdateSessionOutputOnly(in *dtzv1.Session, paths []string
 func (b *graphQLBatch) DeleteSession(name string) {
 	ids, err := repox.SplitName(name, "sessions")
 	if err != nil {
-		b.fail(err)
+		b.u.Fail(err)
 		return
 	}
-	b.batch().Add(b.svc.Mutation.DtzV1.Sessions.DeleteOp(ids[len(ids)-1], new(sessionsql.DeleteDtzV1SessionsByIdResponse)))
+	id := ids[len(ids)-1]
+	queueSessionDelete(b.u, name, true)
+	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		ops.Add(b.svc.Mutation.DtzV1.Sessions.DeleteOp(id, new(sessionsql.DeleteDtzV1SessionsByIdResponse)))
+		return nil, nil
+	})
+	b.u.Touch(name)
 }

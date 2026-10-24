@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS "embedded_v1"."metadatas" (
     -- Arbitrary tags.
     "tags"  VARCHAR(255)[],
     -- Singular resource reference → belongs-to with a bare-named FK column (`owner`, no `_id`). Its auto-index must name the scalar field `ownerID`, not the `owner` relation field, or Prisma rejects the @@index.
-    "owner"  CHAR(26)
+    "owner"  VARCHAR(255)
 );
 
 -- Join table for the many-to-many relation Event.attendees ↔ Attendee.
@@ -94,7 +94,7 @@ ALTER TABLE "embedded_v1"."events" ADD CONSTRAINT "fk_events_metadata_id" FOREIG
 ALTER TABLE "embedded_v1"."attendees" DROP CONSTRAINT IF EXISTS "fk_attendees_event_id";
 ALTER TABLE "embedded_v1"."attendees" ADD CONSTRAINT "fk_attendees_event_id" FOREIGN KEY ("event_id") REFERENCES "embedded_v1"."events"("id") ON DELETE CASCADE;
 ALTER TABLE "embedded_v1"."metadatas" DROP CONSTRAINT IF EXISTS "fk_metadatas_owner";
-ALTER TABLE "embedded_v1"."metadatas" ADD CONSTRAINT "fk_metadatas_owner" FOREIGN KEY ("owner") REFERENCES "embedded_v1"."attendees"("id");
+ALTER TABLE "embedded_v1"."metadatas" ADD CONSTRAINT "fk_metadatas_owner" FOREIGN KEY ("owner") REFERENCES "embedded_v1"."attendees"("name");
 ALTER TABLE "embedded_v1"."event_attendees" DROP CONSTRAINT IF EXISTS "fk_event_attendees_event_id";
 ALTER TABLE "embedded_v1"."event_attendees" ADD CONSTRAINT "fk_event_attendees_event_id" FOREIGN KEY ("event_id") REFERENCES "embedded_v1"."events"("id") ON DELETE CASCADE;
 ALTER TABLE "embedded_v1"."event_attendees" DROP CONSTRAINT IF EXISTS "fk_event_attendees_attendee_id";

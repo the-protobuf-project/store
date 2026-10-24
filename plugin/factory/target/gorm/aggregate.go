@@ -18,6 +18,7 @@ import (
 	"github.com/the-protobuf-project/protokit/schema"
 	"github.com/the-protobuf-project/store/plugin/factory/facets"
 	"github.com/the-protobuf-project/store/plugin/factory/provenance"
+	"github.com/the-protobuf-project/store/plugin/factory/target/externalfk"
 	"github.com/the-protobuf-project/store/plugin/factory/target/nooverlap"
 	"github.com/the-protobuf-project/store/plugin/factory/target/searchindex"
 )
@@ -92,6 +93,7 @@ func aggregateView(db *schema.Database, fx facets.Set) map[string]any {
 		"Schemas":          schemaNames,
 		"Extensions":       extensions,
 		"Constraints":      constraints,
+		"External":         externalfk.For(db),
 		"Telemetry":        dbTelemetry(db),
 		"TelemetryMetrics": dbTelemetryMetrics(db),
 		"TelemetryImport":  dbGoModule(db) + "/" + telemetryPkg,

@@ -41,6 +41,12 @@ type {{.Model}}Repository interface {
 	// since a client may never set them; this is for the service that owns
 	// them. paths must name at least one; m.Etag guards as in Update.
 	UpdateOutputOnly(ctx context.Context, m *{{.PB}}, paths []string) (*{{.PB}}, error)
+	// UpdateWithOutputOnly is Update plus the server-owned (OUTPUT_ONLY)
+	// fields of m that outputPaths names, in the same write under the same
+	// etag guard. paths keeps Update's meaning (an OUTPUT_ONLY path in it is
+	// still ignored, AIP-203). A BeforeUpdate hook that sets one of the
+	// outputPaths fields on the merged record has it written too.
+	UpdateWithOutputOnly(ctx context.Context, m *{{.PB}}, paths, outputPaths []string) (*{{.PB}}, error)
 {{- end}}
 {{- if .SoftDelete}}
 	// Delete soft-deletes the record addressed by its resource name (AIP-164):
@@ -50,8 +56,18 @@ type {{.Model}}Repository interface {
 	// Undelete restores a soft-deleted record and returns it;
 	// repox.ErrAlreadyExists when it is not deleted.
 	Undelete(ctx context.Context, name string) (*{{.PB}}, error)
-	// Purge removes the record, deleted or not, for good.
+	// Purge removes the record, deleted or not, for good. A record something
+	// still refers to -- a foreign key, or a referrer store.v1.ReferenceService
+	// reports -- is kept instead: Purge returns nil and
+	// repox.References.OnKept hears of it. A purge never fails, and never
+	// cascades, because of a referrer.
 	Purge(ctx context.Context, name string) error
+{{- if .Expiring}}
+	// PurgeExpired removes for good every deleted record whose expire_time
+	// is at or before now (AIP-164), keeping the ones something still
+	// refers to, as Purge does. Hooks do not run.
+	PurgeExpired(ctx context.Context, now time.Time) (repox.PurgeResult, error)
+{{- end}}
 {{- else}}
 	// Delete removes the record addressed by its resource name.
 	Delete(ctx context.Context, name string) error
@@ -84,50 +100,77 @@ type Repositories struct {
 }
 
 {{- if .HasBatch}}
-// Batch queues writes across this schema's single-row resources and applies
-// them together on Commit, so a record and the records that depend on it land
-// whole or not at all. Hooks do not run for queued writes.
+// Batch queues writes across this schema's resources -- the value-object rows
+// of each included -- and applies them together on Commit, so a record and the
+// records that depend on it land whole or not at all. Built over a shared
+// repox.Unit (NewBatchIn), it commits with the writes of other schemas too.
+// Hooks do not run for queued writes.
 type Batch interface {
-{{- range .Resources}}{{if .Flat}}
+{{- range .Resources}}
 	// Create{{.Model}} queues a create and returns the name the record will have.
 	Create{{.Model}}({{if .Parented}}parent string, {{end}}m *{{.PB}}) (string, error)
+	// Update{{.Model}} queues Update: the masked fields of m, every mutable
+	// field when paths is empty. m.Etag, when set, guards it; a guard that
+	// fails fails the whole Commit with repox.ErrConflict.
+	Update{{.Model}}(m *{{.PB}}, paths []string)
 {{- if .OutputOnly}}
 	// Update{{.Model}}OutputOnly queues UpdateOutputOnly; m.Etag, when set,
 	// guards it.
 	Update{{.Model}}OutputOnly(m *{{.PB}}, paths []string)
+	// Update{{.Model}}WithOutputOnly queues UpdateWithOutputOnly: Update plus
+	// the server-owned fields outputPaths names, under one guard.
+	Update{{.Model}}WithOutputOnly(m *{{.PB}}, paths, outputPaths []string)
 {{- end}}
+{{- if .SoftDelete}}
+	// Delete{{.Model}} queues a soft delete, as {{.Model}}Repository.Delete
+	// does; a record already deleted or gone is not an error.
+	Delete{{.Model}}(name string)
+	// Purge{{.Model}} queues the record's removal for good; a record already
+	// gone is not an error.
+	Purge{{.Model}}(name string)
+{{- else}}
 	// Delete{{.Model}} queues the record's removal for good; a record already
 	// gone is not an error.
 	Delete{{.Model}}(name string)
-{{- end}}{{end}}
-	// Commit applies every queued write. GORM runs them in one transaction:
-	// all land or none do. GraphQL first applies the etag-guarded updates, one
-	// by one, returning repox.ErrConflict at the first that fails and before
-	// anything else is written -- the engine reports a failed guard by touching
-	// no row, which cannot abort a batch -- then commits the rest as one atomic
-	// mutation batch.
+{{- end}}
+{{- end}}
+	// Commit applies every write queued in the batch's Unit, by this Batch or
+	// any other built over it; see repox.Unit.Commit. GORM runs them in one
+	// transaction. GraphQL sends a guarded Update<Model>OutputOnly ahead, one
+	// by one, then everything else as one mutation request the engine applies
+	// atomically, Update<Model>'s etag guards included.
 	Commit(ctx context.Context) error
 }
 
-// NewBatch returns a Batch on the backend conn carries. When conn carries a
-// ChangeObserver, Commit reports every record it queued to it.
-func NewBatch(conn repox.Conn) Batch {
-	var b Batch = &gormBatch{db: conn.Gorm}
+// NewBatch returns a Batch on the backend conn carries, over a Unit of its
+// own. When conn carries a ChangeObserver, Commit reports every record it
+// queued to it.
+func NewBatch(conn repox.Conn, opts ...Option) Batch {
+	return NewBatchIn(repox.NewUnit(conn), opts...)
+}
+
+// NewBatchIn returns a Batch that queues into u, so its writes commit with
+// those of every other Batch over u: a write spanning schemas is one Unit and
+// one Batch per schema, committed once.
+func NewBatchIn(u *repox.Unit, opts ...Option) Batch {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
+	_ = o
 {{- if .HasGraphQL}}
-	if conn.GraphQL != nil {
-		b = &graphQLBatch{svc: conn.GraphQL}
+	if svc := u.Conn().GraphQL; svc != nil {
+		return &graphQLBatch{u: u, svc: svc{{if .HasExpiring}}, retention: o.retention{{end}}}
 	}
 {{- end}}
-	if conn.Changes != nil {
-		b = &observedBatch{Batch: b, changes: conn.Changes}
-	}
-	return b
+	return &gormBatch{u: u, db: u.Conn().Gorm{{if .HasExpiring}}, retention: o.retention{{end}}}
 }
 {{- end}}
 
 // options collects the per-resource customizations the factories thread into
 // the adapters they build.
 type options struct {
+	references *repox.References
 {{- range .Resources}}
 	{{.LowerModel}}Hooks     {{.Model}}Hooks
 	{{.LowerModel}}Overrides map[string]filterx.SQLHandler
@@ -144,6 +187,14 @@ type options struct {
 
 // Option customizes the adapters a factory builds.
 type Option func(*options)
+
+// WithReferences enforces reference integrity through refs (see
+// repox.References): New passes repox.Conn.References. With none, writes do
+// not resolve external references and deletes do not consult referrers;
+// foreign keys still hold.
+func WithReferences(refs *repox.References) Option {
+	return func(o *options) { o.references = refs }
+}
 {{- if .HasExpiring}}
 
 // WithRetention is how long a soft-deleted record stays restorable (AIP-164):
@@ -195,6 +246,7 @@ func With{{.Model}}GraphQLListOverride(field string, h filterx.GraphQLHandler) O
 // When conn carries a ChangeObserver, every write the returned repositories
 // make is reported to it (see observe).
 func New(conn repox.Conn, opts ...Option) Repositories {
+	opts = append([]Option{WithReferences(conn.References)}, opts...)
 	if conn.GraphQL != nil {
 		return observe(NewGraphQL(conn.GraphQL, opts...), conn.Changes)
 	}
@@ -207,11 +259,11 @@ func NewGraphQL(svc *{{.ClientPkg}}.Service, opts ...Option) Repositories {
 	for _, opt := range opts {
 		opt(&o)
 	}
-	return Repositories{
+	return guard(Repositories{
 {{- range .Resources}}
-		{{.PluralField}}: &GraphQL{{.Model}}Repository{Svc: svc, Hooks: o.{{.LowerModel}}Hooks, ListOverrides: o.{{.LowerModel}}GQLOverrides{{if .Expiring}}, Retention: o.retention{{end}}},
+		{{.PluralField}}: &GraphQL{{.Model}}Repository{Svc: svc, Hooks: o.{{.LowerModel}}Hooks, Refs: o.references, ListOverrides: o.{{.LowerModel}}GQLOverrides{{if .Expiring}}, Retention: o.retention{{end}}},
 {{- end}}
-	}
+	}, o.references)
 }
 {{- else}}
 
@@ -220,6 +272,7 @@ func NewGraphQL(svc *{{.ClientPkg}}.Service, opts ...Option) Repositories {
 // When conn carries a ChangeObserver, every write the returned repositories
 // make is reported to it (see observe).
 func New(conn repox.Conn, opts ...Option) Repositories {
+	opts = append([]Option{WithReferences(conn.References)}, opts...)
 	return observe(NewGorm(conn.Gorm, opts...), conn.Changes)
 }
 {{- end}}
@@ -230,9 +283,30 @@ func NewGorm(db *gorm.DB, opts ...Option) Repositories {
 	for _, opt := range opts {
 		opt(&o)
 	}
+	return guard(Repositories{
+{{- range .Resources}}
+		{{.PluralField}}: &Gorm{{.Model}}Repository{DB: db, Hooks: o.{{.LowerModel}}Hooks, Refs: o.references, ListOverrides: o.{{.LowerModel}}Overrides{{if .Expiring}}, Retention: o.retention{{end}}},
+{{- end}}
+	}, o.references)
+}
+
+// guard wraps every repository in repos so its writes keep reference
+// integrity through refs: Create and Update resolve the external references
+// they set (repox.References.Resolve) before anything is written, and Delete
+// consults the record's referrers (repox.References.CheckDelete) and
+// publishes the NOTIFY event after it. Purge's checks sit in the adapters,
+// which keep a still-referenced row row by row. With no refs it returns repos
+// unchanged.
+//
+// It sits over the whole interface, like observe, so the GORM and GraphQL
+// adapters enforce the same contract above their backends.
+func guard(repos Repositories, refs *repox.References) Repositories {
+	if refs == nil {
+		return repos
+	}
 	return Repositories{
 {{- range .Resources}}
-		{{.PluralField}}: &Gorm{{.Model}}Repository{DB: db, Hooks: o.{{.LowerModel}}Hooks, ListOverrides: o.{{.LowerModel}}Overrides{{if .Expiring}}, Retention: o.retention{{end}}},
+		{{.PluralField}}: &guarded{{.Model}}Repository{ {{- .Model}}Repository: repos.{{.PluralField}}, refs: refs},
 {{- end}}
 	}
 }
@@ -308,6 +382,12 @@ func (o *observed{{.Model}}Repository) UpdateOutputOnly(ctx context.Context, m *
 	o.changes.Changed(ctx, m.GetName())
 	return out, err
 }
+
+func (o *observed{{.Model}}Repository) UpdateWithOutputOnly(ctx context.Context, m *{{.PB}}, paths, outputPaths []string) (*{{.PB}}, error) {
+	out, err := o.{{.Model}}Repository.UpdateWithOutputOnly(ctx, m, paths, outputPaths)
+	o.changes.Changed(ctx, m.GetName())
+	return out, err
+}
 {{- end}}
 
 func (o *observed{{.Model}}Repository) Delete(ctx context.Context, name string) error {
@@ -328,47 +408,145 @@ func (o *observed{{.Model}}Repository) Purge(ctx context.Context, name string) e
 	o.changes.Changed(ctx, name)
 	return err
 }
-{{- end}}
-{{- end}}
-{{- if .HasBatch}}
+{{- if .Expiring}}
 
-// observedBatch reports every record a Batch queued once Commit returns --
-// whatever it returns: GraphQL applies a batch's guarded updates one by one
-// before the rest, so a Commit that failed may still have written some.
-type observedBatch struct {
-	Batch
-	changes repox.ChangeObserver
-	names   []string
-}
-
-func (o *observedBatch) Commit(ctx context.Context) error {
-	err := o.Batch.Commit(ctx)
-	for _, name := range o.names {
+func (o *observed{{.Model}}Repository) PurgeExpired(ctx context.Context, now time.Time) (repox.PurgeResult, error) {
+	res, err := o.{{.Model}}Repository.PurgeExpired(ctx, now)
+	for _, name := range res.Purged {
 		o.changes.Changed(ctx, name)
 	}
-	o.names = nil
-	return err
+	return res, err
 }
-{{- range .Resources}}{{if .Flat}}
+{{- end}}
+{{- end}}
+{{- end}}
 
-func (o *observedBatch) Create{{.Model}}({{if .Parented}}parent string, {{end}}m *{{.PB}}) (string, error) {
-	name, err := o.Batch.Create{{.Model}}({{if .Parented}}parent, {{end}}m)
-	if err == nil {
-		o.names = append(o.names, name)
+
+{{- range .Resources}}
+
+// guarded{{.Model}}Repository keeps {{.Model}}'s references whole; see guard.
+type guarded{{.Model}}Repository struct {
+	{{.Model}}Repository
+	refs *repox.References
+}
+{{- if .ExtRefs}}
+{{- if .Parented}}
+
+func (g *guarded{{.Model}}Repository) Create(ctx context.Context, parent string, m *{{.PB}}) (*{{.PB}}, error) {
+	if err := resolve{{.Model}}References(ctx, g.refs, m, nil); err != nil {
+		return nil, err
 	}
-	return name, err
+	return g.{{.Model}}Repository.Create(ctx, parent, m)
+}
+{{- else}}
+
+func (g *guarded{{.Model}}Repository) Create(ctx context.Context, m *{{.PB}}) (*{{.PB}}, error) {
+	if err := resolve{{.Model}}References(ctx, g.refs, m, nil); err != nil {
+		return nil, err
+	}
+	return g.{{.Model}}Repository.Create(ctx, m)
+}
+{{- end}}
+
+func (g *guarded{{.Model}}Repository) Update(ctx context.Context, m *{{.PB}}, paths []string) (*{{.PB}}, error) {
+	if err := resolve{{.Model}}References(ctx, g.refs, m, paths); err != nil {
+		return nil, err
+	}
+	return g.{{.Model}}Repository.Update(ctx, m, paths)
 }
 {{- if .OutputOnly}}
 
-func (o *observedBatch) Update{{.Model}}OutputOnly(m *{{.PB}}, paths []string) {
-	o.Batch.Update{{.Model}}OutputOnly(m, paths)
-	o.names = append(o.names, m.GetName())
+func (g *guarded{{.Model}}Repository) UpdateWithOutputOnly(ctx context.Context, m *{{.PB}}, paths, outputPaths []string) (*{{.PB}}, error) {
+	if err := resolve{{.Model}}References(ctx, g.refs, m, paths); err != nil {
+		return nil, err
+	}
+	return g.{{.Model}}Repository.UpdateWithOutputOnly(ctx, m, paths, outputPaths)
+}
+{{- end}}
+{{- end}}
+{{- if .Type}}
+
+func (g *guarded{{.Model}}Repository) Delete(ctx context.Context, name string) error {
+	check, err := g.refs.CheckDelete(ctx, {{printf "%q" .Type}}, name)
+	if err != nil {
+		return err
+	}
+	if err := g.{{.Model}}Repository.Delete(ctx, name); err != nil {
+		return err
+	}
+	check.Done(ctx, {{if .SoftDelete}}false{{else}}true{{end}})
+	return nil
 }
 {{- end}}
 
-func (o *observedBatch) Delete{{.Model}}(name string) {
-	o.Batch.Delete{{.Model}}(name)
-	o.names = append(o.names, name)
+// resolve{{.Model}}References proves, through refs, that every external
+// reference m sets within paths (all of them for an empty mask) names a
+// resource that exists.
+func resolve{{.Model}}References(ctx context.Context, refs *repox.References, m *{{.PB}}, paths []string) error {
+	{{- if .ExtRefs}}
+	if refs == nil {
+		return nil
+	}
+	{{- range .ExtRefs}}
+	if repox.InMask(paths, {{printf "%q" .Field}}) {
+		{{- if .Repeated}}
+		for _, name := range m.{{.Getter}}() {
+			if err := refs.Resolve(ctx, {{printf "%q" .Field}}, {{printf "%q" .Type}}, name); err != nil {
+				return err
+			}
+		}
+		{{- else}}
+		if err := refs.Resolve(ctx, {{printf "%q" .Field}}, {{printf "%q" .Type}}, m.{{.Getter}}()); err != nil {
+			return err
+		}
+		{{- end}}
+	}
+	{{- end}}
+	{{- end}}
+	return nil
 }
-{{- end}}{{end}}
+
+// queue{{.Model}}References makes u resolve m's external references within
+// paths before it commits, as guard does for the repositories.
+func queue{{.Model}}References(u *repox.Unit, m *{{.PB}}, paths []string) {
+	{{- if .ExtRefs}}
+	if refs := u.Conn().References; refs != nil {
+		u.Before(func(ctx context.Context) error { return resolve{{.Model}}References(ctx, refs, m, paths) })
+	}
+	{{- end}}
+}
+
+// queue{{.Model}}Delete makes u consult name's referrers before it commits
+// and publish the NOTIFY event after, as guard does for Delete.
+func queue{{.Model}}Delete(u *repox.Unit, name string, purged bool) {
+	{{- if .Type}}
+	refs := u.Conn().References
+	if refs == nil {
+		return
+	}
+	var check *repox.DeleteCheck
+	u.Before(func(ctx context.Context) (err error) {
+		check, err = refs.CheckDelete(ctx, {{printf "%q" .Type}}, name)
+		return err
+	})
+	u.After(func(ctx context.Context) { check.Done(ctx, purged) })
+	{{- end}}
+}
+{{- if .SoftDelete}}
+
+// queue{{.Model}}Purge makes u ask name's referrers before it commits; the
+// purge it queues keeps the row when *keep is true.
+func queue{{.Model}}Purge(u *repox.Unit, name string) (keep *bool) {
+	keep = new(bool)
+	{{- if .Type}}
+	if refs := u.Conn().References; refs != nil {
+		u.Before(func(ctx context.Context) error {
+			*keep = refs.KeepOnPurge(ctx, {{printf "%q" .Type}}, name)
+			return nil
+		})
+	}
+	{{- end}}
+	return keep
+}
+{{- end}}
 {{- end}}

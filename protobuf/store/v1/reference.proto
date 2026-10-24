@@ -1,0 +1,64 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package store.v1;
+
+option go_package = "github.com/the-protobuf-project/store/plugin/pb/storepbv1;storepbv1";
+option java_multiple_files = true;
+option java_outer_classname = "ReferenceProto";
+option java_package = "com.store.v1";
+
+// ReferenceOptions says what a google.api.resource_reference field asks of the
+// resource it names when no database foreign key can: the target lives in
+// another database or another service. It is read next to the reference:
+//
+//	string customer = 4 [
+//	  (google.api.resource_reference) = {type: "vcard.example.com/Card"},
+//	  (store.v1.reference) = {on_delete: ON_DELETE_RESTRICT}
+//	];
+//
+// The contract is language-neutral; every generator honouring it does the
+// same three things:
+//
+//  1. Existence on write. Before a create or update that sets the field, the
+//     writer proves the named resource exists with the target's standard AIP
+//     Get (AIP-131) by resource name. A NOT_FOUND answer refuses the write.
+//  2. Referrers on delete. The referring side serves
+//     store.v1.ReferenceService.ListReferrers for the resource types its
+//     fields name; the target's Delete asks it and applies on_delete for each
+//     referrer it gets back.
+//  3. Reconciliation. A sweep re-runs the Get for every stored reference and
+//     reports the ones that no longer resolve.
+//
+// Within one physical database a real foreign key enforces the reference and
+// these options are not needed for it; on_delete is still reported by
+// ListReferrers.
+message ReferenceOptions {
+  // on_delete is what a delete of the referenced resource does while this
+  // field still names it. Unspecified means ON_DELETE_ALLOW.
+  OnDelete on_delete = 1;
+
+  // OnDelete is the policy of a cross-database reference when its target is
+  // deleted. A purge (AIP-164) never fails because of a referrer: it keeps
+  // the row instead, whatever the policy.
+  enum OnDelete {
+    // Unspecified: same as ON_DELETE_ALLOW.
+    ON_DELETE_UNSPECIFIED = 0;
+
+    // The delete is refused (FAILED_PRECONDITION, reason
+    // RESOURCE_REFERENCED) while any referrer remains.
+    ON_DELETE_RESTRICT = 1;
+
+    // The delete goes ahead; the reference is left dangling for the
+    // reconciler to report.
+    ON_DELETE_ALLOW = 2;
+
+    // The delete goes ahead and a CloudEvent of type
+    // "org.the-protobuf-project.store.v1.reference.deleted" carrying a
+    // store.v1.ReferencedResourceDeleted is published, so the referring side
+    // can react.
+    ON_DELETE_NOTIFY = 3;
+  }
+}

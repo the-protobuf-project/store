@@ -70,6 +70,14 @@ func (r *Registry) Migrate(db Migrator) error {
 	return db.AutoMigrate(r.models...)
 }
 
+// MigrateExternal adds this database's foreign keys into other databases'
+// tables after every registry's Migrate. This database has none, so it does
+// nothing; it exists so startup code can call it on every registry alike.
+func (*Registry) MigrateExternal(*gorm.DB) error { return nil }
+
+// ValidateExternal validates what MigrateExternal added. Nothing here.
+func (*Registry) ValidateExternal(*gorm.DB) error { return nil }
+
 // EnsureSchemas creates every Postgres schema the registered models live in, if
 // it does not already exist. AutoMigrate does not create schemas, so call this
 // before Migrate when models map to schema-qualified tables:

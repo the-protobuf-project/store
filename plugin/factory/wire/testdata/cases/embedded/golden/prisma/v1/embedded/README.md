@@ -90,7 +90,7 @@ Metadata is reachable only through Event.metadata and carries no resource annota
 | `id` | `CHAR(26)` | not null |
 | `source` | `VARCHAR(255)` | nullable |
 | `tags` | `VARCHAR(255)[]` | nullable |
-| `owner` | `CHAR(26)` | nullable |
+| `owner` | `VARCHAR(255)` | nullable |
 
 ### `EventAttendees` → `event_attendees`
 

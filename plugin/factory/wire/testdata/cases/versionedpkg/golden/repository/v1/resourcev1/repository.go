@@ -64,15 +64,66 @@ type Repositories struct {
 	Events EventRepository
 }
 
+// Batch queues writes across this schema's resources -- the value-object rows
+// of each included -- and applies them together on Commit, so a record and the
+// records that depend on it land whole or not at all. Built over a shared
+// repox.Unit (NewBatchIn), it commits with the writes of other schemas too.
+// Hooks do not run for queued writes.
+type Batch interface {
+	// CreateEvent queues a create and returns the name the record will have.
+	CreateEvent(m *resourcev1.Event) (string, error)
+	// UpdateEvent queues Update: the masked fields of m, every mutable
+	// field when paths is empty. m.Etag, when set, guards it; a guard that
+	// fails fails the whole Commit with repox.ErrConflict.
+	UpdateEvent(m *resourcev1.Event, paths []string)
+	// DeleteEvent queues the record's removal for good; a record already
+	// gone is not an error.
+	DeleteEvent(name string)
+	// Commit applies every write queued in the batch's Unit, by this Batch or
+	// any other built over it; see repox.Unit.Commit. GORM runs them in one
+	// transaction. GraphQL sends a guarded Update<Model>OutputOnly ahead, one
+	// by one, then everything else as one mutation request the engine applies
+	// atomically, Update<Model>'s etag guards included.
+	Commit(ctx context.Context) error
+}
+
+// NewBatch returns a Batch on the backend conn carries, over a Unit of its
+// own. When conn carries a ChangeObserver, Commit reports every record it
+// queued to it.
+func NewBatch(conn repox.Conn, opts ...Option) Batch {
+	return NewBatchIn(repox.NewUnit(conn), opts...)
+}
+
+// NewBatchIn returns a Batch that queues into u, so its writes commit with
+// those of every other Batch over u: a write spanning schemas is one Unit and
+// one Batch per schema, committed once.
+func NewBatchIn(u *repox.Unit, opts ...Option) Batch {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
+	_ = o
+	return &gormBatch{u: u, db: u.Conn().Gorm}
+}
+
 // options collects the per-resource customizations the factories thread into
 // the adapters they build.
 type options struct {
+	references     *repox.References
 	eventHooks     EventHooks
 	eventOverrides map[string]filterx.SQLHandler
 }
 
 // Option customizes the adapters a factory builds.
 type Option func(*options)
+
+// WithReferences enforces reference integrity through refs (see
+// repox.References): New passes repox.Conn.References. With none, writes do
+// not resolve external references and deletes do not consult referrers;
+// foreign keys still hold.
+func WithReferences(refs *repox.References) Option {
+	return func(o *options) { o.references = refs }
+}
 
 // WithEventHooks installs h on the Event adapters.
 func WithEventHooks(h EventHooks) Option {
@@ -95,6 +146,7 @@ func WithEventListOverride(field string, h filterx.SQLHandler) Option {
 // When conn carries a ChangeObserver, every write the returned repositories
 // make is reported to it (see observe).
 func New(conn repox.Conn, opts ...Option) Repositories {
+	opts = append([]Option{WithReferences(conn.References)}, opts...)
 	return observe(NewGorm(conn.Gorm, opts...), conn.Changes)
 }
 
@@ -104,8 +156,27 @@ func NewGorm(db *gorm.DB, opts ...Option) Repositories {
 	for _, opt := range opts {
 		opt(&o)
 	}
+	return guard(Repositories{
+		Events: &GormEventRepository{DB: db, Hooks: o.eventHooks, Refs: o.references, ListOverrides: o.eventOverrides},
+	}, o.references)
+}
+
+// guard wraps every repository in repos so its writes keep reference
+// integrity through refs: Create and Update resolve the external references
+// they set (repox.References.Resolve) before anything is written, and Delete
+// consults the record's referrers (repox.References.CheckDelete) and
+// publishes the NOTIFY event after it. Purge's checks sit in the adapters,
+// which keep a still-referenced row row by row. With no refs it returns repos
+// unchanged.
+//
+// It sits over the whole interface, like observe, so the GORM and GraphQL
+// adapters enforce the same contract above their backends.
+func guard(repos Repositories, refs *repox.References) Repositories {
+	if refs == nil {
+		return repos
+	}
 	return Repositories{
-		Events: &GormEventRepository{DB: db, Hooks: o.eventHooks, ListOverrides: o.eventOverrides},
+		Events: &guardedEventRepository{EventRepository: repos.Events, refs: refs},
 	}
 }
 
@@ -165,4 +236,49 @@ func (o *observedEventRepository) Delete(ctx context.Context, name string) error
 	err := o.EventRepository.Delete(ctx, name)
 	o.changes.Changed(ctx, name)
 	return err
+}
+
+// guardedEventRepository keeps Event's references whole; see guard.
+type guardedEventRepository struct {
+	EventRepository
+	refs *repox.References
+}
+
+func (g *guardedEventRepository) Delete(ctx context.Context, name string) error {
+	check, err := g.refs.CheckDelete(ctx, "resource.v1/Event", name)
+	if err != nil {
+		return err
+	}
+	if err := g.EventRepository.Delete(ctx, name); err != nil {
+		return err
+	}
+	check.Done(ctx, true)
+	return nil
+}
+
+// resolveEventReferences proves, through refs, that every external
+// reference m sets within paths (all of them for an empty mask) names a
+// resource that exists.
+func resolveEventReferences(ctx context.Context, refs *repox.References, m *resourcev1.Event, paths []string) error {
+	return nil
+}
+
+// queueEventReferences makes u resolve m's external references within
+// paths before it commits, as guard does for the repositories.
+func queueEventReferences(u *repox.Unit, m *resourcev1.Event, paths []string) {
+}
+
+// queueEventDelete makes u consult name's referrers before it commits
+// and publish the NOTIFY event after, as guard does for Delete.
+func queueEventDelete(u *repox.Unit, name string, purged bool) {
+	refs := u.Conn().References
+	if refs == nil {
+		return
+	}
+	var check *repox.DeleteCheck
+	u.Before(func(ctx context.Context) (err error) {
+		check, err = refs.CheckDelete(ctx, "resource.v1/Event", name)
+		return err
+	})
+	u.After(func(ctx context.Context) { check.Done(ctx, purged) })
 }

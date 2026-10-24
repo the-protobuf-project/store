@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "mutations": [
+    {
+      "field": "deleteDtzV1SessionsById",
+      "kind": "delete",
+      "resourceType": "dtz.v1/Session",
+      "pattern": "sessions/{session}",
+      "keyArgument": "keyId",
+      "byIdQuery": "dtzV1SessionsById"
+    }
+  ]
+}

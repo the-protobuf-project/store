@@ -18,7 +18,8 @@ import (
 
 // voGorm is the per-resource bundle of rendered gorm VO fragments.
 type voGorm struct {
-	Preloads       string   // .Preload("X") chain appended to read queries
+	Preloads       string // .Preload("X") chain appended to read queries
+	ReadPreloads   []readPreload
 	Creates        []string // in → m fragments inside the create transaction
 	StaleVars      []string // stale-id declarations at the top of the update transaction
 	Updates        []string // merged → existing fragments inside the update transaction
@@ -46,6 +47,7 @@ func voGormFragments(pkg string, r *resource) voGorm {
 	cross := map[string]bool{}
 	for _, v := range r.VOs {
 		preloads = append(preloads, fmt.Sprintf(".Preload(%q)", v.AssocField))
+		out.ReadPreloads = append(out.ReadPreloads, readPreload{Field: v.FieldName, Chain: fmt.Sprintf(".Preload(%q)", v.AssocField)})
 		if v.CrossPkg != "" && !cross[v.CrossPkg] {
 			cross[v.CrossPkg] = true
 			out.CrossPkgs = append(out.CrossPkgs, v.CrossPkg)
@@ -194,4 +196,11 @@ func voStaleDelete(pkg string, v voField) string {
 	return fmt.Sprintf(
 		"if stale%s != \"\" {\n\t\t\tif err := tx.WithContext(ctx).Delete(&%s.%s{}, \"id = ?\", stale%s).Error; err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t}",
 		v.PBGoName, voQual(pkg, v), v.Target.LocalName, v.PBGoName)
+}
+
+// readPreload is the Preload chain one top-level field needs, which a List
+// under a read mask applies only when the mask names the field.
+type readPreload struct {
+	Field string // proto field name, e.g. "start"
+	Chain string // its .Preload calls
 }

@@ -24,6 +24,9 @@ func mapGraphQLErr(err error) error {
 		return fmt.Errorf("%w: %v", repox.ErrConflict, err)
 	case strings.Contains(err.Error(), "violates unique constraint"):
 		return fmt.Errorf("%w: %v", repox.ErrAlreadyExists, err)
+	// A foreign key: repox.ErrForeignKey, with the constraint named.
+	case strings.Contains(err.Error(), "violates foreign key constraint"):
+		return repox.ForeignKeyError(err)
 	default:
 		return err
 	}
@@ -37,6 +40,9 @@ func mapGraphQLErr(err error) error {
 type GraphQL{{.Model}}Repository struct {
 	Svc   *{{$.ClientPkg}}.Service
 	Hooks {{.Model}}Hooks
+	// Refs, when set, is asked before a purge whether anything in another
+	// database or service still refers to the record (see Purge).
+	Refs *repox.References
 	// ListOverrides substitute the generated dispatch for single filter fields.
 	ListOverrides map[string]filterx.GraphQLHandler
 {{- if .Expiring}}
@@ -194,12 +200,13 @@ func (r *GraphQL{{.Model}}Repository) get(ctx context.Context, id string) (*{{.P
 	if row == nil {
 		return nil, repox.ErrNotFound
 	}
-	return r.toProto(ctx, row)
+	return r.toProto(ctx, row, nil)
 }
 
-// toProto converts a loaded row, hydrating value objects through their
-// stored references, and runs the AfterRead hook.
-func (r *GraphQL{{.Model}}Repository) toProto(ctx context.Context, row *{{.Row}}) (*{{.PB}}, error) {
+// toProto converts a loaded row, hydrating the value objects mask reads (all
+// of them for an empty mask) through their stored references, and runs the
+// AfterRead hook.
+func (r *GraphQL{{.Model}}Repository) toProto(ctx context.Context, row *{{.Row}}, mask []string) (*{{.PB}}, error) {
 	out := {{.LowerModelV}}FromRow(row)
 	{{- range .GQLVOHydrates}}
 	{{.}}
@@ -243,10 +250,23 @@ func (r *GraphQL{{.Model}}Repository) list(ctx context.Context, in repox.ListInp
 		return nil, "", repox.MapFilterxErr(err)
 	}
 	conds = append(conds, in.Where...)
+	if err := repox.CheckReadMask((*{{.PB}})(nil), in.ReadMask); err != nil {
+		return nil, "", err
+	}
 	eng := filterx.Hasura[{{.Row}}]({{$.GormPkg}}.{{.Model}}FilterSpec, r.Svc.Query.{{.Domain}}.{{.Resource}}).Scope(scope...)
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)
 	}
+	{{- range .ViaLookups}}
+	eng.Via("{{.Field}}", func(ctx context.Context, keys []string, where graphql.Predicate) ([]string, error) {
+		rows, err := r.Svc.Query.{{.Domain}}.{{.Resource}}.List(ctx, {{.ResPkg}}.List().Where(graphql.And({{.ResPkg}}.Id.In(keys...), where)))
+		ids := make([]string, 0, len(rows))
+		for i := range rows {
+			ids = append(ids, rows[i].Id)
+		}
+		return ids, err
+	})
+	{{- end}}
 	rows, next, err := eng.List(ctx, filterx.ListInput{
 		PageSize:  in.PageSize,
 		PageToken: in.PageToken,
@@ -258,10 +278,11 @@ func (r *GraphQL{{.Model}}Repository) list(ctx context.Context, in repox.ListInp
 	}
 	items := make([]*{{.PB}}, 0, len(rows))
 	for i := range rows {
-		out, err := r.toProto(ctx, &rows[i])
+		out, err := r.toProto(ctx, &rows[i], in.ReadMask)
 		if err != nil {
 			return nil, "", err
 		}
+		repox.Narrow(out, in.ReadMask)
 		items = append(items, out)
 	}
 	return items, next, nil
@@ -271,6 +292,20 @@ func (r *GraphQL{{.Model}}Repository) list(ctx context.Context, in repox.ListInp
 // mutable field. When in.Etag is set the write is guarded server-side
 // (UpdateIfMatch); a stale etag returns repox.ErrConflict.
 func (r *GraphQL{{.Model}}Repository) Update(ctx context.Context, in *{{.PB}}, paths []string) (*{{.PB}}, error) {
+	return r.update(ctx, in, paths, nil)
+}
+{{- if .OutputOnly}}
+
+// UpdateWithOutputOnly is Update plus the server-owned fields outputPaths
+// names, in the same patch and under the same guard.
+func (r *GraphQL{{.Model}}Repository) UpdateWithOutputOnly(ctx context.Context, in *{{.PB}}, paths, outputPaths []string) (*{{.PB}}, error) {
+	return r.update(ctx, in, paths, outputPaths)
+}
+{{- end}}
+
+// update is Update's write, with the server-owned fields outputPaths names
+// (UpdateWithOutputOnly) merged into its patch.
+func (r *GraphQL{{.Model}}Repository) update(ctx context.Context, in *{{.PB}}, paths, outputPaths []string) (*{{.PB}}, error) {
 	ids, err := repox.SplitName(in.GetName(), {{.CollectionsExpr}})
 	if err != nil {
 		return nil, err
@@ -292,12 +327,20 @@ func (r *GraphQL{{.Model}}Repository) Update(ctx context.Context, in *{{.PB}}, p
 	existingPB := {{.LowerModelV}}FromRow(row)
 	merged := proto.Clone(existingPB).(*{{.PB}})
 	apply{{.Model}}Mask(merged, in, paths)
+	{{- if .OutputOnly}}
+	repox.CopyFields(merged, in, outputPaths)
+	{{- end}}
 	if h := r.Hooks.BeforeUpdate; h != nil {
 		if err := h(ctx, existingPB, merged, paths); err != nil {
 			return nil, err
 		}
 	}
 	patch := {{.LowerModelV}}ToUpdatePatch(merged)
+	{{- if .OutputOnly}}
+	if len(outputPaths) > 0 {
+		{{.LowerModelV}}AddOutputPatch(&patch, merged, outputPaths)
+	}
+	{{- end}}
 	{{- if .EtagInputField}}
 	patch.{{.EtagInputField}} = graphql.Value(repox.NewULID())
 	{{- end}}
@@ -354,27 +397,27 @@ func (r *GraphQL{{.Model}}Repository) Update(ctx context.Context, in *{{.PB}}, p
 	return r.get(ctx, id)
 }
 
-{{- if .Flat}}
+
 // newInput builds the insert a Batch queues for in{{if .Parented}} under parent{{end}}, and
-// the name the record will have: the same resolution Create applies.
-func (r *GraphQL{{.Model}}Repository) newInput({{if .Parented}}parent string, {{end}}in *{{.PB}}) ({{.ResPkg}}.CreateInput, string, error) {
+// the record it stands for, named: the same resolution Create applies.
+func (r *GraphQL{{.Model}}Repository) newInput({{if .Parented}}parent string, {{end}}in *{{.PB}}) ({{.ResPkg}}.CreateInput, *{{.PB}}, error) {
 	var ci {{.ResPkg}}.CreateInput
 	{{- if .Parented}}
 	parentIDs, err := repox.SplitName(parent, {{.ParentCollExpr}})
 	if err != nil {
-		return ci, "", err
+		return ci, nil, err
 	}
 	{{- end}}
 	id := repox.NewULID()
 	if in.GetName() != "" {
 		ids, err := repox.SplitName(in.GetName(), {{.CollectionsExpr}})
 		if err != nil {
-			return ci, "", err
+			return ci, nil, err
 		}
 		{{- if .Parented}}
 		for i := range parentIDs {
 			if ids[i] != parentIDs[i] {
-				return ci, "", fmt.Errorf("%w: name %q is not under parent %q", repox.ErrInvalidArgument, in.GetName(), parent)
+				return ci, nil, fmt.Errorf("%w: name %q is not under parent %q", repox.ErrInvalidArgument, in.GetName(), parent)
 			}
 		}
 		{{- end}}
@@ -399,9 +442,139 @@ func (r *GraphQL{{.Model}}Repository) newInput({{if .Parented}}parent string, {{
 	{{- if .UpdateTimeField}}
 	ci.{{.UpdateTimeField}} = now
 	{{- end}}
-	return ci, in.GetName(), nil
+	return ci, in, nil
 }
+{{- if not .Flat}}
 
+// insertOps queues the inserts that create in onto gtx, for a Batch: the
+// value objects it points at, its row (ci), then its children.
+func (r *GraphQL{{.Model}}Repository) insertOps(ctx context.Context, gtx *repox.Ops, in *{{.PB}}, ci {{.ResPkg}}.CreateInput) (repox.Check, error) {
+	id := ci.Id
+	_ = id
+	{{- range .GQLQueuedCreates}}
+	{{.}}
+	{{- end}}
+	{{- range .GQLDeepCreates}}
+	{{.}}
+	{{- end}}
+	gtx.Add(r.Svc.Mutation.{{.Domain}}.{{.Resource}}.CreateOp(ci, new({{.InsertResp}})))
+	{{- range .GQLDeepAfterCreates}}
+	{{.}}
+	{{- end}}
+	return nil, nil
+}
+{{- end}}
+
+// updateOps queues Update's writes onto ops, for a Batch: the value-object
+// rows that replace the masked ones, the row update, then the removal of what
+// they replaced. With in.Etag set the update is guarded inside the batch: a
+// self-update of the key whose post-check asserts the etag fails the request
+// when the record moved on, and the guarded update after it writes the row.
+//
+// outputPaths names the server-owned fields written alongside
+// (Update<Model>WithOutputOnly); nil for Update.
+func (r *GraphQL{{.Model}}Repository) updateOps(ctx context.Context, ops *repox.Ops, id string, in *{{.PB}}, paths, outputPaths []string) (repox.Check, error) {
+	row, err := r.Svc.Query.{{.Domain}}.{{.Resource}}.Get(ctx, id)
+	if err != nil {
+		return nil, mapGraphQLErr(err)
+	}
+	if row == nil {
+		return nil, repox.ErrNotFound
+	}
+	existingPB := {{.LowerModelV}}FromRow(row)
+	{{- if .HasEtag}}
+	if in.GetEtag() != "" && existingPB.GetEtag() != in.GetEtag() {
+		return nil, repox.ErrConflict
+	}
+	{{- end}}
+	{{- range .GQLVOStaleVars}}
+	{{.}}
+	{{- end}}
+	{{- range .GQLDeepStale}}
+	{{.}}
+	{{- end}}
+	merged := proto.Clone(existingPB).(*{{.PB}})
+	apply{{.Model}}Mask(merged, in, paths)
+	{{- if .OutputOnly}}
+	repox.CopyFields(merged, in, outputPaths)
+	{{- end}}
+	patch := {{.LowerModelV}}ToUpdatePatch(merged)
+	{{- if .OutputOnly}}
+	if len(outputPaths) > 0 {
+		{{.LowerModelV}}AddOutputPatch(&patch, merged, outputPaths)
+	}
+	{{- end}}
+	{{- if .EtagInputField}}
+	patch.{{.EtagInputField}} = graphql.Value(repox.NewULID())
+	{{- end}}
+	{{- if .UpdateTimeField}}
+	patch.{{.UpdateTimeField}} = graphql.Value(tsToStr(timestamppb.New(time.Now().UTC())))
+	{{- end}}
+	var utx, atx repox.Ops
+	{{- range .GQLQueuedUpdates}}
+	{{.}}
+	{{- end}}
+	{{- range .GQLDeepUpdates}}
+	{{.}}
+	{{- end}}
+	*ops = append(*ops, utx...)
+	resp := new({{.UpdateResp}})
+	{{- if .HasEtag}}
+	etag := in.GetEtag()
+	if etag != "" {
+		ops.Add(r.Svc.Mutation.{{.Domain}}.{{.Resource}}.UpdateOp(id, {{.ResPkg}}.UpdateInput{ {{- .PKInputField}}: graphql.Value(id)}, new({{.UpdateResp}}), {{.ResPkg}}.Update().PostCheck({{.EtagPred}}.Eq(etag))))
+		ops.Add(r.Svc.Mutation.{{.Domain}}.{{.Resource}}.UpdateOp(id, patch, resp, {{.ResPkg}}.Update().PreCheck({{.EtagPred}}.Eq(etag))))
+	} else {
+		ops.Add(r.Svc.Mutation.{{.Domain}}.{{.Resource}}.UpdateOp(id, patch, resp))
+	}
+	{{- else}}
+	ops.Add(r.Svc.Mutation.{{.Domain}}.{{.Resource}}.UpdateOp(id, patch, resp))
+	{{- end}}
+	{{- range .GQLQueuedStaleDels}}
+	{{.}}
+	{{- end}}
+	*ops = append(*ops, atx...)
+	return func(ctx context.Context, failed error) error {
+		if failed == nil {
+			if resp.AffectedRows == 0 {
+				{{- if .HasEtag}}
+				if etag != "" {
+					return repox.ErrConflict
+				}
+				{{- end}}
+				return repox.ErrNotFound
+			}
+			return nil
+		}
+		{{- if .HasEtag}}
+		// The request failed; if this guard is why, say so.
+		if etag != "" {
+			if now, err := r.Svc.Query.{{.Domain}}.{{.Resource}}.Get(ctx, id); err == nil && (now == nil || {{.LowerModelV}}FromRow(now).GetEtag() != etag) {
+				return repox.ErrConflict
+			}
+		}
+		{{- end}}
+		return nil
+	}, nil
+}
+{{- if not .Flat}}
+
+// purgeOps queues the removal of row id and of the value-object rows it owns
+// onto dtx, for a Batch. A row already gone queues nothing.
+func (r *GraphQL{{.Model}}Repository) purgeOps(ctx context.Context, dtx *repox.Ops, id string) (repox.Check, error) {
+	row, err := r.Svc.Query.{{.Domain}}.{{.Resource}}.Get(ctx, id)
+	if err != nil {
+		return nil, mapGraphQLErr(err)
+	}
+	if row == nil {
+		return nil, nil
+	}
+	dtx.Add(r.Svc.Mutation.{{.Domain}}.{{.Resource}}.DeleteOp(id, new({{.DeleteResp}})))
+	{{- range .GQLQueuedPurges}}
+	{{.}}
+	{{- end}}
+	return nil, nil
+}
 {{- end}}
 {{- if .OutputOnly}}
 
@@ -457,6 +630,18 @@ func (r *GraphQL{{.Model}}Repository) Delete(ctx context.Context, name string) e
 			return err
 		}
 	}
+	if _, err := r.Svc.Mutation.{{.Domain}}.{{.Resource}}.UpdateIfMatch(ctx, ids[len(ids)-1], r.deletePatch(), {{.DeleteTimePred}}.IsNull(true)); err != nil {
+		if errors.Is(err, graphql.ErrConflict) {
+			return repox.ErrNotFound
+		}
+		return mapGraphQLErr(err)
+	}
+	return nil
+}
+
+// deletePatch is the write that soft-deletes a record now: Delete's, and a
+// Batch's.
+func (r *GraphQL{{.Model}}Repository) deletePatch() {{.ResPkg}}.UpdateInput {
 	at := time.Now().UTC()
 	now := at.Format(time.RFC3339Nano)
 	patch := {{.ResPkg}}.UpdateInput{ {{- .DeleteTimeInputField}}: graphql.Value(now)}
@@ -471,13 +656,7 @@ func (r *GraphQL{{.Model}}Repository) Delete(ctx context.Context, name string) e
 	{{- if .EtagInputField}}
 	patch.{{.EtagInputField}} = graphql.Value(repox.NewULID())
 	{{- end}}
-	if _, err := r.Svc.Mutation.{{.Domain}}.{{.Resource}}.UpdateIfMatch(ctx, ids[len(ids)-1], patch, {{.DeleteTimePred}}.IsNull(true)); err != nil {
-		if errors.Is(err, graphql.ErrConflict) {
-			return repox.ErrNotFound
-		}
-		return mapGraphQLErr(err)
-	}
-	return nil
+	return patch
 }
 
 // Undelete clears the soft-delete mark and returns the restored record.
@@ -525,6 +704,81 @@ func (r *GraphQL{{.Model}}Repository) Delete(ctx context.Context, name string) e
 		}
 	}
 	id := ids[len(ids)-1]
+	{{- if .SoftDelete}}
+	_, err = r.purge(ctx, id, name, true)
+	return err
+}
+
+// purge removes row id, named name, for good -- unless something still
+// refers to it, when it keeps the row and reports kept: when askReferrers, a
+// referrer in another database or service (r.Refs), and, caught from the
+// database's own refusal, a row holding a foreign key to it. A purge never
+// fails, and never cascades, because of a referrer. repox.ErrNotFound when
+// there is no such row.
+func (r *GraphQL{{.Model}}Repository) purge(ctx context.Context, id, name string, askReferrers bool) (kept bool, err error) {
+	{{- if .Type}}
+	if askReferrers && r.Refs.KeepOnPurge(ctx, {{printf "%q" .Type}}, name) {
+		return true, nil
+	}
+	{{- end}}
+	err = r.remove(ctx, id)
+	if repox.IsForeignKeyViolation(err) {
+		r.Refs.Kept(ctx, name, "foreign key")
+		return true, nil
+	}
+	return false, err
+}
+{{- if .Expiring}}
+
+// PurgeExpired removes for good every deleted record whose expire_time is at
+// or before now, keeping the ones something still refers to (see purge).
+// Hooks do not run.
+func (r *GraphQL{{.Model}}Repository) PurgeExpired(ctx context.Context, now time.Time) (repox.PurgeResult, error) {
+	var res repox.PurgeResult
+	in := repox.ListInput{
+		PageSize:    500,
+		ShowDeleted: true,
+		ReadMask:    []string{"name"},
+		Where: []filterx.Condition{
+			{Field: "delete_time", Op: filterx.OpNull, Value: "false"},
+			{Field: "{{.ExpireTimeColumn}}", Op: filterx.OpLte, Value: now.UTC().Format(time.RFC3339Nano)},
+		},
+	}
+	for {
+		page, next, err := r.list(ctx, in)
+		if err != nil {
+			return res, err
+		}
+		for _, m := range page {
+			ids, err := repox.SplitName(m.GetName(), {{.CollectionsExpr}})
+			if err != nil {
+				return res, err
+			}
+			kept, err := r.purge(ctx, ids[len(ids)-1], m.GetName(), true)
+			switch {
+			case errors.Is(err, repox.ErrNotFound):
+			case err != nil:
+				return res, err
+			case kept:
+				res.Kept = append(res.Kept, m.GetName())
+			default:
+				res.Purged = append(res.Purged, m.GetName())
+			}
+		}
+		if next == "" {
+			return res, nil
+		}
+		in.PageToken = next
+	}
+}
+{{- end}}
+	{{- else}}
+	return r.remove(ctx, id)
+}
+	{{- end}}
+
+// remove deletes row id with the value-object rows it owns.
+func (r *GraphQL{{.Model}}Repository) remove(ctx context.Context, id string) error {
 	resp, err := r.Svc.Mutation.{{.Domain}}.{{.Resource}}.Delete(ctx, id)
 	if err != nil {
 		return mapGraphQLErr(err)
@@ -552,68 +806,87 @@ var _ {{.Model}}Repository = (*GraphQL{{.Model}}Repository)(nil)
 {{- end}}
 {{- if .HasBatch}}
 
-// graphQLBatch is Batch on GraphQL. Etag-guarded updates run first, one by
-// one: the engine reports a failed guard by touching no row, which cannot
-// abort a mutation batch, so a guard has to stand alone to fail loudly. The
-// rest commits as one mutation batch, which the engine applies atomically.
+// graphQLBatch is Batch on GraphQL: queued writes go into the Unit's mutation
+// request on Commit (see repox.Unit.Commit). A guarded UpdateOutputOnly runs
+// ahead of it, one by one: the engine reports its failed guard by touching no
+// row, which cannot abort a request.
 type graphQLBatch struct {
-	svc     *{{$.ClientPkg}}.Service
-	guarded []func(ctx context.Context) error
-	tx      *runtime.Tx
-	err     error // the first queueing error; Commit returns it and writes nothing
+	u   *repox.Unit
+	svc *{{$.ClientPkg}}.Service
+{{- if .HasExpiring}}
+	retention time.Duration
+{{- end}}
 }
 
-// Commit applies the guarded updates, then the batch; see graphQLBatch.
-func (b *graphQLBatch) Commit(ctx context.Context) error {
-	if b.err != nil {
-		return b.err
-	}
-	for _, g := range b.guarded {
-		if err := g(ctx); err != nil {
-			return err
-		}
-	}
-	if err := b.batch().Commit(ctx); err != nil {
-		return mapGraphQLErr(err)
-	}
-	return nil
-}
-
-func (b *graphQLBatch) batch() *runtime.Tx {
-	if b.tx == nil {
-		b.tx = b.svc.Mutation.Tx()
-	}
-	return b.tx
-}
-
-func (b *graphQLBatch) fail(err error) {
-	if b.err == nil {
-		b.err = err
-	}
-}
-{{- range .Resources}}{{if .Flat}}
+// Commit applies the Unit's writes; see repox.Unit.Commit.
+func (b *graphQLBatch) Commit(ctx context.Context) error { return b.u.Commit(ctx) }
+{{- range .Resources}}
 
 // Create{{.Model}} queues a create and returns the name the record will have.
 func (b *graphQLBatch) Create{{.Model}}({{if .Parented}}parent string, {{end}}in *{{.PB}}) (string, error) {
-	ci, name, err := (&GraphQL{{.Model}}Repository{Svc: b.svc}).newInput({{if .Parented}}parent, {{end}}in)
+	r := &GraphQL{{.Model}}Repository{Svc: b.svc}
+	ci, named, err := r.newInput({{if .Parented}}parent, {{end}}in)
 	if err != nil {
 		return "", err
 	}
-	b.batch().Add(b.svc.Mutation.{{.Domain}}.{{.Resource}}.CreateOp(ci, new({{.InsertResp}})))
-	return name, nil
+	queue{{.Model}}References(b.u, named, nil)
+	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		{{- if .Flat}}
+		ops.Add(b.svc.Mutation.{{.Domain}}.{{.Resource}}.CreateOp(ci, new({{.InsertResp}})))
+		return nil, nil
+		{{- else}}
+		return r.insertOps(ctx, ops, named, ci)
+		{{- end}}
+	})
+	b.u.Touch(named.GetName())
+	return named.GetName(), nil
 }
+
+// Update{{.Model}} queues Update; in.Etag, when set, guards it inside the
+// batch's request (see updateOps).
+func (b *graphQLBatch) Update{{.Model}}(in *{{.PB}}, paths []string) {
+	ids, err := repox.SplitName(in.GetName(), {{.CollectionsExpr}})
+	if err != nil {
+		b.u.Fail(err)
+		return
+	}
+	r := &GraphQL{{.Model}}Repository{Svc: b.svc}
+	queue{{.Model}}References(b.u, in, paths)
+	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, nil)
+	})
+	b.u.Touch(in.GetName())
+}
+{{- if .OutputOnly}}
+
+// Update{{.Model}}WithOutputOnly queues UpdateWithOutputOnly; in.Etag, when
+// set, guards it inside the batch's request, as Update{{.Model}}'s does.
+func (b *graphQLBatch) Update{{.Model}}WithOutputOnly(in *{{.PB}}, paths, outputPaths []string) {
+	ids, err := repox.SplitName(in.GetName(), {{.CollectionsExpr}})
+	if err != nil {
+		b.u.Fail(err)
+		return
+	}
+	r := &GraphQL{{.Model}}Repository{Svc: b.svc}
+	queue{{.Model}}References(b.u, in, paths)
+	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, outputPaths)
+	})
+	b.u.Touch(in.GetName())
+}
+{{- end}}
 {{- if .OutputOnly}}
 
 // Update{{.Model}}OutputOnly queues UpdateOutputOnly; in.Etag, when set, guards
 // it, and a guarded update runs ahead of the batch (see graphQLBatch).
 func (b *graphQLBatch) Update{{.Model}}OutputOnly(in *{{.PB}}, paths []string) {
 	if len(paths) == 0 {
-		b.fail(fmt.Errorf("%w: UpdateOutputOnly needs the fields to write", repox.ErrInvalidArgument))
+		b.u.Fail(fmt.Errorf("%w: UpdateOutputOnly needs the fields to write", repox.ErrInvalidArgument))
 		return
 	}
 	ids, err := repox.SplitName(in.GetName(), {{.CollectionsExpr}})
 	if err != nil {
-		b.fail(err)
+		b.u.Fail(err)
 		return
 	}
 	id := ids[len(ids)-1]
@@ -624,28 +897,82 @@ func (b *graphQLBatch) Update{{.Model}}OutputOnly(in *{{.PB}}, paths []string) {
 	{{- if .UpdateTimeField}}
 	patch.{{.UpdateTimeField}} = graphql.Value(tsToStr(timestamppb.New(time.Now().UTC())))
 	{{- end}}
+	b.u.Touch(in.GetName())
 	{{- if .HasEtag}}
 	if etag := in.GetEtag(); etag != "" {
-		b.guarded = append(b.guarded, func(ctx context.Context) error {
+		b.u.QueueGraphQLAhead(func(ctx context.Context) error {
 			_, err := b.svc.Mutation.{{.Domain}}.{{.Resource}}.UpdateIfMatch(ctx, id, patch, {{.EtagPred}}.Eq(etag))
 			return mapGraphQLErr(err)
 		})
 		return
 	}
 	{{- end}}
-	b.batch().Add(b.svc.Mutation.{{.Domain}}.{{.Resource}}.UpdateOp(id, patch, new({{.UpdateResp}})))
+	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		ops.Add(b.svc.Mutation.{{.Domain}}.{{.Resource}}.UpdateOp(id, patch, new({{.UpdateResp}})))
+		return nil, nil
+	})
 }
 {{- end}}
+{{- if .SoftDelete}}
 
-// Delete{{.Model}} queues the record's removal for good. A record already
-// gone is not an error.
+// Delete{{.Model}} queues a soft delete. A record already deleted or gone is
+// not an error.
 func (b *graphQLBatch) Delete{{.Model}}(name string) {
 	ids, err := repox.SplitName(name, {{.CollectionsExpr}})
 	if err != nil {
-		b.fail(err)
+		b.u.Fail(err)
 		return
 	}
-	b.batch().Add(b.svc.Mutation.{{.Domain}}.{{.Resource}}.DeleteOp(ids[len(ids)-1], new({{.DeleteResp}})))
+	r := &GraphQL{{.Model}}Repository{Svc: b.svc{{if .Expiring}}, Retention: b.retention{{end}}}
+	queue{{.Model}}Delete(b.u, name, false)
+	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		ops.Add(b.svc.Mutation.{{.Domain}}.{{.Resource}}.UpdateOp(ids[len(ids)-1], r.deletePatch(), new({{.UpdateResp}}), {{.ResPkg}}.Update().PreCheck({{.DeleteTimePred}}.IsNull(true))))
+		return nil, nil
+	})
+	b.u.Touch(name)
 }
-{{- end}}{{end}}
+{{- end}}
+
+// {{if .SoftDelete}}Purge{{else}}Delete{{end}}{{.Model}} queues the record's removal for good. A record already
+// gone is not an error.
+func (b *graphQLBatch) {{if .SoftDelete}}Purge{{else}}Delete{{end}}{{.Model}}(name string) {
+	ids, err := repox.SplitName(name, {{.CollectionsExpr}})
+	if err != nil {
+		b.u.Fail(err)
+		return
+	}
+	id := ids[len(ids)-1]
+	{{- if .SoftDelete}}
+	// A record a referrer in another database or service names is kept, as
+	// Purge keeps it. One a foreign key of this database still names fails
+	// the commit with repox.ErrForeignKey: the request is one transaction,
+	// and the engine cannot skip one of its mutations.
+	keep := queue{{.Model}}Purge(b.u, name)
+	{{- else}}
+	queue{{.Model}}Delete(b.u, name, true)
+	{{- end}}
+	{{- if .Flat}}
+	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		{{- if .SoftDelete}}
+		if *keep {
+			return nil, nil
+		}
+		{{- end}}
+		ops.Add(b.svc.Mutation.{{.Domain}}.{{.Resource}}.DeleteOp(id, new({{.DeleteResp}})))
+		return nil, nil
+	})
+	{{- else}}
+	r := &GraphQL{{.Model}}Repository{Svc: b.svc}
+	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		{{- if .SoftDelete}}
+		if *keep {
+			return nil, nil
+		}
+		{{- end}}
+		return r.purgeOps(ctx, ops, id)
+	})
+	{{- end}}
+	b.u.Touch(name)
+}
+{{- end}}
 {{- end}}

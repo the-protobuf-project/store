@@ -54,6 +54,14 @@ type resource struct {
 	// nested value objects, has-many children, owner columns, natural keys
 	// (see planGraph).
 	Graph []*gEdge
+
+	// Type is the AIP resource type ("library.example.com/Book").
+	Type string
+	// ExtRefs are the reference fields no foreign key enforces (see
+	// references.go); ReferencedBy the foreign keys into this table a purge
+	// respects.
+	ExtRefs      []extRef
+	ReferencedBy []referrerFK
 }
 
 // voField is one generated belongs-to value object: a message field
@@ -286,6 +294,16 @@ func resourcePattern(d interface{ Options() proto.Message }) string {
 		return ""
 	}
 	return rd.GetPattern()[0]
+}
+
+// resourceType reads the google.api.resource type off the message.
+func resourceType(d interface{ Options() proto.Message }) string {
+	opts := d.Options()
+	if opts == nil || !proto.HasExtension(opts, annotations.E_Resource) {
+		return ""
+	}
+	rd, _ := proto.GetExtension(opts, annotations.E_Resource).(*annotations.ResourceDescriptor)
+	return rd.GetType()
 }
 
 // parsePattern splits "a/{x}/b/{y}" into collection/var segments, rejecting

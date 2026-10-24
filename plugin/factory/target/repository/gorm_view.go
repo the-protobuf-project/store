@@ -59,8 +59,12 @@ type gormResourceView struct {
 	MaskFields     []maskFieldView
 
 	// Value-object fragments (see vo_view.go).
-	HasVOs           bool
-	Preloads         string   // .Preload chain for get/list/update reads
+	HasVOs       bool
+	Preloads     string // .Preload chain for get/list/update reads
+	ReadPreloads []readPreload
+	// FieldColumns are the row's columns by the top-level proto field each
+	// stores, which a List under a read mask leaves out of its SELECT.
+	FieldColumns     []fieldColumns
 	VOCreates        []string // create-in-transaction fragments
 	VOStaleVars      []string // stale-id declarations inside the update transaction
 	VOUpdates        []string // masked replace fragments
@@ -175,6 +179,8 @@ func gormResourceViews(pb *pbIndex, db *schema.Database, s *schema.Schema, resou
 		gg := graphGormFragments(gormPkg, r)
 		v.HasVOs = len(r.VOs) > 0 || len(r.Graph) > 0
 		v.Preloads = vg.Preloads + gg.Preloads
+		v.ReadPreloads = append(append([]readPreload(nil), vg.ReadPreloads...), gg.ReadPreloads...)
+		v.FieldColumns = fieldColumnsOf(r)
 		v.VOCreates = vg.Creates
 		v.VOStaleVars = vg.StaleVars
 		v.VOUpdates = vg.Updates
@@ -426,4 +432,38 @@ func gormField(c *schema.Column) string { return gormFieldName(c.Name, c.FKModel
 
 func gormFieldName(col string, isFK bool) string {
 	return naming.PascalGo(naming.FKFieldBase(col, isFK))
+}
+
+// fieldColumns is one top-level proto field's columns on the resource row.
+type fieldColumns struct {
+	Field   string
+	Columns []string
+}
+
+// fieldColumnsOf groups r's row columns by the top-level field of the
+// resource message each was built from. The key and the name are left out --
+// every read needs them -- and so is any column no field owns.
+func fieldColumnsOf(r *resource) []fieldColumns {
+	var out []fieldColumns
+	at := map[string]int{}
+	for _, c := range r.Table.Columns {
+		if c.Source == nil || c == r.Cols.PK || c == r.Cols.Name {
+			continue
+		}
+		if c.Source.ContainingMessage().FullName() != r.Table.Source.FullName() {
+			continue
+		}
+		f := string(c.Source.Name())
+		if f == "name" {
+			continue
+		}
+		i, ok := at[f]
+		if !ok {
+			i = len(out)
+			at[f] = i
+			out = append(out, fieldColumns{Field: f})
+		}
+		out[i].Columns = append(out[i].Columns, c.Name)
+	}
+	return out
 }

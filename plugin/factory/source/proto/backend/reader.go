@@ -22,6 +22,8 @@
 package backend
 
 import (
+	"encoding/json"
+
 	"github.com/the-protobuf-project/protokit"
 	"github.com/the-protobuf-project/protokit/schema"
 	"github.com/the-protobuf-project/store/plugin/factory/facets"
@@ -209,6 +211,13 @@ func (r Reader) Enrich(ir *protokit.IR) error {
 		db.Opts["filters"] = boolStr(r.filters)
 		db.Opts["gorm_module"] = r.gormModule
 		db.Opts["graphql_module"] = r.graphqlModule
+		if r.cfg != nil && len(r.cfg.ReferenceServices) > 0 {
+			b, err := json.Marshal(r.cfg.ReferenceServices)
+			if err != nil {
+				return err
+			}
+			db.Opts["reference_services"] = string(b)
+		}
 	}
 	return nil
 }

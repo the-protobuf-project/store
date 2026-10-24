@@ -46,7 +46,11 @@ type AgendaRepository interface {
 	// Undelete restores a soft-deleted record and returns it;
 	// repox.ErrAlreadyExists when it is not deleted.
 	Undelete(ctx context.Context, name string) (*deepv1.Agenda, error)
-	// Purge removes the record, deleted or not, for good.
+	// Purge removes the record, deleted or not, for good. A record something
+	// still refers to -- a foreign key, or a referrer store.v1.ReferenceService
+	// reports -- is kept instead: Purge returns nil and
+	// repox.References.OnKept hears of it. A purge never fails, and never
+	// cascades, because of a referrer.
 	Purge(ctx context.Context, name string) error
 }
 
@@ -109,9 +113,67 @@ type Repositories struct {
 	Meetings MeetingRepository
 }
 
+// Batch queues writes across this schema's resources -- the value-object rows
+// of each included -- and applies them together on Commit, so a record and the
+// records that depend on it land whole or not at all. Built over a shared
+// repox.Unit (NewBatchIn), it commits with the writes of other schemas too.
+// Hooks do not run for queued writes.
+type Batch interface {
+	// CreateAgenda queues a create and returns the name the record will have.
+	CreateAgenda(m *deepv1.Agenda) (string, error)
+	// UpdateAgenda queues Update: the masked fields of m, every mutable
+	// field when paths is empty. m.Etag, when set, guards it; a guard that
+	// fails fails the whole Commit with repox.ErrConflict.
+	UpdateAgenda(m *deepv1.Agenda, paths []string)
+	// DeleteAgenda queues a soft delete, as AgendaRepository.Delete
+	// does; a record already deleted or gone is not an error.
+	DeleteAgenda(name string)
+	// PurgeAgenda queues the record's removal for good; a record already
+	// gone is not an error.
+	PurgeAgenda(name string)
+	// CreateMeeting queues a create and returns the name the record will have.
+	CreateMeeting(parent string, m *deepv1.Meeting) (string, error)
+	// UpdateMeeting queues Update: the masked fields of m, every mutable
+	// field when paths is empty. m.Etag, when set, guards it; a guard that
+	// fails fails the whole Commit with repox.ErrConflict.
+	UpdateMeeting(m *deepv1.Meeting, paths []string)
+	// DeleteMeeting queues the record's removal for good; a record already
+	// gone is not an error.
+	DeleteMeeting(name string)
+	// Commit applies every write queued in the batch's Unit, by this Batch or
+	// any other built over it; see repox.Unit.Commit. GORM runs them in one
+	// transaction. GraphQL sends a guarded Update<Model>OutputOnly ahead, one
+	// by one, then everything else as one mutation request the engine applies
+	// atomically, Update<Model>'s etag guards included.
+	Commit(ctx context.Context) error
+}
+
+// NewBatch returns a Batch on the backend conn carries, over a Unit of its
+// own. When conn carries a ChangeObserver, Commit reports every record it
+// queued to it.
+func NewBatch(conn repox.Conn, opts ...Option) Batch {
+	return NewBatchIn(repox.NewUnit(conn), opts...)
+}
+
+// NewBatchIn returns a Batch that queues into u, so its writes commit with
+// those of every other Batch over u: a write spanning schemas is one Unit and
+// one Batch per schema, committed once.
+func NewBatchIn(u *repox.Unit, opts ...Option) Batch {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
+	_ = o
+	if svc := u.Conn().GraphQL; svc != nil {
+		return &graphQLBatch{u: u, svc: svc}
+	}
+	return &gormBatch{u: u, db: u.Conn().Gorm}
+}
+
 // options collects the per-resource customizations the factories thread into
 // the adapters they build.
 type options struct {
+	references          *repox.References
 	agendaHooks         AgendaHooks
 	agendaOverrides     map[string]filterx.SQLHandler
 	meetingHooks        MeetingHooks
@@ -122,6 +184,14 @@ type options struct {
 
 // Option customizes the adapters a factory builds.
 type Option func(*options)
+
+// WithReferences enforces reference integrity through refs (see
+// repox.References): New passes repox.Conn.References. With none, writes do
+// not resolve external references and deletes do not consult referrers;
+// foreign keys still hold.
+func WithReferences(refs *repox.References) Option {
+	return func(o *options) { o.references = refs }
+}
 
 // WithAgendaHooks installs h on the Agenda adapters.
 func WithAgendaHooks(h AgendaHooks) Option {
@@ -183,6 +253,7 @@ func WithMeetingGraphQLListOverride(field string, h filterx.GraphQLHandler) Opti
 // When conn carries a ChangeObserver, every write the returned repositories
 // make is reported to it (see observe).
 func New(conn repox.Conn, opts ...Option) Repositories {
+	opts = append([]Option{WithReferences(conn.References)}, opts...)
 	if conn.GraphQL != nil {
 		return observe(NewGraphQL(conn.GraphQL, opts...), conn.Changes)
 	}
@@ -195,10 +266,10 @@ func NewGraphQL(svc *genql.Service, opts ...Option) Repositories {
 	for _, opt := range opts {
 		opt(&o)
 	}
-	return Repositories{
-		Agendas:  &GraphQLAgendaRepository{Svc: svc, Hooks: o.agendaHooks, ListOverrides: o.agendaGQLOverrides},
-		Meetings: &GraphQLMeetingRepository{Svc: svc, Hooks: o.meetingHooks, ListOverrides: o.meetingGQLOverrides},
-	}
+	return guard(Repositories{
+		Agendas:  &GraphQLAgendaRepository{Svc: svc, Hooks: o.agendaHooks, Refs: o.references, ListOverrides: o.agendaGQLOverrides},
+		Meetings: &GraphQLMeetingRepository{Svc: svc, Hooks: o.meetingHooks, Refs: o.references, ListOverrides: o.meetingGQLOverrides},
+	}, o.references)
 }
 
 // NewGorm builds the GORM adapter set over db.
@@ -207,9 +278,29 @@ func NewGorm(db *gorm.DB, opts ...Option) Repositories {
 	for _, opt := range opts {
 		opt(&o)
 	}
+	return guard(Repositories{
+		Agendas:  &GormAgendaRepository{DB: db, Hooks: o.agendaHooks, Refs: o.references, ListOverrides: o.agendaOverrides},
+		Meetings: &GormMeetingRepository{DB: db, Hooks: o.meetingHooks, Refs: o.references, ListOverrides: o.meetingOverrides},
+	}, o.references)
+}
+
+// guard wraps every repository in repos so its writes keep reference
+// integrity through refs: Create and Update resolve the external references
+// they set (repox.References.Resolve) before anything is written, and Delete
+// consults the record's referrers (repox.References.CheckDelete) and
+// publishes the NOTIFY event after it. Purge's checks sit in the adapters,
+// which keep a still-referenced row row by row. With no refs it returns repos
+// unchanged.
+//
+// It sits over the whole interface, like observe, so the GORM and GraphQL
+// adapters enforce the same contract above their backends.
+func guard(repos Repositories, refs *repox.References) Repositories {
+	if refs == nil {
+		return repos
+	}
 	return Repositories{
-		Agendas:  &GormAgendaRepository{DB: db, Hooks: o.agendaHooks, ListOverrides: o.agendaOverrides},
-		Meetings: &GormMeetingRepository{DB: db, Hooks: o.meetingHooks, ListOverrides: o.meetingOverrides},
+		Agendas:  &guardedAgendaRepository{AgendaRepository: repos.Agendas, refs: refs},
+		Meetings: &guardedMeetingRepository{MeetingRepository: repos.Meetings, refs: refs},
 	}
 }
 
@@ -324,4 +415,107 @@ func (o *observedMeetingRepository) Delete(ctx context.Context, name string) err
 	err := o.MeetingRepository.Delete(ctx, name)
 	o.changes.Changed(ctx, name)
 	return err
+}
+
+// guardedAgendaRepository keeps Agenda's references whole; see guard.
+type guardedAgendaRepository struct {
+	AgendaRepository
+	refs *repox.References
+}
+
+func (g *guardedAgendaRepository) Delete(ctx context.Context, name string) error {
+	check, err := g.refs.CheckDelete(ctx, "deep.v1/Agenda", name)
+	if err != nil {
+		return err
+	}
+	if err := g.AgendaRepository.Delete(ctx, name); err != nil {
+		return err
+	}
+	check.Done(ctx, false)
+	return nil
+}
+
+// resolveAgendaReferences proves, through refs, that every external
+// reference m sets within paths (all of them for an empty mask) names a
+// resource that exists.
+func resolveAgendaReferences(ctx context.Context, refs *repox.References, m *deepv1.Agenda, paths []string) error {
+	return nil
+}
+
+// queueAgendaReferences makes u resolve m's external references within
+// paths before it commits, as guard does for the repositories.
+func queueAgendaReferences(u *repox.Unit, m *deepv1.Agenda, paths []string) {
+}
+
+// queueAgendaDelete makes u consult name's referrers before it commits
+// and publish the NOTIFY event after, as guard does for Delete.
+func queueAgendaDelete(u *repox.Unit, name string, purged bool) {
+	refs := u.Conn().References
+	if refs == nil {
+		return
+	}
+	var check *repox.DeleteCheck
+	u.Before(func(ctx context.Context) (err error) {
+		check, err = refs.CheckDelete(ctx, "deep.v1/Agenda", name)
+		return err
+	})
+	u.After(func(ctx context.Context) { check.Done(ctx, purged) })
+}
+
+// queueAgendaPurge makes u ask name's referrers before it commits; the
+// purge it queues keeps the row when *keep is true.
+func queueAgendaPurge(u *repox.Unit, name string) (keep *bool) {
+	keep = new(bool)
+	if refs := u.Conn().References; refs != nil {
+		u.Before(func(ctx context.Context) error {
+			*keep = refs.KeepOnPurge(ctx, "deep.v1/Agenda", name)
+			return nil
+		})
+	}
+	return keep
+}
+
+// guardedMeetingRepository keeps Meeting's references whole; see guard.
+type guardedMeetingRepository struct {
+	MeetingRepository
+	refs *repox.References
+}
+
+func (g *guardedMeetingRepository) Delete(ctx context.Context, name string) error {
+	check, err := g.refs.CheckDelete(ctx, "deep.v1/Meeting", name)
+	if err != nil {
+		return err
+	}
+	if err := g.MeetingRepository.Delete(ctx, name); err != nil {
+		return err
+	}
+	check.Done(ctx, true)
+	return nil
+}
+
+// resolveMeetingReferences proves, through refs, that every external
+// reference m sets within paths (all of them for an empty mask) names a
+// resource that exists.
+func resolveMeetingReferences(ctx context.Context, refs *repox.References, m *deepv1.Meeting, paths []string) error {
+	return nil
+}
+
+// queueMeetingReferences makes u resolve m's external references within
+// paths before it commits, as guard does for the repositories.
+func queueMeetingReferences(u *repox.Unit, m *deepv1.Meeting, paths []string) {
+}
+
+// queueMeetingDelete makes u consult name's referrers before it commits
+// and publish the NOTIFY event after, as guard does for Delete.
+func queueMeetingDelete(u *repox.Unit, name string, purged bool) {
+	refs := u.Conn().References
+	if refs == nil {
+		return
+	}
+	var check *repox.DeleteCheck
+	u.Before(func(ctx context.Context) (err error) {
+		check, err = refs.CheckDelete(ctx, "deep.v1/Meeting", name)
+		return err
+	})
+	u.After(func(ctx context.Context) { check.Done(ctx, purged) })
 }

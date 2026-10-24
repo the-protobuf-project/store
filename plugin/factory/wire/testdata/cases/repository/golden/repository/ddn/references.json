@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "mutations": [
+    {
+      "field": "deleteOrgV1MembersById",
+      "kind": "delete",
+      "resourceType": "org.v1/Member",
+      "pattern": "organisations/{organisation}/members/{member}",
+      "keyArgument": "keyId",
+      "byIdQuery": "orgV1MembersById"
+    },
+    {
+      "field": "deleteOrgV1OrganisationsById",
+      "kind": "delete",
+      "resourceType": "org.v1/Organisation",
+      "pattern": "organisations/{organisation}",
+      "keyArgument": "keyId",
+      "byIdQuery": "orgV1OrganisationsById"
+    },
+    {
+      "field": "deleteOrgV1UsersById",
+      "kind": "delete",
+      "resourceType": "org.v1/User",
+      "pattern": "users/{user}",
+      "keyArgument": "keyId",
+      "byIdQuery": "orgV1UsersById"
+    }
+  ]
+}

@@ -65,6 +65,7 @@ type graphGQL struct {
 	Stale        []string        // captures at the top of Update
 	Updates      []string        // replacement ops: singular (utx, committed now) and has-many (atx)
 	Deletes      []string        // subtree removal after the resource delete (into dtx)
+	QueuedPurges []string        // a Batch purge's subtree removal, read off row (into dtx)
 	Nodes        []*gNode        // every node table, for converters and imports
 	PBImports    map[string]bool // proto packages of oneof wrappers the hydrates box into
 }
@@ -103,12 +104,14 @@ func graphGQLFragments(pb *pbIndex, r *resource) graphGQL {
 	for _, e := range r.Graph {
 		if e.Kind == edgeOne {
 			out.Creates = append(out.Creates, g.createOne(e, "in", "ci", false, []string{"id"}, "gtx"))
-			out.Hydrates = append(out.Hydrates, g.hydrateOne(e, rowFK("row", e.FKCol), "out"))
+			out.Hydrates = append(out.Hydrates, readGuard(e.FieldName, g.hydrateOne(e, rowFK("row", e.FKCol), "out")))
 			out.Deletes = append(out.Deletes, fmt.Sprintf("for i := range resp.Returning {\n%s\n}", g.deleteNode(e.Child, rowFK("resp.Returning[i]", e.FKCol), "dtx", "return ")))
+			out.QueuedPurges = append(out.QueuedPurges, g.deleteNode(e.Child, rowFK("row", e.FKCol), "dtx", "return nil, "))
 		} else {
 			out.AfterCreates = append(out.AfterCreates, g.createMany(e, "in", []string{"id"}, "gtx"))
-			out.Hydrates = append(out.Hydrates, g.hydrateMany(e, "row.Id", "out"))
+			out.Hydrates = append(out.Hydrates, readGuard(e.FieldName, g.hydrateMany(e, "row.Id", "out")))
 			out.Deletes = append(out.Deletes, g.deleteMany(e, "id", "dtx", "return "))
+			out.QueuedPurges = append(out.QueuedPurges, g.deleteMany(e, "id", "dtx", "return nil, "))
 		}
 	}
 

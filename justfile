@@ -69,6 +69,16 @@ examples: build
     PATH="{{bin}}:$PATH" buf generate --template buf.gen.example.yaml
     @echo "examples regenerated with $(./bin/protoc-gen-store --version)"
 
+# Regenerate examples/references (the reference-integrity example) with the
+# freshly-built ./bin plugin.
+references: build
+    PATH="{{bin}}:$PATH" buf generate --template buf.gen.references.yaml
+
+# Run the references example's tests against a throwaway Postgres, e.g.
+#   STORE_TEST_POSTGRES_DSN="host=localhost port=55432 user=postgres dbname=postgres sslmode=disable" just test-references
+test-references:
+    cd examples && go test -count=1 ./references/
+
 # Build the examples module to confirm the generated GORM structs compile.
 build-examples:
     cd examples && go build ./...

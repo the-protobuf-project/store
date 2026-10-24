@@ -44,6 +44,12 @@ type SessionRepository interface {
 	// since a client may never set them; this is for the service that owns
 	// them. paths must name at least one; m.Etag guards as in Update.
 	UpdateOutputOnly(ctx context.Context, m *dtzv1.Session, paths []string) (*dtzv1.Session, error)
+	// UpdateWithOutputOnly is Update plus the server-owned (OUTPUT_ONLY)
+	// fields of m that outputPaths names, in the same write under the same
+	// etag guard. paths keeps Update's meaning (an OUTPUT_ONLY path in it is
+	// still ignored, AIP-203). A BeforeUpdate hook that sets one of the
+	// outputPaths fields on the merged record has it written too.
+	UpdateWithOutputOnly(ctx context.Context, m *dtzv1.Session, paths, outputPaths []string) (*dtzv1.Session, error)
 	// Delete removes the record addressed by its resource name.
 	Delete(ctx context.Context, name string) error
 }
@@ -70,43 +76,61 @@ type Repositories struct {
 	Sessions SessionRepository
 }
 
-// Batch queues writes across this schema's single-row resources and applies
-// them together on Commit, so a record and the records that depend on it land
-// whole or not at all. Hooks do not run for queued writes.
+// Batch queues writes across this schema's resources -- the value-object rows
+// of each included -- and applies them together on Commit, so a record and the
+// records that depend on it land whole or not at all. Built over a shared
+// repox.Unit (NewBatchIn), it commits with the writes of other schemas too.
+// Hooks do not run for queued writes.
 type Batch interface {
 	// CreateSession queues a create and returns the name the record will have.
 	CreateSession(m *dtzv1.Session) (string, error)
+	// UpdateSession queues Update: the masked fields of m, every mutable
+	// field when paths is empty. m.Etag, when set, guards it; a guard that
+	// fails fails the whole Commit with repox.ErrConflict.
+	UpdateSession(m *dtzv1.Session, paths []string)
 	// UpdateSessionOutputOnly queues UpdateOutputOnly; m.Etag, when set,
 	// guards it.
 	UpdateSessionOutputOnly(m *dtzv1.Session, paths []string)
+	// UpdateSessionWithOutputOnly queues UpdateWithOutputOnly: Update plus
+	// the server-owned fields outputPaths names, under one guard.
+	UpdateSessionWithOutputOnly(m *dtzv1.Session, paths, outputPaths []string)
 	// DeleteSession queues the record's removal for good; a record already
 	// gone is not an error.
 	DeleteSession(name string)
-	// Commit applies every queued write. GORM runs them in one transaction:
-	// all land or none do. GraphQL first applies the etag-guarded updates, one
-	// by one, returning repox.ErrConflict at the first that fails and before
-	// anything else is written -- the engine reports a failed guard by touching
-	// no row, which cannot abort a batch -- then commits the rest as one atomic
-	// mutation batch.
+	// Commit applies every write queued in the batch's Unit, by this Batch or
+	// any other built over it; see repox.Unit.Commit. GORM runs them in one
+	// transaction. GraphQL sends a guarded Update<Model>OutputOnly ahead, one
+	// by one, then everything else as one mutation request the engine applies
+	// atomically, Update<Model>'s etag guards included.
 	Commit(ctx context.Context) error
 }
 
-// NewBatch returns a Batch on the backend conn carries. When conn carries a
-// ChangeObserver, Commit reports every record it queued to it.
-func NewBatch(conn repox.Conn) Batch {
-	var b Batch = &gormBatch{db: conn.Gorm}
-	if conn.GraphQL != nil {
-		b = &graphQLBatch{svc: conn.GraphQL}
+// NewBatch returns a Batch on the backend conn carries, over a Unit of its
+// own. When conn carries a ChangeObserver, Commit reports every record it
+// queued to it.
+func NewBatch(conn repox.Conn, opts ...Option) Batch {
+	return NewBatchIn(repox.NewUnit(conn), opts...)
+}
+
+// NewBatchIn returns a Batch that queues into u, so its writes commit with
+// those of every other Batch over u: a write spanning schemas is one Unit and
+// one Batch per schema, committed once.
+func NewBatchIn(u *repox.Unit, opts ...Option) Batch {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
 	}
-	if conn.Changes != nil {
-		b = &observedBatch{Batch: b, changes: conn.Changes}
+	_ = o
+	if svc := u.Conn().GraphQL; svc != nil {
+		return &graphQLBatch{u: u, svc: svc}
 	}
-	return b
+	return &gormBatch{u: u, db: u.Conn().Gorm}
 }
 
 // options collects the per-resource customizations the factories thread into
 // the adapters they build.
 type options struct {
+	references          *repox.References
 	sessionHooks        SessionHooks
 	sessionOverrides    map[string]filterx.SQLHandler
 	sessionGQLOverrides map[string]filterx.GraphQLHandler
@@ -114,6 +138,14 @@ type options struct {
 
 // Option customizes the adapters a factory builds.
 type Option func(*options)
+
+// WithReferences enforces reference integrity through refs (see
+// repox.References): New passes repox.Conn.References. With none, writes do
+// not resolve external references and deletes do not consult referrers;
+// foreign keys still hold.
+func WithReferences(refs *repox.References) Option {
+	return func(o *options) { o.references = refs }
+}
 
 // WithSessionHooks installs h on the Session adapters.
 func WithSessionHooks(h SessionHooks) Option {
@@ -148,6 +180,7 @@ func WithSessionGraphQLListOverride(field string, h filterx.GraphQLHandler) Opti
 // When conn carries a ChangeObserver, every write the returned repositories
 // make is reported to it (see observe).
 func New(conn repox.Conn, opts ...Option) Repositories {
+	opts = append([]Option{WithReferences(conn.References)}, opts...)
 	if conn.GraphQL != nil {
 		return observe(NewGraphQL(conn.GraphQL, opts...), conn.Changes)
 	}
@@ -160,9 +193,9 @@ func NewGraphQL(svc *genql.Service, opts ...Option) Repositories {
 	for _, opt := range opts {
 		opt(&o)
 	}
-	return Repositories{
-		Sessions: &GraphQLSessionRepository{Svc: svc, Hooks: o.sessionHooks, ListOverrides: o.sessionGQLOverrides},
-	}
+	return guard(Repositories{
+		Sessions: &GraphQLSessionRepository{Svc: svc, Hooks: o.sessionHooks, Refs: o.references, ListOverrides: o.sessionGQLOverrides},
+	}, o.references)
 }
 
 // NewGorm builds the GORM adapter set over db.
@@ -171,8 +204,27 @@ func NewGorm(db *gorm.DB, opts ...Option) Repositories {
 	for _, opt := range opts {
 		opt(&o)
 	}
+	return guard(Repositories{
+		Sessions: &GormSessionRepository{DB: db, Hooks: o.sessionHooks, Refs: o.references, ListOverrides: o.sessionOverrides},
+	}, o.references)
+}
+
+// guard wraps every repository in repos so its writes keep reference
+// integrity through refs: Create and Update resolve the external references
+// they set (repox.References.Resolve) before anything is written, and Delete
+// consults the record's referrers (repox.References.CheckDelete) and
+// publishes the NOTIFY event after it. Purge's checks sit in the adapters,
+// which keep a still-referenced row row by row. With no refs it returns repos
+// unchanged.
+//
+// It sits over the whole interface, like observe, so the GORM and GraphQL
+// adapters enforce the same contract above their backends.
+func guard(repos Repositories, refs *repox.References) Repositories {
+	if refs == nil {
+		return repos
+	}
 	return Repositories{
-		Sessions: &GormSessionRepository{DB: db, Hooks: o.sessionHooks, ListOverrides: o.sessionOverrides},
+		Sessions: &guardedSessionRepository{SessionRepository: repos.Sessions, refs: refs},
 	}
 }
 
@@ -234,44 +286,59 @@ func (o *observedSessionRepository) UpdateOutputOnly(ctx context.Context, m *dtz
 	return out, err
 }
 
+func (o *observedSessionRepository) UpdateWithOutputOnly(ctx context.Context, m *dtzv1.Session, paths, outputPaths []string) (*dtzv1.Session, error) {
+	out, err := o.SessionRepository.UpdateWithOutputOnly(ctx, m, paths, outputPaths)
+	o.changes.Changed(ctx, m.GetName())
+	return out, err
+}
+
 func (o *observedSessionRepository) Delete(ctx context.Context, name string) error {
 	err := o.SessionRepository.Delete(ctx, name)
 	o.changes.Changed(ctx, name)
 	return err
 }
 
-// observedBatch reports every record a Batch queued once Commit returns --
-// whatever it returns: GraphQL applies a batch's guarded updates one by one
-// before the rest, so a Commit that failed may still have written some.
-type observedBatch struct {
-	Batch
-	changes repox.ChangeObserver
-	names   []string
+// guardedSessionRepository keeps Session's references whole; see guard.
+type guardedSessionRepository struct {
+	SessionRepository
+	refs *repox.References
 }
 
-func (o *observedBatch) Commit(ctx context.Context) error {
-	err := o.Batch.Commit(ctx)
-	for _, name := range o.names {
-		o.changes.Changed(ctx, name)
+func (g *guardedSessionRepository) Delete(ctx context.Context, name string) error {
+	check, err := g.refs.CheckDelete(ctx, "dtz.v1/Session", name)
+	if err != nil {
+		return err
 	}
-	o.names = nil
-	return err
-}
-
-func (o *observedBatch) CreateSession(m *dtzv1.Session) (string, error) {
-	name, err := o.Batch.CreateSession(m)
-	if err == nil {
-		o.names = append(o.names, name)
+	if err := g.SessionRepository.Delete(ctx, name); err != nil {
+		return err
 	}
-	return name, err
+	check.Done(ctx, true)
+	return nil
 }
 
-func (o *observedBatch) UpdateSessionOutputOnly(m *dtzv1.Session, paths []string) {
-	o.Batch.UpdateSessionOutputOnly(m, paths)
-	o.names = append(o.names, m.GetName())
+// resolveSessionReferences proves, through refs, that every external
+// reference m sets within paths (all of them for an empty mask) names a
+// resource that exists.
+func resolveSessionReferences(ctx context.Context, refs *repox.References, m *dtzv1.Session, paths []string) error {
+	return nil
 }
 
-func (o *observedBatch) DeleteSession(name string) {
-	o.Batch.DeleteSession(name)
-	o.names = append(o.names, name)
+// queueSessionReferences makes u resolve m's external references within
+// paths before it commits, as guard does for the repositories.
+func queueSessionReferences(u *repox.Unit, m *dtzv1.Session, paths []string) {
+}
+
+// queueSessionDelete makes u consult name's referrers before it commits
+// and publish the NOTIFY event after, as guard does for Delete.
+func queueSessionDelete(u *repox.Unit, name string, purged bool) {
+	refs := u.Conn().References
+	if refs == nil {
+		return
+	}
+	var check *repox.DeleteCheck
+	u.Before(func(ctx context.Context) (err error) {
+		check, err = refs.CheckDelete(ctx, "dtz.v1/Session", name)
+		return err
+	})
+	u.After(func(ctx context.Context) { check.Done(ctx, purged) })
 }

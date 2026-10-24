@@ -41,6 +41,13 @@ CREATE TABLE IF NOT EXISTS {{.Ref}} (
 -- key may cover overlapping time.
 {{range .Constraints}}{{.}}
 {{end}}{{- end}}
+{{- if .External}}
+-- Foreign keys into tables of other databases on this server (or found only
+-- by resource type). Constraint only: added NOT VALID when missing and when
+-- the target table exists, so this file applies in any order with theirs.
+-- validate.sql checks the rows that predate them.
+{{range .External}}{{.}}
+{{end}}{{- end}}
 {{- if .Comments}}
 -- Documentation
 {{range .Comments}}{{.}}

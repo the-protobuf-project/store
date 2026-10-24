@@ -218,6 +218,13 @@ func organisationToUpdatePatch(merged *orgv1.Organisation) organisationsql.Updat
 // a patch, for UpdateOutputOnly: every other column is left as it is.
 func organisationToOutputPatch(merged *orgv1.Organisation, paths []string) organisationsql.UpdateInput {
 	var patch organisationsql.UpdateInput
+	organisationAddOutputPatch(&patch, merged, paths)
+	return patch
+}
+
+// organisationAddOutputPatch sets the server-owned fields paths names on
+// patch, for UpdateWithOutputOnly: an update patch carrying them too.
+func organisationAddOutputPatch(patch *organisationsql.UpdateInput, merged *orgv1.Organisation, paths []string) {
 	if repox.InMask(paths, "state") {
 		if v := strings.TrimPrefix(merged.GetState().String(), "ORG_STATE_"); v != "UNSPECIFIED" {
 			patch.State = graphql.Value(v)
@@ -225,7 +232,6 @@ func organisationToOutputPatch(merged *orgv1.Organisation, paths []string) organ
 			patch.State = graphql.Null[string]()
 		}
 	}
-	return patch
 }
 
 // organisationFromRow re-hydrates the proto from a client row, decorating

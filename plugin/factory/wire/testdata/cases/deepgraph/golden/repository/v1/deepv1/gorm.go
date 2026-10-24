@@ -17,6 +17,7 @@ package deepv1
 
 import (
 	"context"
+	"errors"
 	deepv1 "example.com/test/gen"
 	"example.com/test/gen/repox"
 	"example.com/test/gormdb/filterx"
@@ -37,6 +38,9 @@ import (
 type GormAgendaRepository struct {
 	DB    *gorm.DB
 	Hooks AgendaHooks
+	// Refs, when set, is asked before a purge whether anything in another
+	// database or service still refers to the record (see Purge).
+	Refs *repox.References
 	// ListOverrides substitute the generated dispatch for single filter fields
 	// (e.g. a derived state computed via subqueries).
 	ListOverrides map[string]filterx.SQLHandler
@@ -68,54 +72,7 @@ func (r *GormAgendaRepository) Create(ctx context.Context, in *deepv1.Agenda) (*
 	m.ID = id
 	m.Name = in.GetName()
 	m.Etag = repox.Ptr(repox.NewULID())
-	if err := r.DB.Transaction(func(tx *gorm.DB) error {
-		if v1 := in.GetZone(); v1 != nil {
-			if v1.GetId() != "" {
-				n2 := deepv1gorm.ZoneFromProto(v1)
-				n2.ID = v1.GetId()
-				if err := tx.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(n2).Error; err != nil {
-					return err
-				}
-				m.ZoneID = repox.Ptr(n2.ID)
-			}
-		}
-		if err := deepv1gorm.NewAgendaStore(tx).Create(ctx, m); err != nil {
-			return err
-		}
-		for _, v4 := range in.GetSlots() {
-			n5 := deepv1gorm.SlotFromProto(v4)
-			n5.ID = repox.NewULID()
-			n5.AgendaID = id
-			if v6 := v4.GetStart(); v6 != nil {
-				n7 := deepv1gorm.MomentFromProto(v6)
-				n7.ID = repox.NewULID()
-				if err := tx.WithContext(ctx).Omit(clause.Associations).Create(n7).Error; err != nil {
-					return err
-				}
-				n5.StartID = n7.ID
-			}
-			if v8 := v4.GetEnd(); v8 != nil {
-				n9 := deepv1gorm.MomentFromProto(v8)
-				n9.ID = repox.NewULID()
-				if err := tx.WithContext(ctx).Omit(clause.Associations).Create(n9).Error; err != nil {
-					return err
-				}
-				n5.EndID = repox.Ptr(n9.ID)
-			}
-			if err := tx.WithContext(ctx).Omit(clause.Associations).Create(n5).Error; err != nil {
-				return err
-			}
-		}
-		for _, v14 := range in.GetNotes() {
-			n15 := deepv1gorm.NoteFromProto(v14)
-			n15.ID = repox.NewULID()
-			n15.AgendaID = id
-			if err := tx.WithContext(ctx).Omit(clause.Associations).Create(n15).Error; err != nil {
-				return err
-			}
-		}
-		return nil
-	}); err != nil {
+	if err := r.DB.Transaction(func(tx *gorm.DB) error { return r.insertTx(ctx, tx, in, m) }); err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	return r.get(ctx, id)
@@ -170,7 +127,10 @@ func (r *GormAgendaRepository) list(ctx context.Context, scope *gorm.DB, in repo
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)
 	}
-	rows, next, err := eng.List(ctx, scope.Preload("Zone").Preload("Slots", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).Preload("Slots.Start").Preload("Slots.End").Preload("Notes", func(db *gorm.DB) *gorm.DB { return db.Order("id") }), filterx.ListInput{
+	if err := repox.CheckReadMask((*deepv1.Agenda)(nil), in.ReadMask); err != nil {
+		return nil, "", err
+	}
+	rows, next, err := eng.List(ctx, r.reads(scope, in), filterx.ListInput{
 		PageSize:  in.PageSize,
 		PageToken: in.PageToken,
 		OrderBy:   in.OrderBy,
@@ -185,9 +145,39 @@ func (r *GormAgendaRepository) list(ctx context.Context, scope *gorm.DB, in repo
 		if err != nil {
 			return nil, "", err
 		}
+		repox.Narrow(out, in.ReadMask)
 		items = append(items, out)
 	}
 	return items, next, nil
+}
+
+// reads is the query a List reads rows through: every column and value object
+// without a read mask; with one, only the columns and value objects of the
+// fields it names, and the columns the page is sorted by.
+func (r *GormAgendaRepository) reads(db *gorm.DB, in repox.ListInput) *gorm.DB {
+	if len(in.ReadMask) == 0 {
+		return db.Preload("Zone").Preload("Slots", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).Preload("Slots.Start").Preload("Slots.End").Preload("Notes", func(db *gorm.DB) *gorm.DB { return db.Order("id") })
+	}
+	if omit := repox.Unread(agendaColumns, in.ReadMask, repox.OrderColumns(deepv1gorm.AgendaFilterSpec, in.OrderBy)...); len(omit) > 0 {
+		db = db.Omit(omit...)
+	}
+	if repox.Reads(in.ReadMask, "zone") {
+		db = db.Preload("Zone")
+	}
+	if repox.Reads(in.ReadMask, "slots") {
+		db = db.Preload("Slots", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).Preload("Slots.Start").Preload("Slots.End")
+	}
+	if repox.Reads(in.ReadMask, "notes") {
+		db = db.Preload("Notes", func(db *gorm.DB) *gorm.DB { return db.Order("id") })
+	}
+	return db
+}
+
+// agendaColumns are the row's columns by the field each stores, for
+// a read mask to leave out.
+var agendaColumns = map[string][]string{
+	"etag":        {"etag"},
+	"delete_time": {"delete_time"},
 }
 
 // Update persists the masked fields of in; an empty mask replaces every
@@ -198,118 +188,198 @@ func (r *GormAgendaRepository) Update(ctx context.Context, in *deepv1.Agenda, pa
 		return nil, err
 	}
 	id := ids[len(ids)-1]
-	err = r.DB.Transaction(func(tx *gorm.DB) error {
-		var existing deepv1gorm.Agenda
-		if err := tx.WithContext(ctx).Preload("Zone").Preload("Slots", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).Preload("Slots.Start").Preload("Slots.End").Preload("Notes", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).First(&existing, "id = ?", id).Error; err != nil {
-			return err
-		}
-		var staleZone *deepv1gorm.Zone
-		var staleSlots []deepv1gorm.Slot
-		var staleNotes []deepv1gorm.Note
-		if in.GetEtag() != "" && existing.Etag != nil && *existing.Etag != in.GetEtag() {
-			return repox.ErrConflict
-		}
-		existingPB := deepv1gorm.AgendaToProto(&existing)
-		merged := proto.Clone(existingPB).(*deepv1.Agenda)
-		applyAgendaMask(merged, in, paths)
-		if h := r.Hooks.BeforeUpdate; h != nil {
-			if err := h(ctx, existingPB, merged, paths); err != nil {
-				return err
-			}
-		}
-		next := deepv1gorm.AgendaFromProto(merged)
-		_ = next
-		existing.Name = next.Name
-		if repox.GroupTouched(paths, "zone") {
-			staleZone = existing.Zone
-			existing.ZoneID = nil
-			if v19 := merged.GetZone(); v19 != nil {
-				if v19.GetId() != "" {
-					n20 := deepv1gorm.ZoneFromProto(v19)
-					n20.ID = v19.GetId()
-					if err := tx.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(n20).Error; err != nil {
-						return err
-					}
-					existing.ZoneID = repox.Ptr(n20.ID)
-				}
-			}
-		}
-		if repox.GroupTouched(paths, "slots") {
-			staleSlots = existing.Slots
-			for _, v25 := range merged.GetSlots() {
-				n26 := deepv1gorm.SlotFromProto(v25)
-				n26.ID = repox.NewULID()
-				n26.AgendaID = id
-				if v27 := v25.GetStart(); v27 != nil {
-					n28 := deepv1gorm.MomentFromProto(v27)
-					n28.ID = repox.NewULID()
-					if err := tx.WithContext(ctx).Omit(clause.Associations).Create(n28).Error; err != nil {
-						return err
-					}
-					n26.StartID = n28.ID
-				}
-				if v29 := v25.GetEnd(); v29 != nil {
-					n30 := deepv1gorm.MomentFromProto(v29)
-					n30.ID = repox.NewULID()
-					if err := tx.WithContext(ctx).Omit(clause.Associations).Create(n30).Error; err != nil {
-						return err
-					}
-					n26.EndID = repox.Ptr(n30.ID)
-				}
-				if err := tx.WithContext(ctx).Omit(clause.Associations).Create(n26).Error; err != nil {
-					return err
-				}
-			}
-		}
-		if repox.GroupTouched(paths, "notes") {
-			staleNotes = existing.Notes
-			for _, v33 := range merged.GetNotes() {
-				n34 := deepv1gorm.NoteFromProto(v33)
-				n34.ID = repox.NewULID()
-				n34.AgendaID = id
-				if err := tx.WithContext(ctx).Omit(clause.Associations).Create(n34).Error; err != nil {
-					return err
-				}
-			}
-		}
-		existing.Zone = nil
-		existing.Slots = nil
-		existing.Notes = nil
-		existing.Etag = repox.Ptr(repox.NewULID())
-		if err := deepv1gorm.NewAgendaStore(tx).Update(ctx, &existing); err != nil {
-			return err
-		}
-		if d18 := staleZone; d18 != nil {
-			_ = d18
-		}
-		for i21 := range staleSlots {
-			d22 := &staleSlots[i21]
-			if err := tx.WithContext(ctx).Delete(&deepv1gorm.Slot{}, "id = ?", d22.ID).Error; err != nil {
-				return err
-			}
-			if d23 := d22.Start; d23 != nil {
-				if err := tx.WithContext(ctx).Delete(&deepv1gorm.Moment{}, "id = ?", d23.ID).Error; err != nil {
-					return err
-				}
-			}
-			if d24 := d22.End; d24 != nil {
-				if err := tx.WithContext(ctx).Delete(&deepv1gorm.Moment{}, "id = ?", d24.ID).Error; err != nil {
-					return err
-				}
-			}
-		}
-		for i31 := range staleNotes {
-			d32 := &staleNotes[i31]
-			if err := tx.WithContext(ctx).Delete(&deepv1gorm.Note{}, "id = ?", d32.ID).Error; err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, id, in, paths, nil) })
 	if err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	return r.get(ctx, id)
+}
+
+// updateTx is Update's write inside tx, which a Batch shares with other
+// writes. The row is read FOR UPDATE: a concurrent update of the same record
+// waits for this transaction and then sees the etag it wrote, so two writers
+// holding the same etag cannot both pass the guard. outputPaths names the
+// server-owned fields written alongside (UpdateWithOutputOnly); nil for Update.
+func (r *GormAgendaRepository) updateTx(ctx context.Context, tx *gorm.DB, id string, in *deepv1.Agenda, paths, outputPaths []string) error {
+	var existing deepv1gorm.Agenda
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Zone").Preload("Slots", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).Preload("Slots.Start").Preload("Slots.End").Preload("Notes", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).First(&existing, "id = ?", id).Error; err != nil {
+		return err
+	}
+	var staleZone *deepv1gorm.Zone
+	var staleSlots []deepv1gorm.Slot
+	var staleNotes []deepv1gorm.Note
+	if in.GetEtag() != "" && existing.Etag != nil && *existing.Etag != in.GetEtag() {
+		return repox.ErrConflict
+	}
+	existingPB := deepv1gorm.AgendaToProto(&existing)
+	merged := proto.Clone(existingPB).(*deepv1.Agenda)
+	applyAgendaMask(merged, in, paths)
+	if h := r.Hooks.BeforeUpdate; h != nil {
+		if err := h(ctx, existingPB, merged, paths); err != nil {
+			return err
+		}
+	}
+	next := deepv1gorm.AgendaFromProto(merged)
+	_ = next
+	existing.Name = next.Name
+	if repox.GroupTouched(paths, "zone") {
+		staleZone = existing.Zone
+		existing.ZoneID = nil
+		if v19 := merged.GetZone(); v19 != nil {
+			if v19.GetId() != "" {
+				n20 := deepv1gorm.ZoneFromProto(v19)
+				n20.ID = v19.GetId()
+				if err := tx.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(n20).Error; err != nil {
+					return err
+				}
+				existing.ZoneID = repox.Ptr(n20.ID)
+			}
+		}
+	}
+	if repox.GroupTouched(paths, "slots") {
+		staleSlots = existing.Slots
+		for _, v25 := range merged.GetSlots() {
+			n26 := deepv1gorm.SlotFromProto(v25)
+			n26.ID = repox.NewULID()
+			n26.AgendaID = id
+			if v27 := v25.GetStart(); v27 != nil {
+				n28 := deepv1gorm.MomentFromProto(v27)
+				n28.ID = repox.NewULID()
+				if err := tx.WithContext(ctx).Omit(clause.Associations).Create(n28).Error; err != nil {
+					return err
+				}
+				n26.StartID = n28.ID
+			}
+			if v29 := v25.GetEnd(); v29 != nil {
+				n30 := deepv1gorm.MomentFromProto(v29)
+				n30.ID = repox.NewULID()
+				if err := tx.WithContext(ctx).Omit(clause.Associations).Create(n30).Error; err != nil {
+					return err
+				}
+				n26.EndID = repox.Ptr(n30.ID)
+			}
+			if err := tx.WithContext(ctx).Omit(clause.Associations).Create(n26).Error; err != nil {
+				return err
+			}
+		}
+	}
+	if repox.GroupTouched(paths, "notes") {
+		staleNotes = existing.Notes
+		for _, v33 := range merged.GetNotes() {
+			n34 := deepv1gorm.NoteFromProto(v33)
+			n34.ID = repox.NewULID()
+			n34.AgendaID = id
+			if err := tx.WithContext(ctx).Omit(clause.Associations).Create(n34).Error; err != nil {
+				return err
+			}
+		}
+	}
+	existing.Zone = nil
+	existing.Slots = nil
+	existing.Notes = nil
+	existing.Etag = repox.Ptr(repox.NewULID())
+	if err := deepv1gorm.NewAgendaStore(tx).Update(ctx, &existing); err != nil {
+		return err
+	}
+	if d18 := staleZone; d18 != nil {
+		_ = d18
+	}
+	for i21 := range staleSlots {
+		d22 := &staleSlots[i21]
+		if err := tx.WithContext(ctx).Delete(&deepv1gorm.Slot{}, "id = ?", d22.ID).Error; err != nil {
+			return err
+		}
+		if d23 := d22.Start; d23 != nil {
+			if err := tx.WithContext(ctx).Delete(&deepv1gorm.Moment{}, "id = ?", d23.ID).Error; err != nil {
+				return err
+			}
+		}
+		if d24 := d22.End; d24 != nil {
+			if err := tx.WithContext(ctx).Delete(&deepv1gorm.Moment{}, "id = ?", d24.ID).Error; err != nil {
+				return err
+			}
+		}
+	}
+	for i31 := range staleNotes {
+		d32 := &staleNotes[i31]
+		if err := tx.WithContext(ctx).Delete(&deepv1gorm.Note{}, "id = ?", d32.ID).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// newRow builds the row a Batch inserts for in, and the
+// record it stands for, named: the same resolution Create applies.
+func (r *GormAgendaRepository) newRow(in *deepv1.Agenda) (*deepv1gorm.Agenda, *deepv1.Agenda, error) {
+	id := repox.NewULID()
+	if in.GetName() != "" {
+		ids, err := repox.SplitName(in.GetName(), "agendas")
+		if err != nil {
+			return nil, nil, err
+		}
+		id = ids[len(ids)-1]
+	}
+	in = proto.Clone(in).(*deepv1.Agenda)
+	in.Name = FormatAgendaName(id)
+	m := deepv1gorm.AgendaFromProto(in)
+	m.ID = id
+	m.Name = in.GetName()
+	m.Etag = repox.Ptr(repox.NewULID())
+	return m, in, nil
+}
+
+// insertTx writes m inside tx with the value-object rows in carries: those
+// it points at first, then m, then its children.
+func (r *GormAgendaRepository) insertTx(ctx context.Context, tx *gorm.DB, in *deepv1.Agenda, m *deepv1gorm.Agenda) error {
+	id := m.ID
+	_ = id
+	if v1 := in.GetZone(); v1 != nil {
+		if v1.GetId() != "" {
+			n2 := deepv1gorm.ZoneFromProto(v1)
+			n2.ID = v1.GetId()
+			if err := tx.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(n2).Error; err != nil {
+				return err
+			}
+			m.ZoneID = repox.Ptr(n2.ID)
+		}
+	}
+	if err := deepv1gorm.NewAgendaStore(tx).Create(ctx, m); err != nil {
+		return err
+	}
+	for _, v4 := range in.GetSlots() {
+		n5 := deepv1gorm.SlotFromProto(v4)
+		n5.ID = repox.NewULID()
+		n5.AgendaID = id
+		if v6 := v4.GetStart(); v6 != nil {
+			n7 := deepv1gorm.MomentFromProto(v6)
+			n7.ID = repox.NewULID()
+			if err := tx.WithContext(ctx).Omit(clause.Associations).Create(n7).Error; err != nil {
+				return err
+			}
+			n5.StartID = n7.ID
+		}
+		if v8 := v4.GetEnd(); v8 != nil {
+			n9 := deepv1gorm.MomentFromProto(v8)
+			n9.ID = repox.NewULID()
+			if err := tx.WithContext(ctx).Omit(clause.Associations).Create(n9).Error; err != nil {
+				return err
+			}
+			n5.EndID = repox.Ptr(n9.ID)
+		}
+		if err := tx.WithContext(ctx).Omit(clause.Associations).Create(n5).Error; err != nil {
+			return err
+		}
+	}
+	for _, v14 := range in.GetNotes() {
+		n15 := deepv1gorm.NoteFromProto(v14)
+		n15.ID = repox.NewULID()
+		n15.AgendaID = id
+		if err := tx.WithContext(ctx).Omit(clause.Associations).Create(n15).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Delete soft-deletes the record addressed by its resource name: delete_time
@@ -324,10 +394,7 @@ func (r *GormAgendaRepository) Delete(ctx context.Context, name string) error {
 			return err
 		}
 	}
-	now := time.Now()
-	res := r.DB.WithContext(ctx).Model(&deepv1gorm.Agenda{}).
-		Where("id = ? AND delete_time IS NULL", ids[len(ids)-1]).
-		Updates(map[string]any{"delete_time": now, "etag": repox.NewULID()})
+	res := r.markDeleted(ctx, r.DB, ids[len(ids)-1])
 	if res.Error != nil {
 		return repox.MapGormErr(res.Error)
 	}
@@ -335,6 +402,15 @@ func (r *GormAgendaRepository) Delete(ctx context.Context, name string) error {
 		return repox.ErrNotFound
 	}
 	return nil
+}
+
+// markDeleted sets the soft-delete mark on the live row id through db: Delete's
+// write, which a Batch runs inside its transaction.
+func (r *GormAgendaRepository) markDeleted(ctx context.Context, db *gorm.DB, id string) *gorm.DB {
+	now := time.Now()
+	return db.WithContext(ctx).Model(&deepv1gorm.Agenda{}).
+		Where("id = ? AND delete_time IS NULL", id).
+		Updates(map[string]any{"delete_time": now, "etag": repox.NewULID()})
 }
 
 // Undelete clears the soft-delete mark and returns the restored record.
@@ -371,42 +447,82 @@ func (r *GormAgendaRepository) Purge(ctx context.Context, name string) error {
 		}
 	}
 	id := ids[len(ids)-1]
+	_, err = r.purge(ctx, r.DB, id, name, true)
+	return repox.MapGormErr(err)
+}
+
+// purgeTx removes row id inside tx, with the value-object rows it owns;
+// gorm.ErrRecordNotFound when there is no such row.
+func (r *GormAgendaRepository) purgeTx(ctx context.Context, tx *gorm.DB, id string) error {
 	var existing deepv1gorm.Agenda
-	if err := r.DB.WithContext(ctx).Preload("Zone").Preload("Slots", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).Preload("Slots.Start").Preload("Slots.End").Preload("Notes", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).First(&existing, "id = ?", id).Error; err != nil {
-		return repox.MapGormErr(err)
+	if err := tx.WithContext(ctx).Preload("Zone").Preload("Slots", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).Preload("Slots.Start").Preload("Slots.End").Preload("Notes", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).First(&existing, "id = ?", id).Error; err != nil {
+		return err
 	}
-	return repox.MapGormErr(r.DB.Transaction(func(tx *gorm.DB) error {
-		if err := deepv1gorm.NewAgendaStore(tx).DeleteByID(ctx, id); err != nil {
+	if err := deepv1gorm.NewAgendaStore(tx).DeleteByID(ctx, id); err != nil {
+		return err
+	}
+	if d3 := existing.Zone; d3 != nil {
+		_ = d3
+	}
+	for i10 := range existing.Slots {
+		d11 := &existing.Slots[i10]
+		if err := tx.WithContext(ctx).Delete(&deepv1gorm.Slot{}, "id = ?", d11.ID).Error; err != nil {
 			return err
 		}
-		if d3 := existing.Zone; d3 != nil {
-			_ = d3
-		}
-		for i10 := range existing.Slots {
-			d11 := &existing.Slots[i10]
-			if err := tx.WithContext(ctx).Delete(&deepv1gorm.Slot{}, "id = ?", d11.ID).Error; err != nil {
-				return err
-			}
-			if d12 := d11.Start; d12 != nil {
-				if err := tx.WithContext(ctx).Delete(&deepv1gorm.Moment{}, "id = ?", d12.ID).Error; err != nil {
-					return err
-				}
-			}
-			if d13 := d11.End; d13 != nil {
-				if err := tx.WithContext(ctx).Delete(&deepv1gorm.Moment{}, "id = ?", d13.ID).Error; err != nil {
-					return err
-				}
-			}
-		}
-		for i16 := range existing.Notes {
-			d17 := &existing.Notes[i16]
-			if err := tx.WithContext(ctx).Delete(&deepv1gorm.Note{}, "id = ?", d17.ID).Error; err != nil {
+		if d12 := d11.Start; d12 != nil {
+			if err := tx.WithContext(ctx).Delete(&deepv1gorm.Moment{}, "id = ?", d12.ID).Error; err != nil {
 				return err
 			}
 		}
-		return nil
-	}))
+		if d13 := d11.End; d13 != nil {
+			if err := tx.WithContext(ctx).Delete(&deepv1gorm.Moment{}, "id = ?", d13.ID).Error; err != nil {
+				return err
+			}
+		}
+	}
+	for i16 := range existing.Notes {
+		d17 := &existing.Notes[i16]
+		if err := tx.WithContext(ctx).Delete(&deepv1gorm.Note{}, "id = ?", d17.ID).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
+
+// purge removes row id, named name, for good through db -- unless something
+// still refers to it, when it keeps the row and reports kept: a row of this
+// database holding a foreign key to it (asked first, then caught again from
+// the constraint itself), or, when askReferrers, a referrer in another
+// database or service (r.Refs). A purge never fails, and never cascades,
+// because of a referrer. gorm.ErrRecordNotFound when there is no such row.
+func (r *GormAgendaRepository) purge(ctx context.Context, db *gorm.DB, id, name string, askReferrers bool) (kept bool, err error) {
+	var referenced bool
+	if err := db.WithContext(ctx).Raw(agendaReferencedSQL, id).Scan(&referenced).Error; err != nil {
+		return false, err
+	}
+	if referenced {
+		r.Refs.Kept(ctx, name, "foreign key")
+		return true, nil
+	}
+	if askReferrers && r.Refs.KeepOnPurge(ctx, "deep.v1/Agenda", name) {
+		return true, nil
+	}
+	// A savepoint inside a caller's transaction: a foreign key the query
+	// above does not know (one from another generator run) rolls back only
+	// this purge.
+	err = db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return r.purgeTx(ctx, tx, id)
+	})
+	if repox.IsForeignKeyViolation(err) {
+		r.Refs.Kept(ctx, name, "foreign key")
+		return true, nil
+	}
+	return false, err
+}
+
+// agendaReferencedSQL asks whether any row, deleted or not, still
+// holds a foreign key to the Agenda row with the given id.
+const agendaReferencedSQL = `SELECT EXISTS (SELECT 1 FROM "deep_v1"."meetings" r0 WHERE r0."agenda_id" = t."id") FROM "deep_v1"."agendas" t WHERE t."id" = ?`
 
 // Compile-time proof the adapter satisfies the interface.
 var _ AgendaRepository = (*GormAgendaRepository)(nil)
@@ -420,6 +536,9 @@ var _ AgendaRepository = (*GormAgendaRepository)(nil)
 type GormMeetingRepository struct {
 	DB    *gorm.DB
 	Hooks MeetingHooks
+	// Refs, when set, is asked before a purge whether anything in another
+	// database or service still refers to the record (see Purge).
+	Refs *repox.References
 	// ListOverrides substitute the generated dispatch for single filter fields
 	// (e.g. a derived state computed via subqueries).
 	ListOverrides map[string]filterx.SQLHandler
@@ -461,53 +580,7 @@ func (r *GormMeetingRepository) Create(ctx context.Context, parent string, in *d
 	m.Name = in.GetName()
 	m.AgendaID = parentIDs[0]
 	m.Etag = repox.Ptr(repox.NewULID())
-	if err := r.DB.Transaction(func(tx *gorm.DB) error {
-		if v := in.GetStart(); v != nil {
-			vo := deepv1gorm.MomentFromProto(v)
-			vo.ID = repox.NewULID()
-			if err := tx.WithContext(ctx).Create(vo).Error; err != nil {
-				return err
-			}
-			m.StartID = vo.ID
-		}
-		if v := in.GetEnd(); v != nil {
-			vo := deepv1gorm.MomentFromProto(v)
-			vo.ID = repox.NewULID()
-			if err := tx.WithContext(ctx).Create(vo).Error; err != nil {
-				return err
-			}
-			m.EndID = repox.Ptr(vo.ID)
-			c := deepv1gorm.MeetingEndsCaseEnd
-			m.EndsCase = &c
-		}
-		if v1 := in.GetRule(); v1 != nil {
-			n2 := deepv1gorm.RuleFromProto(v1)
-			n2.ID = repox.NewULID()
-			if v3 := v1.GetUntil(); v3 != nil {
-				n4 := deepv1gorm.MomentFromProto(v3)
-				n4.ID = repox.NewULID()
-				if err := tx.WithContext(ctx).Omit(clause.Associations).Create(n4).Error; err != nil {
-					return err
-				}
-				n2.UntilID = repox.Ptr(n4.ID)
-				c := deepv1gorm.RuleBoundCaseUntil
-				n2.BoundCase = &c
-			}
-			if err := tx.WithContext(ctx).Omit(clause.Associations).Create(n2).Error; err != nil {
-				return err
-			}
-			for _, v5 := range v1.GetDays() {
-				n6 := deepv1gorm.DayFromProto(v5)
-				n6.ID = repox.NewULID()
-				n6.RuleID = n2.ID
-				if err := tx.WithContext(ctx).Omit(clause.Associations).Create(n6).Error; err != nil {
-					return err
-				}
-			}
-			m.RuleID = repox.Ptr(n2.ID)
-		}
-		return deepv1gorm.NewMeetingStore(tx).Create(ctx, m)
-	}); err != nil {
+	if err := r.DB.Transaction(func(tx *gorm.DB) error { return r.insertTx(ctx, tx, in, m) }); err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	return r.get(ctx, id)
@@ -569,7 +642,10 @@ func (r *GormMeetingRepository) list(ctx context.Context, scope *gorm.DB, in rep
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)
 	}
-	rows, next, err := eng.List(ctx, scope.Preload("Start").Preload("End").Preload("Rule").Preload("Rule.Until").Preload("Rule.Days", func(db *gorm.DB) *gorm.DB { return db.Order("id") }), filterx.ListInput{
+	if err := repox.CheckReadMask((*deepv1.Meeting)(nil), in.ReadMask); err != nil {
+		return nil, "", err
+	}
+	rows, next, err := eng.List(ctx, r.reads(scope, in), filterx.ListInput{
 		PageSize:  in.PageSize,
 		PageToken: in.PageToken,
 		OrderBy:   in.OrderBy,
@@ -584,9 +660,39 @@ func (r *GormMeetingRepository) list(ctx context.Context, scope *gorm.DB, in rep
 		if err != nil {
 			return nil, "", err
 		}
+		repox.Narrow(out, in.ReadMask)
 		items = append(items, out)
 	}
 	return items, next, nil
+}
+
+// reads is the query a List reads rows through: every column and value object
+// without a read mask; with one, only the columns and value objects of the
+// fields it names, and the columns the page is sorted by.
+func (r *GormMeetingRepository) reads(db *gorm.DB, in repox.ListInput) *gorm.DB {
+	if len(in.ReadMask) == 0 {
+		return db.Preload("Start").Preload("End").Preload("Rule").Preload("Rule.Until").Preload("Rule.Days", func(db *gorm.DB) *gorm.DB { return db.Order("id") })
+	}
+	if omit := repox.Unread(meetingColumns, in.ReadMask, repox.OrderColumns(deepv1gorm.MeetingFilterSpec, in.OrderBy)...); len(omit) > 0 {
+		db = db.Omit(omit...)
+	}
+	if repox.Reads(in.ReadMask, "start") {
+		db = db.Preload("Start")
+	}
+	if repox.Reads(in.ReadMask, "end") {
+		db = db.Preload("End")
+	}
+	if repox.Reads(in.ReadMask, "rule") {
+		db = db.Preload("Rule").Preload("Rule.Until").Preload("Rule.Days", func(db *gorm.DB) *gorm.DB { return db.Order("id") })
+	}
+	return db
+}
+
+// meetingColumns are the row's columns by the field each stores, for
+// a read mask to leave out.
+var meetingColumns = map[string][]string{
+	"duration": {"duration"},
+	"etag":     {"etag"},
 }
 
 // Update persists the masked fields of in; an empty mask replaces every
@@ -597,124 +703,216 @@ func (r *GormMeetingRepository) Update(ctx context.Context, in *deepv1.Meeting, 
 		return nil, err
 	}
 	id := ids[len(ids)-1]
-	err = r.DB.Transaction(func(tx *gorm.DB) error {
-		var existing deepv1gorm.Meeting
-		if err := tx.WithContext(ctx).Preload("Start").Preload("End").Preload("Rule").Preload("Rule.Until").Preload("Rule.Days", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).First(&existing, "id = ?", id).Error; err != nil {
-			return err
-		}
-		var staleStart string
-		var staleEnd string
-		var staleRule *deepv1gorm.Rule
-		if in.GetEtag() != "" && existing.Etag != nil && *existing.Etag != in.GetEtag() {
-			return repox.ErrConflict
-		}
-		existingPB := deepv1gorm.MeetingToProto(&existing)
-		merged := proto.Clone(existingPB).(*deepv1.Meeting)
-		applyMeetingMask(merged, in, paths)
-		if h := r.Hooks.BeforeUpdate; h != nil {
-			if err := h(ctx, existingPB, merged, paths); err != nil {
-				return err
-			}
-		}
-		next := deepv1gorm.MeetingFromProto(merged)
-		_ = next
-		existing.Name = next.Name
-		existing.Duration = next.Duration
-		existing.EndsCase = next.EndsCase
-		if repox.GroupTouched(paths, "start") {
-			staleStart = existing.StartID
-			if v := merged.GetStart(); v != nil {
-				vo := deepv1gorm.MomentFromProto(v)
-				vo.ID = repox.NewULID()
-				if err := tx.WithContext(ctx).Create(vo).Error; err != nil {
-					return err
-				}
-				existing.StartID = vo.ID
-			}
-		}
-		if repox.GroupTouched(paths, "end") || repox.GroupTouched(paths, "duration") {
-			if existing.EndID != nil {
-				staleEnd = *existing.EndID
-			}
-			existing.EndID = nil
-			if v := merged.GetEnd(); v != nil {
-				vo := deepv1gorm.MomentFromProto(v)
-				vo.ID = repox.NewULID()
-				if err := tx.WithContext(ctx).Create(vo).Error; err != nil {
-					return err
-				}
-				existing.EndID = repox.Ptr(vo.ID)
-				c := deepv1gorm.MeetingEndsCaseEnd
-				existing.EndsCase = &c
-			}
-		}
-		if repox.GroupTouched(paths, "rule") {
-			staleRule = existing.Rule
-			existing.RuleID = nil
-			if v15 := merged.GetRule(); v15 != nil {
-				n16 := deepv1gorm.RuleFromProto(v15)
-				n16.ID = repox.NewULID()
-				if v17 := v15.GetUntil(); v17 != nil {
-					n18 := deepv1gorm.MomentFromProto(v17)
-					n18.ID = repox.NewULID()
-					if err := tx.WithContext(ctx).Omit(clause.Associations).Create(n18).Error; err != nil {
-						return err
-					}
-					n16.UntilID = repox.Ptr(n18.ID)
-					c := deepv1gorm.RuleBoundCaseUntil
-					n16.BoundCase = &c
-				}
-				if err := tx.WithContext(ctx).Omit(clause.Associations).Create(n16).Error; err != nil {
-					return err
-				}
-				for _, v19 := range v15.GetDays() {
-					n20 := deepv1gorm.DayFromProto(v19)
-					n20.ID = repox.NewULID()
-					n20.RuleID = n16.ID
-					if err := tx.WithContext(ctx).Omit(clause.Associations).Create(n20).Error; err != nil {
-						return err
-					}
-				}
-				existing.RuleID = repox.Ptr(n16.ID)
-			}
-		}
-		existing.Rule = nil
-		existing.Etag = repox.Ptr(repox.NewULID())
-		if err := deepv1gorm.NewMeetingStore(tx).Update(ctx, &existing); err != nil {
-			return err
-		}
-		if staleStart != "" {
-			if err := tx.WithContext(ctx).Delete(&deepv1gorm.Moment{}, "id = ?", staleStart).Error; err != nil {
-				return err
-			}
-		}
-		if staleEnd != "" {
-			if err := tx.WithContext(ctx).Delete(&deepv1gorm.Moment{}, "id = ?", staleEnd).Error; err != nil {
-				return err
-			}
-		}
-		if d11 := staleRule; d11 != nil {
-			for i12 := range d11.Days {
-				d13 := &d11.Days[i12]
-				if err := tx.WithContext(ctx).Delete(&deepv1gorm.Day{}, "id = ?", d13.ID).Error; err != nil {
-					return err
-				}
-			}
-			if err := tx.WithContext(ctx).Delete(&deepv1gorm.Rule{}, "id = ?", d11.ID).Error; err != nil {
-				return err
-			}
-			if d14 := d11.Until; d14 != nil {
-				if err := tx.WithContext(ctx).Delete(&deepv1gorm.Moment{}, "id = ?", d14.ID).Error; err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	})
+	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, id, in, paths, nil) })
 	if err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	return r.get(ctx, id)
+}
+
+// updateTx is Update's write inside tx, which a Batch shares with other
+// writes. The row is read FOR UPDATE: a concurrent update of the same record
+// waits for this transaction and then sees the etag it wrote, so two writers
+// holding the same etag cannot both pass the guard. outputPaths names the
+// server-owned fields written alongside (UpdateWithOutputOnly); nil for Update.
+func (r *GormMeetingRepository) updateTx(ctx context.Context, tx *gorm.DB, id string, in *deepv1.Meeting, paths, outputPaths []string) error {
+	var existing deepv1gorm.Meeting
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Start").Preload("End").Preload("Rule").Preload("Rule.Until").Preload("Rule.Days", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).First(&existing, "id = ?", id).Error; err != nil {
+		return err
+	}
+	var staleStart string
+	var staleEnd string
+	var staleRule *deepv1gorm.Rule
+	if in.GetEtag() != "" && existing.Etag != nil && *existing.Etag != in.GetEtag() {
+		return repox.ErrConflict
+	}
+	existingPB := deepv1gorm.MeetingToProto(&existing)
+	merged := proto.Clone(existingPB).(*deepv1.Meeting)
+	applyMeetingMask(merged, in, paths)
+	if h := r.Hooks.BeforeUpdate; h != nil {
+		if err := h(ctx, existingPB, merged, paths); err != nil {
+			return err
+		}
+	}
+	next := deepv1gorm.MeetingFromProto(merged)
+	_ = next
+	existing.Name = next.Name
+	existing.Duration = next.Duration
+	existing.EndsCase = next.EndsCase
+	if repox.GroupTouched(paths, "start") {
+		staleStart = existing.StartID
+		if v := merged.GetStart(); v != nil {
+			vo := deepv1gorm.MomentFromProto(v)
+			vo.ID = repox.NewULID()
+			if err := tx.WithContext(ctx).Create(vo).Error; err != nil {
+				return err
+			}
+			existing.StartID = vo.ID
+		}
+	}
+	if repox.GroupTouched(paths, "end") || repox.GroupTouched(paths, "duration") {
+		if existing.EndID != nil {
+			staleEnd = *existing.EndID
+		}
+		existing.EndID = nil
+		if v := merged.GetEnd(); v != nil {
+			vo := deepv1gorm.MomentFromProto(v)
+			vo.ID = repox.NewULID()
+			if err := tx.WithContext(ctx).Create(vo).Error; err != nil {
+				return err
+			}
+			existing.EndID = repox.Ptr(vo.ID)
+			c := deepv1gorm.MeetingEndsCaseEnd
+			existing.EndsCase = &c
+		}
+	}
+	if repox.GroupTouched(paths, "rule") {
+		staleRule = existing.Rule
+		existing.RuleID = nil
+		if v15 := merged.GetRule(); v15 != nil {
+			n16 := deepv1gorm.RuleFromProto(v15)
+			n16.ID = repox.NewULID()
+			if v17 := v15.GetUntil(); v17 != nil {
+				n18 := deepv1gorm.MomentFromProto(v17)
+				n18.ID = repox.NewULID()
+				if err := tx.WithContext(ctx).Omit(clause.Associations).Create(n18).Error; err != nil {
+					return err
+				}
+				n16.UntilID = repox.Ptr(n18.ID)
+				c := deepv1gorm.RuleBoundCaseUntil
+				n16.BoundCase = &c
+			}
+			if err := tx.WithContext(ctx).Omit(clause.Associations).Create(n16).Error; err != nil {
+				return err
+			}
+			for _, v19 := range v15.GetDays() {
+				n20 := deepv1gorm.DayFromProto(v19)
+				n20.ID = repox.NewULID()
+				n20.RuleID = n16.ID
+				if err := tx.WithContext(ctx).Omit(clause.Associations).Create(n20).Error; err != nil {
+					return err
+				}
+			}
+			existing.RuleID = repox.Ptr(n16.ID)
+		}
+	}
+	existing.Rule = nil
+	existing.Etag = repox.Ptr(repox.NewULID())
+	if err := deepv1gorm.NewMeetingStore(tx).Update(ctx, &existing); err != nil {
+		return err
+	}
+	if staleStart != "" {
+		if err := tx.WithContext(ctx).Delete(&deepv1gorm.Moment{}, "id = ?", staleStart).Error; err != nil {
+			return err
+		}
+	}
+	if staleEnd != "" {
+		if err := tx.WithContext(ctx).Delete(&deepv1gorm.Moment{}, "id = ?", staleEnd).Error; err != nil {
+			return err
+		}
+	}
+	if d11 := staleRule; d11 != nil {
+		for i12 := range d11.Days {
+			d13 := &d11.Days[i12]
+			if err := tx.WithContext(ctx).Delete(&deepv1gorm.Day{}, "id = ?", d13.ID).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.WithContext(ctx).Delete(&deepv1gorm.Rule{}, "id = ?", d11.ID).Error; err != nil {
+			return err
+		}
+		if d14 := d11.Until; d14 != nil {
+			if err := tx.WithContext(ctx).Delete(&deepv1gorm.Moment{}, "id = ?", d14.ID).Error; err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// newRow builds the row a Batch inserts for in under parent, and the
+// record it stands for, named: the same resolution Create applies.
+func (r *GormMeetingRepository) newRow(parent string, in *deepv1.Meeting) (*deepv1gorm.Meeting, *deepv1.Meeting, error) {
+	parentIDs, err := repox.SplitName(parent, "agendas")
+	if err != nil {
+		return nil, nil, err
+	}
+	id := repox.NewULID()
+	if in.GetName() != "" {
+		ids, err := repox.SplitName(in.GetName(), "agendas", "meetings")
+		if err != nil {
+			return nil, nil, err
+		}
+		for i := range parentIDs {
+			if ids[i] != parentIDs[i] {
+				return nil, nil, fmt.Errorf("%w: name %q is not under parent %q", repox.ErrInvalidArgument, in.GetName(), parent)
+			}
+		}
+		id = ids[len(ids)-1]
+	}
+	in = proto.Clone(in).(*deepv1.Meeting)
+	in.Name = FormatMeetingName(parentIDs[0], id)
+	m := deepv1gorm.MeetingFromProto(in)
+	m.ID = id
+	m.Name = in.GetName()
+	m.AgendaID = parentIDs[0]
+	m.Etag = repox.Ptr(repox.NewULID())
+	return m, in, nil
+}
+
+// insertTx writes m inside tx with the value-object rows in carries: those
+// it points at first, then m, then its children.
+func (r *GormMeetingRepository) insertTx(ctx context.Context, tx *gorm.DB, in *deepv1.Meeting, m *deepv1gorm.Meeting) error {
+	id := m.ID
+	_ = id
+	if v := in.GetStart(); v != nil {
+		vo := deepv1gorm.MomentFromProto(v)
+		vo.ID = repox.NewULID()
+		if err := tx.WithContext(ctx).Create(vo).Error; err != nil {
+			return err
+		}
+		m.StartID = vo.ID
+	}
+	if v := in.GetEnd(); v != nil {
+		vo := deepv1gorm.MomentFromProto(v)
+		vo.ID = repox.NewULID()
+		if err := tx.WithContext(ctx).Create(vo).Error; err != nil {
+			return err
+		}
+		m.EndID = repox.Ptr(vo.ID)
+		c := deepv1gorm.MeetingEndsCaseEnd
+		m.EndsCase = &c
+	}
+	if v1 := in.GetRule(); v1 != nil {
+		n2 := deepv1gorm.RuleFromProto(v1)
+		n2.ID = repox.NewULID()
+		if v3 := v1.GetUntil(); v3 != nil {
+			n4 := deepv1gorm.MomentFromProto(v3)
+			n4.ID = repox.NewULID()
+			if err := tx.WithContext(ctx).Omit(clause.Associations).Create(n4).Error; err != nil {
+				return err
+			}
+			n2.UntilID = repox.Ptr(n4.ID)
+			c := deepv1gorm.RuleBoundCaseUntil
+			n2.BoundCase = &c
+		}
+		if err := tx.WithContext(ctx).Omit(clause.Associations).Create(n2).Error; err != nil {
+			return err
+		}
+		for _, v5 := range v1.GetDays() {
+			n6 := deepv1gorm.DayFromProto(v5)
+			n6.ID = repox.NewULID()
+			n6.RuleID = n2.ID
+			if err := tx.WithContext(ctx).Omit(clause.Associations).Create(n6).Error; err != nil {
+				return err
+			}
+		}
+		m.RuleID = repox.Ptr(n2.ID)
+	}
+	if err := deepv1gorm.NewMeetingStore(tx).Create(ctx, m); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Delete removes the record addressed by its resource name.
@@ -729,43 +927,189 @@ func (r *GormMeetingRepository) Delete(ctx context.Context, name string) error {
 		}
 	}
 	id := ids[len(ids)-1]
+	return repox.MapGormErr(r.DB.Transaction(func(tx *gorm.DB) error { return r.purgeTx(ctx, tx, id) }))
+}
+
+// purgeTx removes row id inside tx, with the value-object rows it owns;
+// gorm.ErrRecordNotFound when there is no such row.
+func (r *GormMeetingRepository) purgeTx(ctx context.Context, tx *gorm.DB, id string) error {
 	var existing deepv1gorm.Meeting
-	if err := r.DB.WithContext(ctx).Preload("Start").Preload("End").Preload("Rule").Preload("Rule.Until").Preload("Rule.Days", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).First(&existing, "id = ?", id).Error; err != nil {
-		return repox.MapGormErr(err)
+	if err := tx.WithContext(ctx).Preload("Start").Preload("End").Preload("Rule").Preload("Rule.Until").Preload("Rule.Days", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).First(&existing, "id = ?", id).Error; err != nil {
+		return err
 	}
-	return repox.MapGormErr(r.DB.Transaction(func(tx *gorm.DB) error {
-		if err := deepv1gorm.NewMeetingStore(tx).DeleteByID(ctx, id); err != nil {
+	if err := deepv1gorm.NewMeetingStore(tx).DeleteByID(ctx, id); err != nil {
+		return err
+	}
+	if existing.StartID != "" {
+		if err := tx.WithContext(ctx).Delete(&deepv1gorm.Moment{}, "id = ?", existing.StartID).Error; err != nil {
 			return err
 		}
-		if existing.StartID != "" {
-			if err := tx.WithContext(ctx).Delete(&deepv1gorm.Moment{}, "id = ?", existing.StartID).Error; err != nil {
+	}
+	if existing.EndID != nil {
+		if err := tx.WithContext(ctx).Delete(&deepv1gorm.Moment{}, "id = ?", *existing.EndID).Error; err != nil {
+			return err
+		}
+	}
+	if d7 := existing.Rule; d7 != nil {
+		for i8 := range d7.Days {
+			d9 := &d7.Days[i8]
+			if err := tx.WithContext(ctx).Delete(&deepv1gorm.Day{}, "id = ?", d9.ID).Error; err != nil {
 				return err
 			}
 		}
-		if existing.EndID != nil {
-			if err := tx.WithContext(ctx).Delete(&deepv1gorm.Moment{}, "id = ?", *existing.EndID).Error; err != nil {
+		if err := tx.WithContext(ctx).Delete(&deepv1gorm.Rule{}, "id = ?", d7.ID).Error; err != nil {
+			return err
+		}
+		if d10 := d7.Until; d10 != nil {
+			if err := tx.WithContext(ctx).Delete(&deepv1gorm.Moment{}, "id = ?", d10.ID).Error; err != nil {
 				return err
 			}
 		}
-		if d7 := existing.Rule; d7 != nil {
-			for i8 := range d7.Days {
-				d9 := &d7.Days[i8]
-				if err := tx.WithContext(ctx).Delete(&deepv1gorm.Day{}, "id = ?", d9.ID).Error; err != nil {
-					return err
-				}
-			}
-			if err := tx.WithContext(ctx).Delete(&deepv1gorm.Rule{}, "id = ?", d7.ID).Error; err != nil {
-				return err
-			}
-			if d10 := d7.Until; d10 != nil {
-				if err := tx.WithContext(ctx).Delete(&deepv1gorm.Moment{}, "id = ?", d10.ID).Error; err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	}))
+	}
+	return nil
 }
 
 // Compile-time proof the adapter satisfies the interface.
 var _ MeetingRepository = (*GormMeetingRepository)(nil)
+
+// gormBatch is Batch on GORM: queued writes run in the Unit's transaction on
+// Commit.
+type gormBatch struct {
+	u  *repox.Unit
+	db *gorm.DB
+}
+
+// Commit applies the Unit's writes; see repox.Unit.Commit.
+func (b *gormBatch) Commit(ctx context.Context) error { return b.u.Commit(ctx) }
+
+// CreateAgenda queues a create and returns the name the record will have.
+func (b *gormBatch) CreateAgenda(in *deepv1.Agenda) (string, error) {
+	r := &GormAgendaRepository{DB: b.db}
+	m, named, err := r.newRow(in)
+	if err != nil {
+		return "", err
+	}
+	var locks []string
+	if k, ok := any(m).(interface{ NoOverlapKeys() []string }); ok {
+		locks = k.NoOverlapKeys()
+	}
+	queueAgendaReferences(b.u, named, nil)
+	b.u.QueueGorm(locks, func(ctx context.Context, tx *gorm.DB) error {
+		return r.insertTx(ctx, tx, named, m)
+	})
+	b.u.Touch(named.GetName())
+	return named.GetName(), nil
+}
+
+// UpdateAgenda queues Update; in.Etag, when set, guards it, and a guard
+// that fails rolls the whole batch back.
+func (b *gormBatch) UpdateAgenda(in *deepv1.Agenda, paths []string) {
+	ids, err := repox.SplitName(in.GetName(), "agendas")
+	if err != nil {
+		b.u.Fail(err)
+		return
+	}
+	r := &GormAgendaRepository{DB: b.db}
+	queueAgendaReferences(b.u, in, paths)
+	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
+		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, nil)
+	})
+	b.u.Touch(in.GetName())
+}
+
+// DeleteAgenda queues a soft delete. A record already deleted or gone is
+// not an error: two batches deleting the same record must not fail each other.
+func (b *gormBatch) DeleteAgenda(name string) {
+	ids, err := repox.SplitName(name, "agendas")
+	if err != nil {
+		b.u.Fail(err)
+		return
+	}
+	r := &GormAgendaRepository{DB: b.db}
+	queueAgendaDelete(b.u, name, false)
+	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
+		return r.markDeleted(ctx, tx, ids[len(ids)-1]).Error
+	})
+	b.u.Touch(name)
+}
+
+// PurgeAgenda queues the record's removal for good. A record already
+// gone is not an error: two batches clearing the same row must not fail each
+// other.
+func (b *gormBatch) PurgeAgenda(name string) {
+	ids, err := repox.SplitName(name, "agendas")
+	if err != nil {
+		b.u.Fail(err)
+		return
+	}
+	id := ids[len(ids)-1]
+	// A record something still refers to is kept, as Purge keeps it.
+	r := &GormAgendaRepository{DB: b.db, Refs: b.u.Conn().References}
+	keep := queueAgendaPurge(b.u, name)
+	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
+		if *keep {
+			return nil
+		}
+		if _, err := r.purge(ctx, tx, id, name, false); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		return nil
+	})
+	b.u.Touch(name)
+}
+
+// CreateMeeting queues a create and returns the name the record will have.
+func (b *gormBatch) CreateMeeting(parent string, in *deepv1.Meeting) (string, error) {
+	r := &GormMeetingRepository{DB: b.db}
+	m, named, err := r.newRow(parent, in)
+	if err != nil {
+		return "", err
+	}
+	var locks []string
+	if k, ok := any(m).(interface{ NoOverlapKeys() []string }); ok {
+		locks = k.NoOverlapKeys()
+	}
+	queueMeetingReferences(b.u, named, nil)
+	b.u.QueueGorm(locks, func(ctx context.Context, tx *gorm.DB) error {
+		return r.insertTx(ctx, tx, named, m)
+	})
+	b.u.Touch(named.GetName())
+	return named.GetName(), nil
+}
+
+// UpdateMeeting queues Update; in.Etag, when set, guards it, and a guard
+// that fails rolls the whole batch back.
+func (b *gormBatch) UpdateMeeting(in *deepv1.Meeting, paths []string) {
+	ids, err := repox.SplitName(in.GetName(), "agendas", "meetings")
+	if err != nil {
+		b.u.Fail(err)
+		return
+	}
+	r := &GormMeetingRepository{DB: b.db}
+	queueMeetingReferences(b.u, in, paths)
+	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
+		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, nil)
+	})
+	b.u.Touch(in.GetName())
+}
+
+// DeleteMeeting queues the record's removal for good. A record already
+// gone is not an error: two batches clearing the same row must not fail each
+// other.
+func (b *gormBatch) DeleteMeeting(name string) {
+	ids, err := repox.SplitName(name, "agendas", "meetings")
+	if err != nil {
+		b.u.Fail(err)
+		return
+	}
+	id := ids[len(ids)-1]
+	queueMeetingDelete(b.u, name, true)
+	r := &GormMeetingRepository{DB: b.db}
+	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
+		if err := r.purgeTx(ctx, tx, id); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		return nil
+	})
+	b.u.Touch(name)
+}

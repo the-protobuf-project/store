@@ -167,6 +167,13 @@ func sessionToUpdatePatch(merged *dtzv1.Session) sessionsql.UpdateInput {
 // a patch, for UpdateOutputOnly: every other column is left as it is.
 func sessionToOutputPatch(merged *dtzv1.Session, paths []string) sessionsql.UpdateInput {
 	var patch sessionsql.UpdateInput
+	sessionAddOutputPatch(&patch, merged, paths)
+	return patch
+}
+
+// sessionAddOutputPatch sets the server-owned fields paths names on
+// patch, for UpdateWithOutputOnly: an update patch carrying them too.
+func sessionAddOutputPatch(patch *sessionsql.UpdateInput, merged *dtzv1.Session, paths []string) {
 	if repox.InMask(paths, "checked") {
 		if v := dtToStr(merged.GetChecked()); v != "" {
 			patch.Checked = graphql.Value(v)
@@ -179,7 +186,6 @@ func sessionToOutputPatch(merged *dtzv1.Session, paths []string) sessionsql.Upda
 			patch.CheckedZone = graphql.Null[string]()
 		}
 	}
-	return patch
 }
 
 // sessionFromRow re-hydrates the proto from a client row, decorating

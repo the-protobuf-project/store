@@ -3,8 +3,9 @@
 // Package repox is the shared runtime of the generated repositories: the error
 // vocabulary adapters map their backend errors onto, the connection bundle the
 // per-schema factories pick an adapter from, the list-request shape every
-// repository List takes, and the small helpers (resource-name splitting, ULID
-// minting, mask matching) the generated method bodies share.
+// repository List takes, the Unit every schema's Batch queues into, and the
+// small helpers (resource-name splitting, ULID minting, mask matching) the
+// generated method bodies share.
 package repox
 
 import (
@@ -12,26 +13,49 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"gorm.io/gorm"
 
 	"{{.FilterxImport}}"
+	"{{.GormxImport}}"
 {{- if .GraphQLModule}}
 	{{.GraphQLPkg}} "{{.GraphQLModule}}"
+	"{{.GraphQLDSLImport}}"
+	"{{.GraphQLRuntimeImport}}"
 {{- end}}
 )
 
 // Error sentinels the repository interfaces speak. Callers translate them to
 // their transport's codes (e.g. gRPC NotFound / AlreadyExists / Aborted /
 // InvalidArgument) with errors.Is.
+//
+// The three reference errors are FAILED_PRECONDITION, each with its own
+// google.rpc.ErrorInfo reason (ReferenceError.Reason, in ErrorDomain); see
+// references.go.
 var (
 	ErrNotFound        = errors.New("not found")
 	ErrAlreadyExists   = errors.New("already exists")
 	ErrConflict        = errors.New("conflict")
 	ErrInvalidArgument = errors.New("invalid argument")
+
+	// ErrForeignKey is a database foreign key refusing a write: a row naming a
+	// target that does not exist, or a delete of a row still named
+	// (PostgreSQL 23503). Reason FOREIGN_KEY_VIOLATION.
+	ErrForeignKey = errors.New("foreign key violation")
+	// ErrReferenceNotFound is a write naming, in a reference field no foreign
+	// key covers, a resource its owner's AIP Get does not find. Reason
+	// REFERENCE_NOT_FOUND.
+	ErrReferenceNotFound = errors.New("referenced resource not found")
+	// ErrReferenced is a delete refused because a referrer's
+	// (store.v1.reference).on_delete is ON_DELETE_RESTRICT. Reason
+	// RESOURCE_REFERENCED.
+	ErrReferenced = errors.New("resource is still referenced")
 )
 
 // Conn bundles the live backend handles a repository factory can adapt.
@@ -40,6 +64,11 @@ type Conn struct {
 {{- if .GraphQLModule}}
 	GraphQL *{{.GraphQLPkg}}.Service
 {{- end}}
+	// References, when set, enforces reference integrity across databases
+	// and services for every repository and Batch built from this Conn:
+	// writes resolve their external references, deletes consult referrers,
+	// purges keep rows still referred to. See References.
+	References *References
 	// Changes, when set, hears about every write a repository or Batch built
 	// from this Conn commits. It is on the connection rather than on one
 	// repository because a process builds many repositories over one
@@ -72,6 +101,231 @@ func (cs Changes) Changed(ctx context.Context, name string) {
 	}
 }
 
+// Unit is one atomic write that may span schemas: the Batch of each schema
+// built over it (NewBatchIn) queues its writes here, and Commit applies all of
+// them together -- an event series and its overrides, or a calendar with
+// every object in it.
+//
+// On GORM, Commit runs every queued write in one transaction. On GraphQL it
+// sends them as one mutation request, which the engine runs in one
+// transaction when every table is on one connector; see Commit for what
+// happens before that request. A Unit is not safe for concurrent use.
+type Unit struct {
+	conn   Conn
+	before []func(ctx context.Context) error
+	after  []func(ctx context.Context)
+	gorm  []func(ctx context.Context, tx *gorm.DB) error
+	locks []string // no_overlap keys of the rows queued for insert
+{{- if .GraphQLModule}}
+	ahead []func(ctx context.Context) error
+	gql   []func(ctx context.Context, ops *Ops) (Check, error)
+{{- end}}
+	names []string
+	err   error // the first queueing error; Commit returns it and writes nothing
+}
+
+// NewUnit returns an empty Unit on the backend conn carries: GraphQL when it
+// carries a client, otherwise GORM, as the repository factories choose.
+func NewUnit(conn Conn) *Unit { return &Unit{conn: conn} }
+
+// Conn is the connection the Unit writes through.
+func (u *Unit) Conn() Conn { return u.conn }
+
+// QueueGorm queues a write to run inside the commit transaction, after the
+// advisory locks on locks (the no_overlap keys of the rows it inserts) are
+// taken. Generated Batches call it; so may hand-written code that must land
+// with them.
+func (u *Unit) QueueGorm(locks []string, op func(ctx context.Context, tx *gorm.DB) error) {
+	u.locks = append(u.locks, locks...)
+	u.gorm = append(u.gorm, op)
+}
+{{- if .GraphQLModule}}
+
+// QueueGraphQL queues a write for the commit request. op runs when Commit
+// does, before the request is sent: it may read, then adds its mutations to
+// ops, and may return a Check to run once the request has been answered.
+func (u *Unit) QueueGraphQL(op func(ctx context.Context, ops *Ops) (Check, error)) {
+	u.gql = append(u.gql, op)
+}
+
+// QueueGraphQLAhead queues a write Commit sends on its own, before the
+// request holding the rest: a guarded write whose failure must stop the
+// commit but which the engine reports only as touching no row.
+func (u *Unit) QueueGraphQLAhead(op func(ctx context.Context) error) {
+	u.ahead = append(u.ahead, op)
+}
+{{- end}}
+
+// Before queues a check Commit runs ahead of every write, outside the
+// transaction: a failing check stops the commit with nothing written. The
+// generated Batches use it to resolve references and consult referrers,
+// which may call other services.
+func (u *Unit) Before(check func(ctx context.Context) error) {
+	u.before = append(u.before, check)
+}
+
+// After queues f to run once Commit has applied every write; it does not run
+// when the commit fails. The generated Batches use it to publish NOTIFY
+// events for what they deleted.
+func (u *Unit) After(f func(ctx context.Context)) { u.after = append(u.after, f) }
+
+// Touch records that the write being queued changes the record named name,
+// which Commit reports to the connection's ChangeObserver.
+func (u *Unit) Touch(name string) { u.names = append(u.names, name) }
+
+// Fail records a queueing error: Commit returns the first one and writes
+// nothing.
+func (u *Unit) Fail(err error) {
+	if u.err == nil {
+		u.err = err
+	}
+}
+
+// Commit applies every write queued in u and empties it.
+//
+// On GORM every write runs in one transaction, after the no_overlap keys of
+// the rows it inserts are locked all at once and in order (gormx.LockKeys), so
+// two Units inserting rows for the same keys take turns instead of
+// deadlocking: all land or none do.
+//
+// On GraphQL, Commit first sends the writes queued ahead (a guarded
+// UpdateOutputOnly), one by one, returning at the first that fails; then it
+// runs each queued write's reads -- the record an update merges onto, the
+// value-object rows it replaces -- and sends every mutation in one request.
+// The engine applies that request in one transaction when its tables share a
+// connector, and an etag-guarded update is checked inside it, by a
+// self-update whose post-check asserts the etag: Commit either lands all of
+// it or none, and returns repox.ErrConflict when a guard failed (the record
+// is read again to tell).
+// What is not inside the transaction: the writes queued ahead, and the reads.
+// A guarded update catches a write between its read and the commit through the
+// etag; an unguarded one does not, as with the repositories' own Update.
+//
+// Commit reports every record it queued to the connection's ChangeObserver,
+// whatever it returns.
+func (u *Unit) Commit(ctx context.Context) error {
+	err := u.err
+	if err == nil {
+		for _, check := range u.before {
+			if err = check(ctx); err != nil {
+				break
+			}
+		}
+	}
+	if err == nil {
+		err = u.commit(ctx)
+		if err == nil {
+			for _, f := range u.after {
+				f(ctx)
+			}
+		}
+	}
+	if u.conn.Changes != nil {
+		for _, name := range u.names {
+			u.conn.Changes.Changed(ctx, name)
+		}
+	}
+	*u = Unit{conn: u.conn}
+	return err
+}
+
+func (u *Unit) commit(ctx context.Context) error {
+	if u.err != nil {
+		return u.err
+	}
+{{- if .GraphQLModule}}
+	if u.conn.GraphQL != nil {
+		return u.commitGraphQL(ctx)
+	}
+{{- end}}
+	if len(u.gorm) == 0 {
+		return nil
+	}
+	return MapGormErr(u.conn.Gorm.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := gormx.LockKeys(tx, u.locks...); err != nil {
+			return err
+		}
+		for _, op := range u.gorm {
+			if err := op(ctx, tx); err != nil {
+				return err
+			}
+		}
+		return nil
+	}))
+}
+{{- if .GraphQLModule}}
+
+func (u *Unit) commitGraphQL(ctx context.Context) error {
+	for _, op := range u.ahead {
+		if err := op(ctx); err != nil {
+			return err
+		}
+	}
+	var (
+		ops    Ops
+		checks []Check
+	)
+	for _, op := range u.gql {
+		check, err := op(ctx, &ops)
+		if err != nil {
+			return err
+		}
+		if check != nil {
+			checks = append(checks, check)
+		}
+	}
+	tx := u.conn.GraphQL.Mutation.Tx()
+	for _, op := range ops {
+		tx.Add(op)
+	}
+	failed := tx.Commit(ctx)
+	for _, check := range checks {
+		if err := check(ctx, failed); err != nil {
+			return err
+		}
+	}
+	return MapGraphQLErr(failed)
+}
+
+// Check is what a queued GraphQL write knows after the request is answered.
+// failed is the request's error, nil when it was applied. On success a check
+// reports a write that took no effect (a guarded update whose row is gone);
+// on failure it reports whether the failure was its own (a guard the record
+// no longer matches, read again). nil means nothing to report.
+type Check func(ctx context.Context, failed error) error
+
+// Ops are the mutations of one GraphQL request, in order. Add has the shape of
+// runtime.Tx's, so the generated write fragments queue onto either.
+type Ops []runtime.BatchOp
+
+// Add appends op.
+func (o *Ops) Add(op runtime.BatchOp) *Ops {
+	*o = append(*o, op)
+	return o
+}
+
+// MapGraphQLErr translates the client's errors onto the repox sentinels, as
+// each schema's GraphQL adapters do.
+func MapGraphQLErr(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, graphql.ErrConflict):
+		return ErrConflict
+	// The engine reports a database rejection as text: an exclusion
+	// constraint is a conflict, a unique one a duplicate.
+	case strings.Contains(err.Error(), "violates exclusion constraint"):
+		return fmt.Errorf("%w: %v", ErrConflict, err)
+	case strings.Contains(err.Error(), "violates unique constraint"):
+		return fmt.Errorf("%w: %v", ErrAlreadyExists, err)
+	case strings.Contains(err.Error(), "violates foreign key constraint"):
+		return ForeignKeyError(err)
+	default:
+		return err
+	}
+}
+{{- end}}
+
 // ListInput is the request shape every repository List takes: AIP page
 // controls, an order_by string, and a raw AIP-160 filter expression.
 type ListInput struct {
@@ -87,6 +341,89 @@ type ListInput struct {
 	// read (filterx.In), or a strict bound AIP-160 text would also express.
 	// Field names are the filter fields Filter accepts.
 	Where []filterx.Condition
+	// ReadMask names the fields to read (AIP-157 partial response); empty
+	// reads every field. Each record comes back holding only those fields and
+	// its name. A path into a message field ("start.date_time") reads the
+	// whole field. Fields stored in other tables -- value objects, repeated
+	// children -- are read only when named: on GraphQL each costs a query
+	// per record, so a read of keys and timestamps costs one query per page.
+	// On GORM the row's other columns are also left out of the SELECT.
+	// Paths naming no field of the resource are rejected with
+	// ErrInvalidArgument.
+	ReadMask []string
+}
+
+// CheckReadMask rejects a read mask naming a field m does not have.
+func CheckReadMask(m proto.Message, mask []string) error {
+	fields := m.ProtoReflect().Descriptor().Fields()
+	for _, p := range mask {
+		top, _, _ := strings.Cut(p, ".")
+		if fields.ByName(protoreflect.Name(top)) == nil {
+			return fmt.Errorf("%w: read_mask names %q, which %s does not have", ErrInvalidArgument, p, m.ProtoReflect().Descriptor().Name())
+		}
+	}
+	return nil
+}
+
+// Reads reports whether a read under mask reads field: an empty mask reads
+// everything, otherwise a path naming the field or a path inside it.
+func Reads(mask []string, field string) bool { return GroupTouched(mask, field) }
+
+// Narrow clears every field of m that mask does not read, keeping its name. An
+// empty mask keeps everything.
+func Narrow(m proto.Message, mask []string) {
+	if len(mask) == 0 {
+		return
+	}
+	r := m.ProtoReflect()
+	var drop []protoreflect.FieldDescriptor
+	r.Range(func(fd protoreflect.FieldDescriptor, _ protoreflect.Value) bool {
+		if fd.Name() != "name" && !Reads(mask, string(fd.Name())) {
+			drop = append(drop, fd)
+		}
+		return true
+	})
+	for _, fd := range drop {
+		r.Clear(fd)
+	}
+}
+
+// Unread lists the columns a read under mask leaves out: those of the fields
+// in columns the mask does not read, less keep (the columns the read sorts
+// and pages by, which it must have whatever the mask says). Columns no field
+// owns -- keys, references to value objects, discriminators -- are always
+// read.
+func Unread(columns map[string][]string, mask []string, keep ...string) []string {
+	if len(mask) == 0 {
+		return nil
+	}
+	var out []string
+	for field, cols := range columns {
+		if Reads(mask, field) {
+			continue
+		}
+		for _, c := range cols {
+			if !slices.Contains(keep, c) {
+				out = append(out, c)
+			}
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// OrderColumns are the columns a list under spec and orderBy sorts by, the
+// primary key included; nil when orderBy does not parse (the list rejects it).
+func OrderColumns(spec filterx.Spec, orderBy string) []string {
+	terms, err := filterx.OrderTerms(spec, orderBy)
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(terms))
+	for _, t := range terms {
+		out = append(out, t.Column)
+	}
+	return out
 }
 
 // MapGormErr translates GORM's storage errors onto the repox sentinels,
@@ -100,6 +437,10 @@ func MapGormErr(err error) error {
 		return ErrNotFound
 	case errors.Is(err, gorm.ErrDuplicatedKey), sqlState(err) == "23505":
 		return ErrAlreadyExists
+	case sqlState(err) == "23503":
+		// A foreign key: the row names a target that does not exist, or a
+		// delete removes a row still named.
+		return ForeignKeyError(err)
 	case sqlState(err) == "23P01":
 		// An exclusion constraint, (store.v1.table).no_overlap: the write
 		// would overlap a row that already holds that time. Another writer
@@ -194,6 +535,27 @@ func GroupTouched(paths []string, field string) bool {
 		}
 	}
 	return false
+}
+
+// CopyFields sets each top-level field of dst that paths names to src's
+// value, clearing it where src has none: how UpdateWithOutputOnly carries
+// the server-owned fields it names onto the merged record. A path into a
+// message ("a.b") copies the whole field "a"; an unknown path is skipped.
+func CopyFields(dst, src proto.Message, paths []string) {
+	d, s := dst.ProtoReflect(), src.ProtoReflect()
+	fields := d.Descriptor().Fields()
+	for _, p := range paths {
+		top, _, _ := strings.Cut(p, ".")
+		fd := fields.ByName(protoreflect.Name(top))
+		if fd == nil {
+			continue
+		}
+		if s.Has(fd) {
+			d.Set(fd, s.Get(fd))
+		} else {
+			d.Clear(fd)
+		}
+	}
 }
 
 // Ptr returns a pointer to v, for optional model columns.

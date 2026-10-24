@@ -5,7 +5,7 @@ version: v2
 # one every protokit plugin shares).
 #
 # Run:  buf generate --template buf.gen.yaml
-# Out:  plugin/pb/storepbv1/*.pb.go
+# Out:  plugin/pb/storepbv1/*.pb.go (+ reference_service_grpc.pb.go)
 #       plugin/entity/pb/entitypbv1/*.pb.go
 #
 # Both vocabularies' stubs ship in this repository's single Go module: entity's
@@ -59,6 +59,12 @@ inputs:
 
 plugins:
   - remote: buf.build/protocolbuffers/go:v1.36.11
+    out: .
+    opt:
+      - module=github.com/the-protobuf-project/store
+  # store.v1.ReferenceService's gRPC stubs, which the generated repositories'
+  # reference runtime (repox) serves and calls.
+  - remote: buf.build/grpc/go:v1.6.0
     out: .
     opt:
       - module=github.com/the-protobuf-project/store

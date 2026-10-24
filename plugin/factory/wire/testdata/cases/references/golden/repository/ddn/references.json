@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "mutations": [
+    {
+      "field": "deleteCatalogBooksById",
+      "kind": "delete",
+      "resourceType": "catalog.example.com/Book",
+      "pattern": "shelves/{shelf}/books/{book}",
+      "keyArgument": "keyId",
+      "byIdQuery": "catalogBooksById"
+    },
+    {
+      "field": "deleteCatalogShelvesById",
+      "kind": "delete",
+      "resourceType": "catalog.example.com/Shelf",
+      "pattern": "shelves/{shelf}",
+      "keyArgument": "keyId",
+      "byIdQuery": "catalogShelvesById"
+    },
+    {
+      "field": "insertLendingLoans",
+      "kind": "insert",
+      "resourceType": "lending.example.com/Loan",
+      "references": [
+        {
+          "field": "borrower",
+          "column": "borrower",
+          "type": "vcard.example.com/Card",
+          "onDelete": "ON_DELETE_RESTRICT"
+        },
+        {
+          "field": "guarantor",
+          "column": "guarantor",
+          "type": "vcard.example.com/Card",
+          "onDelete": "ON_DELETE_NOTIFY"
+        }
+      ]
+    },
+    {
+      "field": "updateLendingLoansById",
+      "kind": "update",
+      "resourceType": "lending.example.com/Loan",
+      "references": [
+        {
+          "field": "borrower",
+          "column": "borrower",
+          "type": "vcard.example.com/Card",
+          "onDelete": "ON_DELETE_RESTRICT"
+        },
+        {
+          "field": "guarantor",
+          "column": "guarantor",
+          "type": "vcard.example.com/Card",
+          "onDelete": "ON_DELETE_NOTIFY"
+        }
+      ]
+    },
+    {
+      "field": "deleteLendingLoansById",
+      "kind": "delete",
+      "resourceType": "lending.example.com/Loan",
+      "pattern": "loans/{loan}",
+      "keyArgument": "keyId",
+      "byIdQuery": "lendingLoansById"
+    }
+  ],
+  "endpoints": [
+    {
+      "type": "vcard.example.com/Card",
+      "get": "vcard.v1.Cards/GetCard",
+      "target": "${CARDS_GRPC}"
+    }
+  ]
+}

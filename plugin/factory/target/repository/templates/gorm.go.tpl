@@ -19,6 +19,9 @@ import (
 type Gorm{{.Model}}Repository struct {
 	DB    *gorm.DB
 	Hooks {{.Model}}Hooks
+	// Refs, when set, is asked before a purge whether anything in another
+	// database or service still refers to the record (see Purge).
+	Refs *repox.References
 	// ListOverrides substitute the generated dispatch for single filter fields
 	// (e.g. a derived state computed via subqueries).
 	ListOverrides map[string]filterx.SQLHandler
@@ -74,22 +77,7 @@ func (r *Gorm{{.Model}}Repository) Create(ctx context.Context, parent string, in
 	m.{{.EtagField}} = {{if .EtagPtr}}repox.Ptr(repox.NewULID()){{else}}repox.NewULID(){{end}}
 	{{- end}}
 	{{- if .HasVOs}}
-	if err := r.DB.Transaction(func(tx *gorm.DB) error {
-		{{- range .VOCreates}}
-		{{.}}
-		{{- end}}
-		{{- if .DeepAfterCreates}}
-		if err := {{$.GormPkg}}.{{.Store}}(tx).Create(ctx, m); err != nil {
-			return err
-		}
-		{{- range .DeepAfterCreates}}
-		{{.}}
-		{{- end}}
-		return nil
-		{{- else}}
-		return {{$.GormPkg}}.{{.Store}}(tx).Create(ctx, m)
-		{{- end}}
-	}); err != nil {
+	if err := r.DB.Transaction(func(tx *gorm.DB) error { return r.insertTx(ctx, tx, in, m) }); err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	{{- else}}
@@ -127,22 +115,7 @@ func (r *Gorm{{.Model}}Repository) Create(ctx context.Context, in *{{.PB}}) (*{{
 	m.{{.EtagField}} = {{if .EtagPtr}}repox.Ptr(repox.NewULID()){{else}}repox.NewULID(){{end}}
 	{{- end}}
 	{{- if .HasVOs}}
-	if err := r.DB.Transaction(func(tx *gorm.DB) error {
-		{{- range .VOCreates}}
-		{{.}}
-		{{- end}}
-		{{- if .DeepAfterCreates}}
-		if err := {{$.GormPkg}}.{{.Store}}(tx).Create(ctx, m); err != nil {
-			return err
-		}
-		{{- range .DeepAfterCreates}}
-		{{.}}
-		{{- end}}
-		return nil
-		{{- else}}
-		return {{$.GormPkg}}.{{.Store}}(tx).Create(ctx, m)
-		{{- end}}
-	}); err != nil {
+	if err := r.DB.Transaction(func(tx *gorm.DB) error { return r.insertTx(ctx, tx, in, m) }); err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	{{- else}}
@@ -225,7 +198,10 @@ func (r *Gorm{{.Model}}Repository) list(ctx context.Context, scope *gorm.DB, in 
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)
 	}
-	rows, next, err := eng.List(ctx, scope{{.Preloads}}, filterx.ListInput{
+	if err := repox.CheckReadMask((*{{.PB}})(nil), in.ReadMask); err != nil {
+		return nil, "", err
+	}
+	rows, next, err := eng.List(ctx, r.reads(scope, in), filterx.ListInput{
 		PageSize:  in.PageSize,
 		PageToken: in.PageToken,
 		OrderBy:   in.OrderBy,
@@ -240,9 +216,36 @@ func (r *Gorm{{.Model}}Repository) list(ctx context.Context, scope *gorm.DB, in 
 		if err != nil {
 			return nil, "", err
 		}
+		repox.Narrow(out, in.ReadMask)
 		items = append(items, out)
 	}
 	return items, next, nil
+}
+
+// reads is the query a List reads rows through: every column and value object
+// without a read mask; with one, only the columns and value objects of the
+// fields it names, and the columns the page is sorted by.
+func (r *Gorm{{.Model}}Repository) reads(db *gorm.DB, in repox.ListInput) *gorm.DB {
+	if len(in.ReadMask) == 0 {
+		return db{{.Preloads}}
+	}
+	if omit := repox.Unread({{.LowerModel}}Columns, in.ReadMask, repox.OrderColumns({{$.GormPkg}}.{{.Model}}FilterSpec, in.OrderBy)...); len(omit) > 0 {
+		db = db.Omit(omit...)
+	}
+	{{- range .ReadPreloads}}
+	if repox.Reads(in.ReadMask, "{{.Field}}") {
+		db = db{{.Chain}}
+	}
+	{{- end}}
+	return db
+}
+
+// {{.LowerModel}}Columns are the row's columns by the field each stores, for
+// a read mask to leave out.
+var {{.LowerModel}}Columns = map[string][]string{
+	{{- range .FieldColumns}}
+	"{{.Field}}": { {{- range $i, $c := .Columns}}{{if $i}}, {{end}}"{{$c}}"{{end -}} },
+	{{- end}}
 }
 
 // Update persists the masked fields of in; an empty mask replaces every
@@ -253,65 +256,100 @@ func (r *Gorm{{.Model}}Repository) Update(ctx context.Context, in *{{.PB}}, path
 		return nil, err
 	}
 	id := ids[len(ids)-1]
-	err = r.DB.Transaction(func(tx *gorm.DB) error {
-		var existing {{$.GormPkg}}.{{.Model}}
-		if err := tx.WithContext(ctx){{.Preloads}}.First(&existing, "id = ?", id).Error; err != nil {
-			return err
-		}
-		{{- range .VOStaleVars}}
-		{{.}}
-		{{- end}}
-		{{- if .HasEtag}}
-		if in.GetEtag() != "" && {{if .EtagPtr}}existing.{{.EtagField}} != nil && *existing.{{.EtagField}}{{else}}existing.{{.EtagField}}{{end}} != in.GetEtag() {
-			return repox.ErrConflict
-		}
-		{{- end}}
-		existingPB := {{$.GormPkg}}.{{.Model}}ToProto(&existing)
-		{{- if .RefsToProto}}
-		{
-			m, out := &existing, existingPB
-			{{- range .RefsToProto}}
-			{{.}}
-			{{- end}}
-		}
-		{{- end}}
-		merged := proto.Clone(existingPB).(*{{.PB}})
-		apply{{.Model}}Mask(merged, in, paths)
-		if h := r.Hooks.BeforeUpdate; h != nil {
-			if err := h(ctx, existingPB, merged, paths); err != nil {
-				return err
-			}
-		}
-		next := {{$.GormPkg}}.{{.Model}}FromProto(merged)
-		_ = next
-		{{- range .MutableAssigns}}
-		{{.}}
-		{{- end}}
-		{{- range .VOUpdates}}
-		{{.}}
-		{{- end}}
-		{{- range .DeepDetach}}
-		{{.}}
-		{{- end}}
-		{{- if .HasEtag}}
-		existing.{{.EtagField}} = {{if .EtagPtr}}repox.Ptr(repox.NewULID()){{else}}repox.NewULID(){{end}}
-		{{- end}}
-		{{- if .HasVOs}}
-		if err := {{$.GormPkg}}.{{.Store}}(tx).Update(ctx, &existing); err != nil {
-			return err
-		}
-		{{- range .VOStaleDels}}
-		{{.}}
-		{{- end}}
-		return nil
-		{{- else}}
-		return {{$.GormPkg}}.{{.Store}}(tx).Update(ctx, &existing)
-		{{- end}}
-	})
+	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, id, in, paths, nil) })
 	if err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	return r.get(ctx, id)
+}
+{{- if .OutputOnly}}
+
+// UpdateWithOutputOnly is Update plus the server-owned fields outputPaths
+// names, in Update's transaction and under its etag guard.
+func (r *Gorm{{.Model}}Repository) UpdateWithOutputOnly(ctx context.Context, in *{{.PB}}, paths, outputPaths []string) (*{{.PB}}, error) {
+	ids, err := repox.SplitName(in.GetName(), {{.CollectionsExpr}})
+	if err != nil {
+		return nil, err
+	}
+	id := ids[len(ids)-1]
+	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, id, in, paths, outputPaths) })
+	if err != nil {
+		return nil, repox.MapGormErr(err)
+	}
+	return r.get(ctx, id)
+}
+{{- end}}
+
+// updateTx is Update's write inside tx, which a Batch shares with other
+// writes. The row is read FOR UPDATE: a concurrent update of the same record
+// waits for this transaction and then sees the etag it wrote, so two writers
+// holding the same etag cannot both pass the guard. outputPaths names the
+// server-owned fields written alongside (UpdateWithOutputOnly); nil for Update.
+func (r *Gorm{{.Model}}Repository) updateTx(ctx context.Context, tx *gorm.DB, id string, in *{{.PB}}, paths, outputPaths []string) error {
+	var existing {{$.GormPkg}}.{{.Model}}
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}){{.Preloads}}.First(&existing, "id = ?", id).Error; err != nil {
+		return err
+	}
+	{{- range .VOStaleVars}}
+	{{.}}
+	{{- end}}
+	{{- if .HasEtag}}
+	if in.GetEtag() != "" && {{if .EtagPtr}}existing.{{.EtagField}} != nil && *existing.{{.EtagField}}{{else}}existing.{{.EtagField}}{{end}} != in.GetEtag() {
+		return repox.ErrConflict
+	}
+	{{- end}}
+	existingPB := {{$.GormPkg}}.{{.Model}}ToProto(&existing)
+	{{- if .RefsToProto}}
+	{
+		m, out := &existing, existingPB
+		{{- range .RefsToProto}}
+		{{.}}
+		{{- end}}
+	}
+	{{- end}}
+	merged := proto.Clone(existingPB).(*{{.PB}})
+	apply{{.Model}}Mask(merged, in, paths)
+	{{- if .OutputOnly}}
+	repox.CopyFields(merged, in, outputPaths)
+	{{- end}}
+	if h := r.Hooks.BeforeUpdate; h != nil {
+		if err := h(ctx, existingPB, merged, paths); err != nil {
+			return err
+		}
+	}
+	next := {{$.GormPkg}}.{{.Model}}FromProto(merged)
+	_ = next
+	{{- range .MutableAssigns}}
+	{{.}}
+	{{- end}}
+	{{- if .OutputOnly}}
+	if len(outputPaths) > 0 {
+		paths := outputPaths
+		{{- range .OutputAssigns}}
+		{{.}}
+		{{- end}}
+	}
+	{{- end}}
+	{{- range .VOUpdates}}
+	{{.}}
+	{{- end}}
+	{{- range .DeepDetach}}
+	{{.}}
+	{{- end}}
+	{{- if .HasEtag}}
+	existing.{{.EtagField}} = {{if .EtagPtr}}repox.Ptr(repox.NewULID()){{else}}repox.NewULID(){{end}}
+	{{- end}}
+	{{- if .HasVOs}}
+	if err := {{$.GormPkg}}.{{.Store}}(tx).Update(ctx, &existing); err != nil {
+		return err
+	}
+	{{- range .VOStaleDels}}
+	{{.}}
+	{{- end}}
+	return nil
+	{{- else}}
+	return {{$.GormPkg}}.{{.Store}}(tx).Update(ctx, &existing)
+	{{- end}}
 }
 {{- if .OutputOnly}}
 
@@ -342,7 +380,9 @@ func (r *Gorm{{.Model}}Repository) updateOutputOnlyTx(ctx context.Context, tx *g
 	id := ids[len(ids)-1]
 	{
 		var existing {{$.GormPkg}}.{{.Model}}
-		if err := tx.WithContext(ctx).First(&existing, "id = ?", id).Error; err != nil {
+		// FOR UPDATE, as in updateTx: concurrent writers holding one etag
+		// take turns, and only the first passes the guard.
+		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "id = ?", id).Error; err != nil {
 			return err
 		}
 		{{- if .HasEtag}}
@@ -361,27 +401,26 @@ func (r *Gorm{{.Model}}Repository) updateOutputOnlyTx(ctx context.Context, tx *g
 	}
 }
 {{- end}}
-{{- if .Flat}}
 
 // newRow builds the row a Batch inserts for in{{if .Parented}} under parent{{end}}, and the
-// name the record will have: the same resolution Create applies.
-func (r *Gorm{{.Model}}Repository) newRow({{if .Parented}}parent string, {{end}}in *{{.PB}}) (*{{$.GormPkg}}.{{.Model}}, string, error) {
+// record it stands for, named: the same resolution Create applies.
+func (r *Gorm{{.Model}}Repository) newRow({{if .Parented}}parent string, {{end}}in *{{.PB}}) (*{{$.GormPkg}}.{{.Model}}, *{{.PB}}, error) {
 	{{- if .Parented}}
 	parentIDs, err := repox.SplitName(parent, {{.ParentCollExpr}})
 	if err != nil {
-		return nil, "", err
+		return nil, nil, err
 	}
 	{{- end}}
 	id := repox.NewULID()
 	if in.GetName() != "" {
 		ids, err := repox.SplitName(in.GetName(), {{.CollectionsExpr}})
 		if err != nil {
-			return nil, "", err
+			return nil, nil, err
 		}
 		{{- if .Parented}}
 		for i := range parentIDs {
 			if ids[i] != parentIDs[i] {
-				return nil, "", fmt.Errorf("%w: name %q is not under parent %q", repox.ErrInvalidArgument, in.GetName(), parent)
+				return nil, nil, fmt.Errorf("%w: name %q is not under parent %q", repox.ErrInvalidArgument, in.GetName(), parent)
 			}
 		}
 		{{- end}}
@@ -401,7 +440,25 @@ func (r *Gorm{{.Model}}Repository) newRow({{if .Parented}}parent string, {{end}}
 	{{- if .HasEtag}}
 	m.{{.EtagField}} = {{if .EtagPtr}}repox.Ptr(repox.NewULID()){{else}}repox.NewULID(){{end}}
 	{{- end}}
-	return m, in.GetName(), nil
+	return m, in, nil
+}
+{{- if .HasVOs}}
+
+// insertTx writes m inside tx with the value-object rows in carries: those
+// it points at first, then m, then its children.
+func (r *Gorm{{.Model}}Repository) insertTx(ctx context.Context, tx *gorm.DB, in *{{.PB}}, m *{{$.GormPkg}}.{{.Model}}) error {
+	id := m.{{.PKField}}
+	_ = id
+	{{- range .VOCreates}}
+	{{.}}
+	{{- end}}
+	if err := {{$.GormPkg}}.{{.Store}}(tx).Create(ctx, m); err != nil {
+		return err
+	}
+	{{- range .DeepAfterCreates}}
+	{{.}}
+	{{- end}}
+	return nil
 }
 {{- end}}
 
@@ -420,10 +477,7 @@ func (r *Gorm{{.Model}}Repository) Delete(ctx context.Context, name string) erro
 			return err
 		}
 	}
-	now := time.Now()
-	res := r.DB.WithContext(ctx).Model(&{{$.GormPkg}}.{{.Model}}{}).
-		Where("id = ? AND delete_time IS NULL", ids[len(ids)-1]).
-		Updates(map[string]any{"delete_time": now{{if .UpdateTimeColumn}}, "{{.UpdateTimeColumn}}": now{{end}}{{if .HasEtag}}, "{{.EtagColumn}}": repox.NewULID(){{end}}{{if .Expiring}}, "{{.ExpireTimeColumn}}": repox.ExpireAt(now, r.Retention){{end}}})
+	res := r.markDeleted(ctx, r.DB, ids[len(ids)-1])
 	if res.Error != nil {
 		return repox.MapGormErr(res.Error)
 	}
@@ -431,6 +485,15 @@ func (r *Gorm{{.Model}}Repository) Delete(ctx context.Context, name string) erro
 		return repox.ErrNotFound
 	}
 	return nil
+}
+
+// markDeleted sets the soft-delete mark on the live row id through db: Delete's
+// write, which a Batch runs inside its transaction.
+func (r *Gorm{{.Model}}Repository) markDeleted(ctx context.Context, db *gorm.DB, id string) *gorm.DB {
+	now := time.Now()
+	return db.WithContext(ctx).Model(&{{$.GormPkg}}.{{.Model}}{}).
+		Where("id = ? AND delete_time IS NULL", id).
+		Updates(map[string]any{"delete_time": now{{if .UpdateTimeColumn}}, "{{.UpdateTimeColumn}}": now{{end}}{{if .HasEtag}}, "{{.EtagColumn}}": repox.NewULID(){{end}}{{if .Expiring}}, "{{.ExpireTimeColumn}}": repox.ExpireAt(now, r.Retention){{end}}})
 }
 
 // Undelete clears the soft-delete mark and returns the restored record.
@@ -471,107 +534,277 @@ func (r *Gorm{{.Model}}Repository) Delete(ctx context.Context, name string) erro
 		}
 	}
 	id := ids[len(ids)-1]
+	{{- if .SoftDelete}}
+	_, err = r.purge(ctx, r.DB, id, name, true)
+	return repox.MapGormErr(err)
+	{{- else if .HasVOs}}
+	return repox.MapGormErr(r.DB.Transaction(func(tx *gorm.DB) error { return r.purgeTx(ctx, tx, id) }))
+	{{- else}}
 	var existing {{$.GormPkg}}.{{.Model}}
-	if err := r.DB.WithContext(ctx){{.DeletePreloads}}.First(&existing, "id = ?", id).Error; err != nil {
+	if err := r.DB.WithContext(ctx).First(&existing, "id = ?", id).Error; err != nil {
 		return repox.MapGormErr(err)
 	}
-	{{- if .HasVOs}}
-	return repox.MapGormErr(r.DB.Transaction(func(tx *gorm.DB) error {
-		if err := {{$.GormPkg}}.{{.Store}}(tx).DeleteByID(ctx, id); err != nil {
-			return err
-		}
-		{{- range .VODeleteCleanups}}
-		{{.}}
-		{{- end}}
-		return nil
-	}))
-	{{- else}}
 	return repox.MapGormErr({{$.GormPkg}}.{{.Store}}(r.DB).DeleteByID(ctx, id))
 	{{- end}}
 }
+{{- if .HasVOs}}
+
+// purgeTx removes row id inside tx, with the value-object rows it owns;
+// gorm.ErrRecordNotFound when there is no such row.
+func (r *Gorm{{.Model}}Repository) purgeTx(ctx context.Context, tx *gorm.DB, id string) error {
+	var existing {{$.GormPkg}}.{{.Model}}
+	if err := tx.WithContext(ctx){{.DeletePreloads}}.First(&existing, "id = ?", id).Error; err != nil {
+		return err
+	}
+	if err := {{$.GormPkg}}.{{.Store}}(tx).DeleteByID(ctx, id); err != nil {
+		return err
+	}
+	{{- range .VODeleteCleanups}}
+	{{.}}
+	{{- end}}
+	return nil
+}
+{{- end}}
+{{- if .SoftDelete}}
+
+// purge removes row id, named name, for good through db -- unless something
+// still refers to it, when it keeps the row and reports kept: a row of this
+// database holding a foreign key to it (asked first, then caught again from
+// the constraint itself), or, when askReferrers, a referrer in another
+// database or service (r.Refs). A purge never fails, and never cascades,
+// because of a referrer. gorm.ErrRecordNotFound when there is no such row.
+func (r *Gorm{{.Model}}Repository) purge(ctx context.Context, db *gorm.DB, id, name string, askReferrers bool) (kept bool, err error) {
+	{{- if .ReferencedSQL}}
+	var referenced bool
+	if err := db.WithContext(ctx).Raw({{.LowerModel}}ReferencedSQL, id).Scan(&referenced).Error; err != nil {
+		return false, err
+	}
+	if referenced {
+		r.Refs.Kept(ctx, name, "foreign key")
+		return true, nil
+	}
+	{{- end}}
+	{{- if .Type}}
+	if askReferrers && r.Refs.KeepOnPurge(ctx, {{printf "%q" .Type}}, name) {
+		return true, nil
+	}
+	{{- end}}
+	// A savepoint inside a caller's transaction: a foreign key the query
+	// above does not know (one from another generator run) rolls back only
+	// this purge.
+	err = db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		{{- if .HasVOs}}
+		return r.purgeTx(ctx, tx, id)
+		{{- else}}
+		var existing {{$.GormPkg}}.{{.Model}}
+		if err := tx.First(&existing, "id = ?", id).Error; err != nil {
+			return err
+		}
+		return {{$.GormPkg}}.{{.Store}}(tx).DeleteByID(ctx, id)
+		{{- end}}
+	})
+	if repox.IsForeignKeyViolation(err) {
+		r.Refs.Kept(ctx, name, "foreign key")
+		return true, nil
+	}
+	return false, err
+}
+{{- if .ReferencedSQL}}
+
+// {{.LowerModel}}ReferencedSQL asks whether any row, deleted or not, still
+// holds a foreign key to the {{.Model}} row with the given id.
+const {{.LowerModel}}ReferencedSQL = `{{.ReferencedSQL}}`
+{{- end}}
+{{- if .Expiring}}
+
+// PurgeExpired removes for good every deleted record whose expire_time is at
+// or before now, keeping the ones something still refers to (see purge).
+// Hooks do not run.
+func (r *Gorm{{.Model}}Repository) PurgeExpired(ctx context.Context, now time.Time) (repox.PurgeResult, error) {
+	var res repox.PurgeResult
+	in := repox.ListInput{
+		PageSize:    500,
+		ShowDeleted: true,
+		ReadMask:    []string{"name"},
+		Where: []filterx.Condition{
+			{Field: "delete_time", Op: filterx.OpNull, Value: "false"},
+			{Field: "{{.ExpireTimeColumn}}", Op: filterx.OpLte, Value: now.UTC().Format(time.RFC3339Nano)},
+		},
+	}
+	for {
+		page, next, err := r.list(ctx, r.DB, in)
+		if err != nil {
+			return res, err
+		}
+		for _, m := range page {
+			ids, err := repox.SplitName(m.GetName(), {{.CollectionsExpr}})
+			if err != nil {
+				return res, err
+			}
+			kept, err := r.purge(ctx, r.DB, ids[len(ids)-1], m.GetName(), true)
+			switch {
+			case errors.Is(err, gorm.ErrRecordNotFound):
+			case err != nil:
+				return res, repox.MapGormErr(err)
+			case kept:
+				res.Kept = append(res.Kept, m.GetName())
+			default:
+				res.Purged = append(res.Purged, m.GetName())
+			}
+		}
+		if next == "" {
+			return res, nil
+		}
+		in.PageToken = next
+	}
+}
+{{- end}}
+{{- end}}
 
 // Compile-time proof the adapter satisfies the interface.
 var _ {{.Model}}Repository = (*Gorm{{.Model}}Repository)(nil)
 {{- end}}
 {{- if .HasBatch}}
 
-// gormBatch is Batch on GORM: queued writes run in one transaction on Commit.
+// gormBatch is Batch on GORM: queued writes run in the Unit's transaction on
+// Commit.
 type gormBatch struct {
-	db    *gorm.DB
-	ops   []func(ctx context.Context, tx *gorm.DB) error
-	locks []string // no_overlap keys of the rows queued for insert
-	err   error    // the first queueing error; Commit returns it and writes nothing
+	u  *repox.Unit
+	db *gorm.DB
+{{- if .HasExpiring}}
+	retention time.Duration
+{{- end}}
 }
 
-// Commit runs every queued write in one transaction: all land or none do.
-// It first locks the no_overlap keys of every row it inserts, all at once and
-// in order (gormx.LockKeys), so two batches inserting rows for the same keys
-// in different orders take turns instead of deadlocking.
-func (b *gormBatch) Commit(ctx context.Context) error {
-	if b.err != nil {
-		return b.err
-	}
-	if len(b.ops) == 0 {
-		return nil
-	}
-	return repox.MapGormErr(b.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := gormx.LockKeys(tx, b.locks...); err != nil {
-			return err
-		}
-		for _, op := range b.ops {
-			if err := op(ctx, tx); err != nil {
-				return err
-			}
-		}
-		return nil
-	}))
-}
-
-func (b *gormBatch) fail(err error) {
-	if b.err == nil {
-		b.err = err
-	}
-}
-{{- range .Resources}}{{if .Flat}}
+// Commit applies the Unit's writes; see repox.Unit.Commit.
+func (b *gormBatch) Commit(ctx context.Context) error { return b.u.Commit(ctx) }
+{{- range .Resources}}
 
 // Create{{.Model}} queues a create and returns the name the record will have.
 func (b *gormBatch) Create{{.Model}}({{if .Parented}}parent string, {{end}}in *{{.PB}}) (string, error) {
-	m, name, err := (&Gorm{{.Model}}Repository{DB: b.db}).newRow({{if .Parented}}parent, {{end}}in)
+	r := &Gorm{{.Model}}Repository{DB: b.db}
+	m, named, err := r.newRow({{if .Parented}}parent, {{end}}in)
 	if err != nil {
 		return "", err
 	}
+	var locks []string
 	if k, ok := any(m).(interface{ NoOverlapKeys() []string }); ok {
-		b.locks = append(b.locks, k.NoOverlapKeys()...)
+		locks = k.NoOverlapKeys()
 	}
-	b.ops = append(b.ops, func(ctx context.Context, tx *gorm.DB) error {
+	queue{{.Model}}References(b.u, named, nil)
+	b.u.QueueGorm(locks, func(ctx context.Context, tx *gorm.DB) error {
+		{{- if .HasVOs}}
+		return r.insertTx(ctx, tx, named, m)
+		{{- else}}
 		return {{$.GormPkg}}.{{.Store}}(tx).Create(ctx, m)
+		{{- end}}
 	})
-	return name, nil
+	b.u.Touch(named.GetName())
+	return named.GetName(), nil
 }
+
+// Update{{.Model}} queues Update; in.Etag, when set, guards it, and a guard
+// that fails rolls the whole batch back.
+func (b *gormBatch) Update{{.Model}}(in *{{.PB}}, paths []string) {
+	ids, err := repox.SplitName(in.GetName(), {{.CollectionsExpr}})
+	if err != nil {
+		b.u.Fail(err)
+		return
+	}
+	r := &Gorm{{.Model}}Repository{DB: b.db}
+	queue{{.Model}}References(b.u, in, paths)
+	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
+		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, nil)
+	})
+	b.u.Touch(in.GetName())
+}
+{{- if .OutputOnly}}
+
+// Update{{.Model}}WithOutputOnly queues UpdateWithOutputOnly; in.Etag, when
+// set, guards it, and a guard that fails rolls the whole batch back.
+func (b *gormBatch) Update{{.Model}}WithOutputOnly(in *{{.PB}}, paths, outputPaths []string) {
+	ids, err := repox.SplitName(in.GetName(), {{.CollectionsExpr}})
+	if err != nil {
+		b.u.Fail(err)
+		return
+	}
+	r := &Gorm{{.Model}}Repository{DB: b.db}
+	queue{{.Model}}References(b.u, in, paths)
+	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
+		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, outputPaths)
+	})
+	b.u.Touch(in.GetName())
+}
+{{- end}}
 {{- if .OutputOnly}}
 
 // Update{{.Model}}OutputOnly queues UpdateOutputOnly; in.Etag, when set, guards it.
 func (b *gormBatch) Update{{.Model}}OutputOnly(in *{{.PB}}, paths []string) {
 	r := &Gorm{{.Model}}Repository{DB: b.db}
-	b.ops = append(b.ops, func(ctx context.Context, tx *gorm.DB) error {
+	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.updateOutputOnlyTx(ctx, tx, in, paths)
 	})
+	b.u.Touch(in.GetName())
 }
 {{- end}}
+{{- if .SoftDelete}}
 
-// Delete{{.Model}} queues the record's removal for good. A record already
-// gone is not an error: two batches clearing the same row must not fail each
-// other.
+// Delete{{.Model}} queues a soft delete. A record already deleted or gone is
+// not an error: two batches deleting the same record must not fail each other.
 func (b *gormBatch) Delete{{.Model}}(name string) {
 	ids, err := repox.SplitName(name, {{.CollectionsExpr}})
 	if err != nil {
-		b.fail(err)
+		b.u.Fail(err)
+		return
+	}
+	r := &Gorm{{.Model}}Repository{DB: b.db{{if .Expiring}}, Retention: b.retention{{end}}}
+	queue{{.Model}}Delete(b.u, name, false)
+	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
+		return r.markDeleted(ctx, tx, ids[len(ids)-1]).Error
+	})
+	b.u.Touch(name)
+}
+{{- end}}
+
+// {{if .SoftDelete}}Purge{{else}}Delete{{end}}{{.Model}} queues the record's removal for good. A record already
+// gone is not an error: two batches clearing the same row must not fail each
+// other.
+func (b *gormBatch) {{if .SoftDelete}}Purge{{else}}Delete{{end}}{{.Model}}(name string) {
+	ids, err := repox.SplitName(name, {{.CollectionsExpr}})
+	if err != nil {
+		b.u.Fail(err)
 		return
 	}
 	id := ids[len(ids)-1]
-	b.ops = append(b.ops, func(ctx context.Context, tx *gorm.DB) error {
+	{{- if .SoftDelete}}
+	// A record something still refers to is kept, as Purge keeps it.
+	r := &Gorm{{.Model}}Repository{DB: b.db, Refs: b.u.Conn().References}
+	keep := queue{{.Model}}Purge(b.u, name)
+	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
+		if *keep {
+			return nil
+		}
+		if _, err := r.purge(ctx, tx, id, name, false); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		return nil
+	})
+	{{- else if .HasVOs}}
+	queue{{.Model}}Delete(b.u, name, true)
+	r := &Gorm{{.Model}}Repository{DB: b.db}
+	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
+		if err := r.purgeTx(ctx, tx, id); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		return nil
+	})
+	{{- else}}
+	queue{{.Model}}Delete(b.u, name, true)
+	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return tx.WithContext(ctx).Delete(&{{$.GormPkg}}.{{.Model}}{}, "id = ?", id).Error
 	})
+	{{- end}}
+	b.u.Touch(name)
 }
-{{- end}}{{end}}
+{{- end}}
 {{- end}}

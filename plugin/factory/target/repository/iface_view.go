@@ -35,8 +35,20 @@ type resourceView struct {
 	// OutputOnly reports server-owned columns, which UpdateOutputOnly writes.
 	OutputOnly bool
 	// Flat reports a resource stored as one row -- no value objects, no deep
-	// graph -- which is what a Batch can queue.
+	// graph -- whose Batch writes are a single statement or mutation.
 	Flat bool
+
+	// Type is the AIP resource type; deletes consult its referrers.
+	Type string
+	// ExtRefs are the reference fields no foreign key enforces: writes
+	// resolve them, ReferrerSources and the reconciler read them.
+	ExtRefs []extRef
+	// ReferencedSQL is the query a GORM purge asks first: is the row still
+	// named by a foreign key? Empty when nothing can name it.
+	ReferencedSQL string
+	// WildcardParent reads across every parent (AIP-159), for a scan of a
+	// parented resource ("calendars/-").
+	WildcardParent string
 }
 
 // schemaPkgView is the template data for one schema's repository.go.
@@ -49,8 +61,9 @@ type schemaPkgView struct {
 
 	// GraphQL adapter wiring, set when the graphql_module opt is configured.
 	HasGraphQL   bool
-	HasBatch     bool   // some resource is Flat, so the schema gets a Batch
+	HasBatch     bool   // the schema has resources, so it gets a Batch
 	HasExpiring  bool   // some resource has an AIP-164 expire_time: WithRetention exists
+	HasExtRefs   bool   // some resource has an external reference: ReferrerSources exists
 	ClientPkg    string // client root package name, e.g. "freebusyql"
 	GQLResources []gqlResourceView
 }
@@ -85,16 +98,20 @@ func schemaView(pb *pbIndex, db *schema.Database, s *schema.Schema, resources ma
 		pkgName := pb.names.Of(pbPkg)
 		imports[pbPkg] = pkgName
 		views = append(views, resourceView{
-			Model:       r.Table.LocalName,
-			LowerModel:  naming.CamelFirst(r.Table.LocalName),
-			PluralField: naming.PascalGo(naming.Pluralize(naming.SnakeCase(r.Table.LocalName))),
-			PB:          pkgName + "." + msg.GoIdent.GoName,
-			Parented:    r.Parent != nil || len(r.Segments) > 1,
-			Pattern:     r.Pattern,
-			SoftDelete:  r.Cols.DeleteTime != nil,
-			Expiring:    r.Cols.ExpireTime != nil,
-			OutputOnly:  len(serverOwned(r)) > 0,
-			Flat:        len(r.VOs) == 0 && len(r.Graph) == 0,
+			Model:          r.Table.LocalName,
+			LowerModel:     naming.CamelFirst(r.Table.LocalName),
+			PluralField:    naming.PascalGo(naming.Pluralize(naming.SnakeCase(r.Table.LocalName))),
+			PB:             pkgName + "." + msg.GoIdent.GoName,
+			Parented:       r.Parent != nil || len(r.Segments) > 1,
+			Pattern:        r.Pattern,
+			SoftDelete:     r.Cols.DeleteTime != nil,
+			Expiring:       r.Cols.ExpireTime != nil,
+			OutputOnly:     len(serverOwned(r)) > 0,
+			Flat:           len(r.VOs) == 0 && len(r.Graph) == 0,
+			Type:           r.Type,
+			ExtRefs:        r.ExtRefs,
+			ReferencedSQL:  referencedSQL(r),
+			WildcardParent: wildcardParent(r),
 		})
 	}
 	return &schemaPkgView{
@@ -110,9 +127,23 @@ func schemaView(pb *pbIndex, db *schema.Database, s *schema.Schema, resources ma
 		Imports:     renderImports(imports),
 		RepoxPkg:    repoxPkg,
 		Resources:   views,
-		HasBatch:    hasFlat(views),
+		HasBatch:    len(views) > 0,
 		HasExpiring: slices.ContainsFunc(views, func(v resourceView) bool { return v.Expiring }),
+		HasExtRefs:  slices.ContainsFunc(views, func(v resourceView) bool { return len(v.ExtRefs) > 0 }),
 	}, nil
+}
+
+// wildcardParent is r's parent name with every id "-" (AIP-159), or "" for a
+// root resource.
+func wildcardParent(r *resource) string {
+	if len(r.Segments) < 2 {
+		return ""
+	}
+	var parts []string
+	for _, seg := range r.Segments[:len(r.Segments)-1] {
+		parts = append(parts, seg.Collection, "-")
+	}
+	return strings.Join(parts, "/")
 }
 
 // renderImports renders sorted import lines, aliasing only when the package
@@ -137,14 +168,4 @@ func renderImports(m map[string]string) []string {
 		}
 	}
 	return lines
-}
-
-// hasFlat reports whether any resource can be queued in a Batch.
-func hasFlat(views []resourceView) bool {
-	for _, v := range views {
-		if v.Flat {
-			return true
-		}
-	}
-	return false
 }

@@ -40,6 +40,10 @@ modules:
     includes: [protobuf/store, protobuf/entity]
     name: buf.build/the-protobuf-project/store
 
+  - path: examples/references/proto
+    # The references example (examples/references): the reference contract
+    # end to end, compiled and tested against Postgres.
+
   - path: examples/proto
     # examples/proto can import entity options, store options, and googleapis
     # because they share this workspace; no separate buf dep update needed

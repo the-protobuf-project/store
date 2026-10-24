@@ -71,8 +71,8 @@ CREATE TABLE "embedded_v1"."metadatas" (
     -- Arbitrary tags.
     "tags"  VARCHAR(255)[],
     -- Singular resource reference → belongs-to with a bare-named FK column (`owner`, no `_id`). Its auto-index must name the scalar field `ownerID`, not the `owner` relation field, or Prisma rejects the @@index.
-    "owner"  CHAR(26),
-    CONSTRAINT "fk_metadatas_owner" FOREIGN KEY ("owner") REFERENCES "embedded_v1"."attendees"("id")
+    "owner"  VARCHAR(255),
+    CONSTRAINT "fk_metadatas_owner" FOREIGN KEY ("owner") REFERENCES "embedded_v1"."attendees"("name")
 );
 CREATE INDEX "idx_metadatas_owner" ON "embedded_v1"."metadatas" ("owner");
 -- tag containment (@>) cannot use a B-tree

@@ -60,6 +60,16 @@ type gqlResourceView struct {
 	GQLVOStaleDels      []string // stale-row deletions after a successful update
 	GQLVODeleteCleanups []string // VO-row removals after the owner row's delete
 
+	// A Batch's writes, queued onto a mutation list (see vo_gql_view.go).
+	GQLQueuedCreates   []string // onto gtx, ahead of the row insert
+	GQLQueuedUpdates   []string // replacement rows onto utx
+	GQLQueuedStaleDels []string // replaced rows onto atx
+	GQLQueuedPurges    []string // owned rows onto dtx, read off row
+	PKInputField       string   // UpdateInput's key field, for the etag assertion
+	// ViaLookups let the list engine filter through the value objects the row
+	// points at (filterx.HasuraEngine.Via).
+	ViaLookups []viaLookup
+
 	// Deep value-object graph fragments (graph_gql.go); empty without one.
 	HasDeep             bool
 	InsertResp          string   // the resource's insert response type, for its queued insert
@@ -195,6 +205,26 @@ func gqlResourceViews(pb *pbIndex, db *schema.Database, s *schema.Schema, resour
 		v.GQLVOUpdates = vp.Updates
 		v.GQLVOStaleDels = vp.StaleDels
 		v.GQLVODeleteCleanups = vp.DeleteCleanups
+		v.GQLQueuedCreates = vp.QueuedCreates
+		v.GQLQueuedUpdates = vp.QueuedUpdates
+		v.GQLQueuedStaleDels = vp.QueuedStaleDels
+		v.GQLQueuedPurges = vp.QueuedPurges
+		for _, g := range vp.VOs {
+			v.DeepPkgs = append(v.DeepPkgs, g.VODomPkg+"/"+g.VOResPkg) // the queued fragments name its response types
+			v.ViaLookups = append(v.ViaLookups, viaLookup{
+				Field: naming.StripIDSuffix(g.vo.Col.Name), Domain: g.VODomain, Resource: g.VOResource, ResPkg: g.VOResPkg,
+			})
+		}
+		for _, e := range r.Graph {
+			if e.Kind != edgeOne || e.Natural {
+				continue
+			}
+			nm := gqlNamesOf(e.Child.Table)
+			v.ViaLookups = append(v.ViaLookups, viaLookup{
+				Field: naming.StripIDSuffix(e.FKCol.Name), Domain: nm.Domain, Resource: nm.Resource, ResPkg: nm.ResPkg,
+			})
+		}
+		v.PKInputField = export(camel(r.Cols.PK.Name))
 		gg := graphGQLFragments(pb, r)
 		if len(r.Graph) > 0 {
 			v.HasDeep = true
@@ -204,6 +234,7 @@ func gqlResourceViews(pb *pbIndex, db *schema.Database, s *schema.Schema, resour
 			v.GQLDeepStale = gg.Stale
 			v.GQLDeepUpdates = gg.Updates
 			v.GQLDeepDeletes = gg.Deletes
+			v.GQLQueuedPurges = append(v.GQLQueuedPurges, gg.QueuedPurges...)
 			v.GQLVOHydrates = append(v.GQLVOHydrates, gg.Hydrates...)
 			for _, n := range gg.Nodes {
 				if n.NaturalPB != "" {
@@ -782,4 +813,14 @@ func enumValuesPrefixed(e *protogen.Enum, prefix string) bool {
 		return strings.HasPrefix(string(v.Desc.Name()), prefix)
 	}
 	return true
+}
+
+// viaLookup is one value object the GraphQL list engine can filter through:
+// the reference field the filter spec names it by and the client handler of
+// its table.
+type viaLookup struct {
+	Field    string // e.g. "start"
+	Domain   string
+	Resource string
+	ResPkg   string
 }

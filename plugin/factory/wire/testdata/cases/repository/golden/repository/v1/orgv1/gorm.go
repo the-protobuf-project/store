@@ -17,14 +17,15 @@ package orgv1
 
 import (
 	"context"
+	"errors"
 	orgv1 "example.com/test/gen"
 	"example.com/test/gen/repox"
 	"example.com/test/gormdb/filterx"
-	"example.com/test/gormdb/gormx"
 	orgv1gorm "example.com/test/gormdb/v1/orgv1"
 	"fmt"
 	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // GormMemberRepository is the GORM adapter of MemberRepository: flat
@@ -36,6 +37,9 @@ import (
 type GormMemberRepository struct {
 	DB    *gorm.DB
 	Hooks MemberHooks
+	// Refs, when set, is asked before a purge whether anything in another
+	// database or service still refers to the record (see Purge).
+	Refs *repox.References
 	// ListOverrides substitute the generated dispatch for single filter fields
 	// (e.g. a derived state computed via subqueries).
 	ListOverrides map[string]filterx.SQLHandler
@@ -83,29 +87,7 @@ func (r *GormMemberRepository) Create(ctx context.Context, parent string, in *or
 		m.InviterID = repox.Ptr(repox.LastSegment(v))
 	}
 	m.Etag = repox.Ptr(repox.NewULID())
-	if err := r.DB.Transaction(func(tx *gorm.DB) error {
-		if v := in.GetWindow(); v != nil {
-			vo := orgv1gorm.TimeWindowFromProto(v)
-			vo.ID = repox.NewULID()
-			if err := tx.WithContext(ctx).Create(vo).Error; err != nil {
-				return err
-			}
-			m.WindowID = repox.Ptr(vo.ID)
-			c := orgv1gorm.MemberSpanCaseWindow
-			m.SpanCase = &c
-		}
-		if v := in.GetDateRange(); v != nil {
-			vo := orgv1gorm.DateStretchFromProto(v)
-			vo.ID = repox.NewULID()
-			if err := tx.WithContext(ctx).Create(vo).Error; err != nil {
-				return err
-			}
-			m.DateRangeID = repox.Ptr(vo.ID)
-			c := orgv1gorm.MemberSpanCaseDateRange
-			m.SpanCase = &c
-		}
-		return orgv1gorm.NewMemberStore(tx).Create(ctx, m)
-	}); err != nil {
+	if err := r.DB.Transaction(func(tx *gorm.DB) error { return r.insertTx(ctx, tx, in, m) }); err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	return r.get(ctx, id)
@@ -173,7 +155,10 @@ func (r *GormMemberRepository) list(ctx context.Context, scope *gorm.DB, in repo
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)
 	}
-	rows, next, err := eng.List(ctx, scope.Preload("Window").Preload("DateRange"), filterx.ListInput{
+	if err := repox.CheckReadMask((*orgv1.Member)(nil), in.ReadMask); err != nil {
+		return nil, "", err
+	}
+	rows, next, err := eng.List(ctx, r.reads(scope, in), filterx.ListInput{
 		PageSize:  in.PageSize,
 		PageToken: in.PageToken,
 		OrderBy:   in.OrderBy,
@@ -188,9 +173,42 @@ func (r *GormMemberRepository) list(ctx context.Context, scope *gorm.DB, in repo
 		if err != nil {
 			return nil, "", err
 		}
+		repox.Narrow(out, in.ReadMask)
 		items = append(items, out)
 	}
 	return items, next, nil
+}
+
+// reads is the query a List reads rows through: every column and value object
+// without a read mask; with one, only the columns and value objects of the
+// fields it names, and the columns the page is sorted by.
+func (r *GormMemberRepository) reads(db *gorm.DB, in repox.ListInput) *gorm.DB {
+	if len(in.ReadMask) == 0 {
+		return db.Preload("Window").Preload("DateRange")
+	}
+	if omit := repox.Unread(memberColumns, in.ReadMask, repox.OrderColumns(orgv1gorm.MemberFilterSpec, in.OrderBy)...); len(omit) > 0 {
+		db = db.Omit(omit...)
+	}
+	if repox.Reads(in.ReadMask, "window") {
+		db = db.Preload("Window")
+	}
+	if repox.Reads(in.ReadMask, "date_range") {
+		db = db.Preload("DateRange")
+	}
+	return db
+}
+
+// memberColumns are the row's columns by the field each stores, for
+// a read mask to leave out.
+var memberColumns = map[string][]string{
+	"email":       {"email"},
+	"user":        {"user"},
+	"inviter":     {"inviter"},
+	"role":        {"role"},
+	"create_time": {"create_time"},
+	"update_time": {"update_time"},
+	"etag":        {"etag"},
+	"duration":    {"duration"},
 }
 
 // Update persists the masked fields of in; an empty mask replaces every
@@ -201,96 +219,170 @@ func (r *GormMemberRepository) Update(ctx context.Context, in *orgv1.Member, pat
 		return nil, err
 	}
 	id := ids[len(ids)-1]
-	err = r.DB.Transaction(func(tx *gorm.DB) error {
-		var existing orgv1gorm.Member
-		if err := tx.WithContext(ctx).Preload("Window").Preload("DateRange").First(&existing, "id = ?", id).Error; err != nil {
-			return err
-		}
-		var staleWindow string
-		var staleDateRange string
-		if in.GetEtag() != "" && existing.Etag != nil && *existing.Etag != in.GetEtag() {
-			return repox.ErrConflict
-		}
-		existingPB := orgv1gorm.MemberToProto(&existing)
-		{
-			m, out := &existing, existingPB
-			if m.UserID != "" {
-				out.User = "users/" + m.UserID
-			}
-			if m.InviterID != nil && *m.InviterID != "" {
-				out.Inviter = "users/" + *m.InviterID
-			}
-		}
-		merged := proto.Clone(existingPB).(*orgv1.Member)
-		applyMemberMask(merged, in, paths)
-		if h := r.Hooks.BeforeUpdate; h != nil {
-			if err := h(ctx, existingPB, merged, paths); err != nil {
-				return err
-			}
-		}
-		next := orgv1gorm.MemberFromProto(merged)
-		_ = next
-		existing.Name = next.Name
-		existing.Email = next.Email
-		existing.UserID = repox.LastSegment(merged.GetUser())
-		if v := merged.GetInviter(); v != "" {
-			existing.InviterID = repox.Ptr(repox.LastSegment(v))
-		} else {
-			existing.InviterID = nil
-		}
-		existing.Role = next.Role
-		existing.Duration = next.Duration
-		existing.SpanCase = next.SpanCase
-		if repox.GroupTouched(paths, "window") || repox.GroupTouched(paths, "date_range") || repox.GroupTouched(paths, "duration") {
-			if existing.WindowID != nil {
-				staleWindow = *existing.WindowID
-			}
-			existing.WindowID = nil
-			if existing.DateRangeID != nil {
-				staleDateRange = *existing.DateRangeID
-			}
-			existing.DateRangeID = nil
-			if v := merged.GetWindow(); v != nil {
-				vo := orgv1gorm.TimeWindowFromProto(v)
-				vo.ID = repox.NewULID()
-				if err := tx.WithContext(ctx).Create(vo).Error; err != nil {
-					return err
-				}
-				existing.WindowID = repox.Ptr(vo.ID)
-				c := orgv1gorm.MemberSpanCaseWindow
-				existing.SpanCase = &c
-			}
-			if v := merged.GetDateRange(); v != nil {
-				vo := orgv1gorm.DateStretchFromProto(v)
-				vo.ID = repox.NewULID()
-				if err := tx.WithContext(ctx).Create(vo).Error; err != nil {
-					return err
-				}
-				existing.DateRangeID = repox.Ptr(vo.ID)
-				c := orgv1gorm.MemberSpanCaseDateRange
-				existing.SpanCase = &c
-			}
-		}
-		existing.Etag = repox.Ptr(repox.NewULID())
-		if err := orgv1gorm.NewMemberStore(tx).Update(ctx, &existing); err != nil {
-			return err
-		}
-		if staleWindow != "" {
-			if err := tx.WithContext(ctx).Delete(&orgv1gorm.TimeWindow{}, "id = ?", staleWindow).Error; err != nil {
-				return err
-			}
-		}
-		if staleDateRange != "" {
-			if err := tx.WithContext(ctx).Delete(&orgv1gorm.DateStretch{}, "id = ?", staleDateRange).Error; err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, id, in, paths, nil) })
 	if err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	return r.get(ctx, id)
+}
+
+// updateTx is Update's write inside tx, which a Batch shares with other
+// writes. The row is read FOR UPDATE: a concurrent update of the same record
+// waits for this transaction and then sees the etag it wrote, so two writers
+// holding the same etag cannot both pass the guard. outputPaths names the
+// server-owned fields written alongside (UpdateWithOutputOnly); nil for Update.
+func (r *GormMemberRepository) updateTx(ctx context.Context, tx *gorm.DB, id string, in *orgv1.Member, paths, outputPaths []string) error {
+	var existing orgv1gorm.Member
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Window").Preload("DateRange").First(&existing, "id = ?", id).Error; err != nil {
+		return err
+	}
+	var staleWindow string
+	var staleDateRange string
+	if in.GetEtag() != "" && existing.Etag != nil && *existing.Etag != in.GetEtag() {
+		return repox.ErrConflict
+	}
+	existingPB := orgv1gorm.MemberToProto(&existing)
+	{
+		m, out := &existing, existingPB
+		if m.UserID != "" {
+			out.User = "users/" + m.UserID
+		}
+		if m.InviterID != nil && *m.InviterID != "" {
+			out.Inviter = "users/" + *m.InviterID
+		}
+	}
+	merged := proto.Clone(existingPB).(*orgv1.Member)
+	applyMemberMask(merged, in, paths)
+	if h := r.Hooks.BeforeUpdate; h != nil {
+		if err := h(ctx, existingPB, merged, paths); err != nil {
+			return err
+		}
+	}
+	next := orgv1gorm.MemberFromProto(merged)
+	_ = next
+	existing.Name = next.Name
+	existing.Email = next.Email
+	existing.UserID = repox.LastSegment(merged.GetUser())
+	if v := merged.GetInviter(); v != "" {
+		existing.InviterID = repox.Ptr(repox.LastSegment(v))
+	} else {
+		existing.InviterID = nil
+	}
+	existing.Role = next.Role
+	existing.Duration = next.Duration
+	existing.SpanCase = next.SpanCase
+	if repox.GroupTouched(paths, "window") || repox.GroupTouched(paths, "date_range") || repox.GroupTouched(paths, "duration") {
+		if existing.WindowID != nil {
+			staleWindow = *existing.WindowID
+		}
+		existing.WindowID = nil
+		if existing.DateRangeID != nil {
+			staleDateRange = *existing.DateRangeID
+		}
+		existing.DateRangeID = nil
+		if v := merged.GetWindow(); v != nil {
+			vo := orgv1gorm.TimeWindowFromProto(v)
+			vo.ID = repox.NewULID()
+			if err := tx.WithContext(ctx).Create(vo).Error; err != nil {
+				return err
+			}
+			existing.WindowID = repox.Ptr(vo.ID)
+			c := orgv1gorm.MemberSpanCaseWindow
+			existing.SpanCase = &c
+		}
+		if v := merged.GetDateRange(); v != nil {
+			vo := orgv1gorm.DateStretchFromProto(v)
+			vo.ID = repox.NewULID()
+			if err := tx.WithContext(ctx).Create(vo).Error; err != nil {
+				return err
+			}
+			existing.DateRangeID = repox.Ptr(vo.ID)
+			c := orgv1gorm.MemberSpanCaseDateRange
+			existing.SpanCase = &c
+		}
+	}
+	existing.Etag = repox.Ptr(repox.NewULID())
+	if err := orgv1gorm.NewMemberStore(tx).Update(ctx, &existing); err != nil {
+		return err
+	}
+	if staleWindow != "" {
+		if err := tx.WithContext(ctx).Delete(&orgv1gorm.TimeWindow{}, "id = ?", staleWindow).Error; err != nil {
+			return err
+		}
+	}
+	if staleDateRange != "" {
+		if err := tx.WithContext(ctx).Delete(&orgv1gorm.DateStretch{}, "id = ?", staleDateRange).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// newRow builds the row a Batch inserts for in under parent, and the
+// record it stands for, named: the same resolution Create applies.
+func (r *GormMemberRepository) newRow(parent string, in *orgv1.Member) (*orgv1gorm.Member, *orgv1.Member, error) {
+	parentIDs, err := repox.SplitName(parent, "organisations")
+	if err != nil {
+		return nil, nil, err
+	}
+	id := repox.NewULID()
+	if in.GetName() != "" {
+		ids, err := repox.SplitName(in.GetName(), "organisations", "members")
+		if err != nil {
+			return nil, nil, err
+		}
+		for i := range parentIDs {
+			if ids[i] != parentIDs[i] {
+				return nil, nil, fmt.Errorf("%w: name %q is not under parent %q", repox.ErrInvalidArgument, in.GetName(), parent)
+			}
+		}
+		id = ids[len(ids)-1]
+	}
+	in = proto.Clone(in).(*orgv1.Member)
+	in.Name = FormatMemberName(parentIDs[0], id)
+	m := orgv1gorm.MemberFromProto(in)
+	m.ID = id
+	m.Name = in.GetName()
+	m.OrganisationID = parentIDs[0]
+	if v := in.GetUser(); v != "" {
+		m.UserID = repox.LastSegment(v)
+	}
+	if v := in.GetInviter(); v != "" {
+		m.InviterID = repox.Ptr(repox.LastSegment(v))
+	}
+	m.Etag = repox.Ptr(repox.NewULID())
+	return m, in, nil
+}
+
+// insertTx writes m inside tx with the value-object rows in carries: those
+// it points at first, then m, then its children.
+func (r *GormMemberRepository) insertTx(ctx context.Context, tx *gorm.DB, in *orgv1.Member, m *orgv1gorm.Member) error {
+	id := m.ID
+	_ = id
+	if v := in.GetWindow(); v != nil {
+		vo := orgv1gorm.TimeWindowFromProto(v)
+		vo.ID = repox.NewULID()
+		if err := tx.WithContext(ctx).Create(vo).Error; err != nil {
+			return err
+		}
+		m.WindowID = repox.Ptr(vo.ID)
+		c := orgv1gorm.MemberSpanCaseWindow
+		m.SpanCase = &c
+	}
+	if v := in.GetDateRange(); v != nil {
+		vo := orgv1gorm.DateStretchFromProto(v)
+		vo.ID = repox.NewULID()
+		if err := tx.WithContext(ctx).Create(vo).Error; err != nil {
+			return err
+		}
+		m.DateRangeID = repox.Ptr(vo.ID)
+		c := orgv1gorm.MemberSpanCaseDateRange
+		m.SpanCase = &c
+	}
+	if err := orgv1gorm.NewMemberStore(tx).Create(ctx, m); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Delete removes the record addressed by its resource name.
@@ -305,26 +397,30 @@ func (r *GormMemberRepository) Delete(ctx context.Context, name string) error {
 		}
 	}
 	id := ids[len(ids)-1]
+	return repox.MapGormErr(r.DB.Transaction(func(tx *gorm.DB) error { return r.purgeTx(ctx, tx, id) }))
+}
+
+// purgeTx removes row id inside tx, with the value-object rows it owns;
+// gorm.ErrRecordNotFound when there is no such row.
+func (r *GormMemberRepository) purgeTx(ctx context.Context, tx *gorm.DB, id string) error {
 	var existing orgv1gorm.Member
-	if err := r.DB.WithContext(ctx).First(&existing, "id = ?", id).Error; err != nil {
-		return repox.MapGormErr(err)
+	if err := tx.WithContext(ctx).First(&existing, "id = ?", id).Error; err != nil {
+		return err
 	}
-	return repox.MapGormErr(r.DB.Transaction(func(tx *gorm.DB) error {
-		if err := orgv1gorm.NewMemberStore(tx).DeleteByID(ctx, id); err != nil {
+	if err := orgv1gorm.NewMemberStore(tx).DeleteByID(ctx, id); err != nil {
+		return err
+	}
+	if existing.WindowID != nil {
+		if err := tx.WithContext(ctx).Delete(&orgv1gorm.TimeWindow{}, "id = ?", *existing.WindowID).Error; err != nil {
 			return err
 		}
-		if existing.WindowID != nil {
-			if err := tx.WithContext(ctx).Delete(&orgv1gorm.TimeWindow{}, "id = ?", *existing.WindowID).Error; err != nil {
-				return err
-			}
+	}
+	if existing.DateRangeID != nil {
+		if err := tx.WithContext(ctx).Delete(&orgv1gorm.DateStretch{}, "id = ?", *existing.DateRangeID).Error; err != nil {
+			return err
 		}
-		if existing.DateRangeID != nil {
-			if err := tx.WithContext(ctx).Delete(&orgv1gorm.DateStretch{}, "id = ?", *existing.DateRangeID).Error; err != nil {
-				return err
-			}
-		}
-		return nil
-	}))
+	}
+	return nil
 }
 
 // Compile-time proof the adapter satisfies the interface.
@@ -339,6 +435,9 @@ var _ MemberRepository = (*GormMemberRepository)(nil)
 type GormOrganisationRepository struct {
 	DB    *gorm.DB
 	Hooks OrganisationHooks
+	// Refs, when set, is asked before a purge whether anything in another
+	// database or service still refers to the record (see Purge).
+	Refs *repox.References
 	// ListOverrides substitute the generated dispatch for single filter fields
 	// (e.g. a derived state computed via subqueries).
 	ListOverrides map[string]filterx.SQLHandler
@@ -370,17 +469,7 @@ func (r *GormOrganisationRepository) Create(ctx context.Context, in *orgv1.Organ
 	m.ID = id
 	m.Name = in.GetName()
 	m.Etag = repox.Ptr(repox.NewULID())
-	if err := r.DB.Transaction(func(tx *gorm.DB) error {
-		if v := in.GetHq(); v != nil {
-			vo := orgv1gorm.LocationFromProto(v)
-			vo.ID = repox.NewULID()
-			if err := tx.WithContext(ctx).Create(vo).Error; err != nil {
-				return err
-			}
-			m.HqID = repox.Ptr(vo.ID)
-		}
-		return orgv1gorm.NewOrganisationStore(tx).Create(ctx, m)
-	}); err != nil {
+	if err := r.DB.Transaction(func(tx *gorm.DB) error { return r.insertTx(ctx, tx, in, m) }); err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	return r.get(ctx, id)
@@ -432,7 +521,10 @@ func (r *GormOrganisationRepository) list(ctx context.Context, scope *gorm.DB, i
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)
 	}
-	rows, next, err := eng.List(ctx, scope.Preload("Hq"), filterx.ListInput{
+	if err := repox.CheckReadMask((*orgv1.Organisation)(nil), in.ReadMask); err != nil {
+		return nil, "", err
+	}
+	rows, next, err := eng.List(ctx, r.reads(scope, in), filterx.ListInput{
 		PageSize:  in.PageSize,
 		PageToken: in.PageToken,
 		OrderBy:   in.OrderBy,
@@ -447,9 +539,38 @@ func (r *GormOrganisationRepository) list(ctx context.Context, scope *gorm.DB, i
 		if err != nil {
 			return nil, "", err
 		}
+		repox.Narrow(out, in.ReadMask)
 		items = append(items, out)
 	}
 	return items, next, nil
+}
+
+// reads is the query a List reads rows through: every column and value object
+// without a read mask; with one, only the columns and value objects of the
+// fields it names, and the columns the page is sorted by.
+func (r *GormOrganisationRepository) reads(db *gorm.DB, in repox.ListInput) *gorm.DB {
+	if len(in.ReadMask) == 0 {
+		return db.Preload("Hq")
+	}
+	if omit := repox.Unread(organisationColumns, in.ReadMask, repox.OrderColumns(orgv1gorm.OrganisationFilterSpec, in.OrderBy)...); len(omit) > 0 {
+		db = db.Omit(omit...)
+	}
+	if repox.Reads(in.ReadMask, "hq") {
+		db = db.Preload("Hq")
+	}
+	return db
+}
+
+// organisationColumns are the row's columns by the field each stores, for
+// a read mask to leave out.
+var organisationColumns = map[string][]string{
+	"display_name": {"display_name"},
+	"slug":         {"slug"},
+	"state":        {"state"},
+	"settings":     {"settings"},
+	"create_time":  {"create_time"},
+	"update_time":  {"update_time"},
+	"etag":         {"etag"},
 }
 
 // Update persists the masked fields of in; an empty mask replaces every
@@ -460,58 +581,87 @@ func (r *GormOrganisationRepository) Update(ctx context.Context, in *orgv1.Organ
 		return nil, err
 	}
 	id := ids[len(ids)-1]
-	err = r.DB.Transaction(func(tx *gorm.DB) error {
-		var existing orgv1gorm.Organisation
-		if err := tx.WithContext(ctx).Preload("Hq").First(&existing, "id = ?", id).Error; err != nil {
-			return err
-		}
-		var staleHq string
-		if in.GetEtag() != "" && existing.Etag != nil && *existing.Etag != in.GetEtag() {
-			return repox.ErrConflict
-		}
-		existingPB := orgv1gorm.OrganisationToProto(&existing)
-		merged := proto.Clone(existingPB).(*orgv1.Organisation)
-		applyOrganisationMask(merged, in, paths)
-		if h := r.Hooks.BeforeUpdate; h != nil {
-			if err := h(ctx, existingPB, merged, paths); err != nil {
-				return err
-			}
-		}
-		next := orgv1gorm.OrganisationFromProto(merged)
-		_ = next
-		existing.Name = next.Name
-		existing.DisplayName = next.DisplayName
-		existing.Slug = next.Slug
-		existing.Settings = next.Settings
-		if repox.GroupTouched(paths, "hq") {
-			if existing.HqID != nil {
-				staleHq = *existing.HqID
-			}
-			existing.HqID = nil
-			if v := merged.GetHq(); v != nil {
-				vo := orgv1gorm.LocationFromProto(v)
-				vo.ID = repox.NewULID()
-				if err := tx.WithContext(ctx).Create(vo).Error; err != nil {
-					return err
-				}
-				existing.HqID = repox.Ptr(vo.ID)
-			}
-		}
-		existing.Etag = repox.Ptr(repox.NewULID())
-		if err := orgv1gorm.NewOrganisationStore(tx).Update(ctx, &existing); err != nil {
-			return err
-		}
-		if staleHq != "" {
-			if err := tx.WithContext(ctx).Delete(&orgv1gorm.Location{}, "id = ?", staleHq).Error; err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, id, in, paths, nil) })
 	if err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	return r.get(ctx, id)
+}
+
+// UpdateWithOutputOnly is Update plus the server-owned fields outputPaths
+// names, in Update's transaction and under its etag guard.
+func (r *GormOrganisationRepository) UpdateWithOutputOnly(ctx context.Context, in *orgv1.Organisation, paths, outputPaths []string) (*orgv1.Organisation, error) {
+	ids, err := repox.SplitName(in.GetName(), "organisations")
+	if err != nil {
+		return nil, err
+	}
+	id := ids[len(ids)-1]
+	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, id, in, paths, outputPaths) })
+	if err != nil {
+		return nil, repox.MapGormErr(err)
+	}
+	return r.get(ctx, id)
+}
+
+// updateTx is Update's write inside tx, which a Batch shares with other
+// writes. The row is read FOR UPDATE: a concurrent update of the same record
+// waits for this transaction and then sees the etag it wrote, so two writers
+// holding the same etag cannot both pass the guard. outputPaths names the
+// server-owned fields written alongside (UpdateWithOutputOnly); nil for Update.
+func (r *GormOrganisationRepository) updateTx(ctx context.Context, tx *gorm.DB, id string, in *orgv1.Organisation, paths, outputPaths []string) error {
+	var existing orgv1gorm.Organisation
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Hq").First(&existing, "id = ?", id).Error; err != nil {
+		return err
+	}
+	var staleHq string
+	if in.GetEtag() != "" && existing.Etag != nil && *existing.Etag != in.GetEtag() {
+		return repox.ErrConflict
+	}
+	existingPB := orgv1gorm.OrganisationToProto(&existing)
+	merged := proto.Clone(existingPB).(*orgv1.Organisation)
+	applyOrganisationMask(merged, in, paths)
+	repox.CopyFields(merged, in, outputPaths)
+	if h := r.Hooks.BeforeUpdate; h != nil {
+		if err := h(ctx, existingPB, merged, paths); err != nil {
+			return err
+		}
+	}
+	next := orgv1gorm.OrganisationFromProto(merged)
+	_ = next
+	existing.Name = next.Name
+	existing.DisplayName = next.DisplayName
+	existing.Slug = next.Slug
+	existing.Settings = next.Settings
+	if len(outputPaths) > 0 {
+		paths := outputPaths
+		if repox.InMask(paths, "state") {
+			existing.State = next.State
+		}
+	}
+	if repox.GroupTouched(paths, "hq") {
+		if existing.HqID != nil {
+			staleHq = *existing.HqID
+		}
+		existing.HqID = nil
+		if v := merged.GetHq(); v != nil {
+			vo := orgv1gorm.LocationFromProto(v)
+			vo.ID = repox.NewULID()
+			if err := tx.WithContext(ctx).Create(vo).Error; err != nil {
+				return err
+			}
+			existing.HqID = repox.Ptr(vo.ID)
+		}
+	}
+	existing.Etag = repox.Ptr(repox.NewULID())
+	if err := orgv1gorm.NewOrganisationStore(tx).Update(ctx, &existing); err != nil {
+		return err
+	}
+	if staleHq != "" {
+		if err := tx.WithContext(ctx).Delete(&orgv1gorm.Location{}, "id = ?", staleHq).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // UpdateOutputOnly persists the server-owned fields of in that paths names, in
@@ -541,7 +691,9 @@ func (r *GormOrganisationRepository) updateOutputOnlyTx(ctx context.Context, tx 
 	id := ids[len(ids)-1]
 	{
 		var existing orgv1gorm.Organisation
-		if err := tx.WithContext(ctx).First(&existing, "id = ?", id).Error; err != nil {
+		// FOR UPDATE, as in updateTx: concurrent writers holding one etag
+		// take turns, and only the first passes the guard.
+		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "id = ?", id).Error; err != nil {
 			return err
 		}
 		if in.GetEtag() != "" && existing.Etag != nil && *existing.Etag != in.GetEtag() {
@@ -556,6 +708,45 @@ func (r *GormOrganisationRepository) updateOutputOnlyTx(ctx context.Context, tx 
 	}
 }
 
+// newRow builds the row a Batch inserts for in, and the
+// record it stands for, named: the same resolution Create applies.
+func (r *GormOrganisationRepository) newRow(in *orgv1.Organisation) (*orgv1gorm.Organisation, *orgv1.Organisation, error) {
+	id := repox.NewULID()
+	if in.GetName() != "" {
+		ids, err := repox.SplitName(in.GetName(), "organisations")
+		if err != nil {
+			return nil, nil, err
+		}
+		id = ids[len(ids)-1]
+	}
+	in = proto.Clone(in).(*orgv1.Organisation)
+	in.Name = FormatOrganisationName(id)
+	m := orgv1gorm.OrganisationFromProto(in)
+	m.ID = id
+	m.Name = in.GetName()
+	m.Etag = repox.Ptr(repox.NewULID())
+	return m, in, nil
+}
+
+// insertTx writes m inside tx with the value-object rows in carries: those
+// it points at first, then m, then its children.
+func (r *GormOrganisationRepository) insertTx(ctx context.Context, tx *gorm.DB, in *orgv1.Organisation, m *orgv1gorm.Organisation) error {
+	id := m.ID
+	_ = id
+	if v := in.GetHq(); v != nil {
+		vo := orgv1gorm.LocationFromProto(v)
+		vo.ID = repox.NewULID()
+		if err := tx.WithContext(ctx).Create(vo).Error; err != nil {
+			return err
+		}
+		m.HqID = repox.Ptr(vo.ID)
+	}
+	if err := orgv1gorm.NewOrganisationStore(tx).Create(ctx, m); err != nil {
+		return err
+	}
+	return nil
+}
+
 // Delete removes the record addressed by its resource name.
 func (r *GormOrganisationRepository) Delete(ctx context.Context, name string) error {
 	ids, err := repox.SplitName(name, "organisations")
@@ -568,21 +759,25 @@ func (r *GormOrganisationRepository) Delete(ctx context.Context, name string) er
 		}
 	}
 	id := ids[len(ids)-1]
+	return repox.MapGormErr(r.DB.Transaction(func(tx *gorm.DB) error { return r.purgeTx(ctx, tx, id) }))
+}
+
+// purgeTx removes row id inside tx, with the value-object rows it owns;
+// gorm.ErrRecordNotFound when there is no such row.
+func (r *GormOrganisationRepository) purgeTx(ctx context.Context, tx *gorm.DB, id string) error {
 	var existing orgv1gorm.Organisation
-	if err := r.DB.WithContext(ctx).First(&existing, "id = ?", id).Error; err != nil {
-		return repox.MapGormErr(err)
+	if err := tx.WithContext(ctx).First(&existing, "id = ?", id).Error; err != nil {
+		return err
 	}
-	return repox.MapGormErr(r.DB.Transaction(func(tx *gorm.DB) error {
-		if err := orgv1gorm.NewOrganisationStore(tx).DeleteByID(ctx, id); err != nil {
+	if err := orgv1gorm.NewOrganisationStore(tx).DeleteByID(ctx, id); err != nil {
+		return err
+	}
+	if existing.HqID != nil {
+		if err := tx.WithContext(ctx).Delete(&orgv1gorm.Location{}, "id = ?", *existing.HqID).Error; err != nil {
 			return err
 		}
-		if existing.HqID != nil {
-			if err := tx.WithContext(ctx).Delete(&orgv1gorm.Location{}, "id = ?", *existing.HqID).Error; err != nil {
-				return err
-			}
-		}
-		return nil
-	}))
+	}
+	return nil
 }
 
 // Compile-time proof the adapter satisfies the interface.
@@ -597,6 +792,9 @@ var _ OrganisationRepository = (*GormOrganisationRepository)(nil)
 type GormUserRepository struct {
 	DB    *gorm.DB
 	Hooks UserHooks
+	// Refs, when set, is asked before a purge whether anything in another
+	// database or service still refers to the record (see Purge).
+	Refs *repox.References
 	// ListOverrides substitute the generated dispatch for single filter fields
 	// (e.g. a derived state computed via subqueries).
 	ListOverrides map[string]filterx.SQLHandler
@@ -680,7 +878,10 @@ func (r *GormUserRepository) list(ctx context.Context, scope *gorm.DB, in repox.
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)
 	}
-	rows, next, err := eng.List(ctx, scope, filterx.ListInput{
+	if err := repox.CheckReadMask((*orgv1.User)(nil), in.ReadMask); err != nil {
+		return nil, "", err
+	}
+	rows, next, err := eng.List(ctx, r.reads(scope, in), filterx.ListInput{
 		PageSize:  in.PageSize,
 		PageToken: in.PageToken,
 		OrderBy:   in.OrderBy,
@@ -695,9 +896,32 @@ func (r *GormUserRepository) list(ctx context.Context, scope *gorm.DB, in repox.
 		if err != nil {
 			return nil, "", err
 		}
+		repox.Narrow(out, in.ReadMask)
 		items = append(items, out)
 	}
 	return items, next, nil
+}
+
+// reads is the query a List reads rows through: every column and value object
+// without a read mask; with one, only the columns and value objects of the
+// fields it names, and the columns the page is sorted by.
+func (r *GormUserRepository) reads(db *gorm.DB, in repox.ListInput) *gorm.DB {
+	if len(in.ReadMask) == 0 {
+		return db
+	}
+	if omit := repox.Unread(userColumns, in.ReadMask, repox.OrderColumns(orgv1gorm.UserFilterSpec, in.OrderBy)...); len(omit) > 0 {
+		db = db.Omit(omit...)
+	}
+	return db
+}
+
+// userColumns are the row's columns by the field each stores, for
+// a read mask to leave out.
+var userColumns = map[string][]string{
+	"display_name": {"display_name"},
+	"create_time":  {"create_time"},
+	"update_time":  {"update_time"},
+	"etag":         {"etag"},
 }
 
 // Update persists the masked fields of in; an empty mask replaces every
@@ -708,43 +932,50 @@ func (r *GormUserRepository) Update(ctx context.Context, in *orgv1.User, paths [
 		return nil, err
 	}
 	id := ids[len(ids)-1]
-	err = r.DB.Transaction(func(tx *gorm.DB) error {
-		var existing orgv1gorm.User
-		if err := tx.WithContext(ctx).First(&existing, "id = ?", id).Error; err != nil {
-			return err
-		}
-		if in.GetEtag() != "" && existing.Etag != nil && *existing.Etag != in.GetEtag() {
-			return repox.ErrConflict
-		}
-		existingPB := orgv1gorm.UserToProto(&existing)
-		merged := proto.Clone(existingPB).(*orgv1.User)
-		applyUserMask(merged, in, paths)
-		if h := r.Hooks.BeforeUpdate; h != nil {
-			if err := h(ctx, existingPB, merged, paths); err != nil {
-				return err
-			}
-		}
-		next := orgv1gorm.UserFromProto(merged)
-		_ = next
-		existing.Name = next.Name
-		existing.DisplayName = next.DisplayName
-		existing.Etag = repox.Ptr(repox.NewULID())
-		return orgv1gorm.NewUserStore(tx).Update(ctx, &existing)
-	})
+	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, id, in, paths, nil) })
 	if err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	return r.get(ctx, id)
 }
 
+// updateTx is Update's write inside tx, which a Batch shares with other
+// writes. The row is read FOR UPDATE: a concurrent update of the same record
+// waits for this transaction and then sees the etag it wrote, so two writers
+// holding the same etag cannot both pass the guard. outputPaths names the
+// server-owned fields written alongside (UpdateWithOutputOnly); nil for Update.
+func (r *GormUserRepository) updateTx(ctx context.Context, tx *gorm.DB, id string, in *orgv1.User, paths, outputPaths []string) error {
+	var existing orgv1gorm.User
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "id = ?", id).Error; err != nil {
+		return err
+	}
+	if in.GetEtag() != "" && existing.Etag != nil && *existing.Etag != in.GetEtag() {
+		return repox.ErrConflict
+	}
+	existingPB := orgv1gorm.UserToProto(&existing)
+	merged := proto.Clone(existingPB).(*orgv1.User)
+	applyUserMask(merged, in, paths)
+	if h := r.Hooks.BeforeUpdate; h != nil {
+		if err := h(ctx, existingPB, merged, paths); err != nil {
+			return err
+		}
+	}
+	next := orgv1gorm.UserFromProto(merged)
+	_ = next
+	existing.Name = next.Name
+	existing.DisplayName = next.DisplayName
+	existing.Etag = repox.Ptr(repox.NewULID())
+	return orgv1gorm.NewUserStore(tx).Update(ctx, &existing)
+}
+
 // newRow builds the row a Batch inserts for in, and the
-// name the record will have: the same resolution Create applies.
-func (r *GormUserRepository) newRow(in *orgv1.User) (*orgv1gorm.User, string, error) {
+// record it stands for, named: the same resolution Create applies.
+func (r *GormUserRepository) newRow(in *orgv1.User) (*orgv1gorm.User, *orgv1.User, error) {
 	id := repox.NewULID()
 	if in.GetName() != "" {
 		ids, err := repox.SplitName(in.GetName(), "users")
 		if err != nil {
-			return nil, "", err
+			return nil, nil, err
 		}
 		id = ids[len(ids)-1]
 	}
@@ -754,7 +985,7 @@ func (r *GormUserRepository) newRow(in *orgv1.User) (*orgv1gorm.User, string, er
 	m.ID = id
 	m.Name = in.GetName()
 	m.Etag = repox.Ptr(repox.NewULID())
-	return m, in.GetName(), nil
+	return m, in, nil
 }
 
 // Delete removes the record addressed by its resource name.
@@ -779,57 +1010,186 @@ func (r *GormUserRepository) Delete(ctx context.Context, name string) error {
 // Compile-time proof the adapter satisfies the interface.
 var _ UserRepository = (*GormUserRepository)(nil)
 
-// gormBatch is Batch on GORM: queued writes run in one transaction on Commit.
+// gormBatch is Batch on GORM: queued writes run in the Unit's transaction on
+// Commit.
 type gormBatch struct {
-	db    *gorm.DB
-	ops   []func(ctx context.Context, tx *gorm.DB) error
-	locks []string // no_overlap keys of the rows queued for insert
-	err   error    // the first queueing error; Commit returns it and writes nothing
+	u  *repox.Unit
+	db *gorm.DB
 }
 
-// Commit runs every queued write in one transaction: all land or none do.
-// It first locks the no_overlap keys of every row it inserts, all at once and
-// in order (gormx.LockKeys), so two batches inserting rows for the same keys
-// in different orders take turns instead of deadlocking.
-func (b *gormBatch) Commit(ctx context.Context) error {
-	if b.err != nil {
-		return b.err
+// Commit applies the Unit's writes; see repox.Unit.Commit.
+func (b *gormBatch) Commit(ctx context.Context) error { return b.u.Commit(ctx) }
+
+// CreateMember queues a create and returns the name the record will have.
+func (b *gormBatch) CreateMember(parent string, in *orgv1.Member) (string, error) {
+	r := &GormMemberRepository{DB: b.db}
+	m, named, err := r.newRow(parent, in)
+	if err != nil {
+		return "", err
 	}
-	if len(b.ops) == 0 {
-		return nil
+	var locks []string
+	if k, ok := any(m).(interface{ NoOverlapKeys() []string }); ok {
+		locks = k.NoOverlapKeys()
 	}
-	return repox.MapGormErr(b.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := gormx.LockKeys(tx, b.locks...); err != nil {
+	queueMemberReferences(b.u, named, nil)
+	b.u.QueueGorm(locks, func(ctx context.Context, tx *gorm.DB) error {
+		return r.insertTx(ctx, tx, named, m)
+	})
+	b.u.Touch(named.GetName())
+	return named.GetName(), nil
+}
+
+// UpdateMember queues Update; in.Etag, when set, guards it, and a guard
+// that fails rolls the whole batch back.
+func (b *gormBatch) UpdateMember(in *orgv1.Member, paths []string) {
+	ids, err := repox.SplitName(in.GetName(), "organisations", "members")
+	if err != nil {
+		b.u.Fail(err)
+		return
+	}
+	r := &GormMemberRepository{DB: b.db}
+	queueMemberReferences(b.u, in, paths)
+	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
+		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, nil)
+	})
+	b.u.Touch(in.GetName())
+}
+
+// DeleteMember queues the record's removal for good. A record already
+// gone is not an error: two batches clearing the same row must not fail each
+// other.
+func (b *gormBatch) DeleteMember(name string) {
+	ids, err := repox.SplitName(name, "organisations", "members")
+	if err != nil {
+		b.u.Fail(err)
+		return
+	}
+	id := ids[len(ids)-1]
+	queueMemberDelete(b.u, name, true)
+	r := &GormMemberRepository{DB: b.db}
+	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
+		if err := r.purgeTx(ctx, tx, id); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
-		for _, op := range b.ops {
-			if err := op(ctx, tx); err != nil {
-				return err
-			}
-		}
 		return nil
-	}))
+	})
+	b.u.Touch(name)
 }
 
-func (b *gormBatch) fail(err error) {
-	if b.err == nil {
-		b.err = err
+// CreateOrganisation queues a create and returns the name the record will have.
+func (b *gormBatch) CreateOrganisation(in *orgv1.Organisation) (string, error) {
+	r := &GormOrganisationRepository{DB: b.db}
+	m, named, err := r.newRow(in)
+	if err != nil {
+		return "", err
 	}
+	var locks []string
+	if k, ok := any(m).(interface{ NoOverlapKeys() []string }); ok {
+		locks = k.NoOverlapKeys()
+	}
+	queueOrganisationReferences(b.u, named, nil)
+	b.u.QueueGorm(locks, func(ctx context.Context, tx *gorm.DB) error {
+		return r.insertTx(ctx, tx, named, m)
+	})
+	b.u.Touch(named.GetName())
+	return named.GetName(), nil
+}
+
+// UpdateOrganisation queues Update; in.Etag, when set, guards it, and a guard
+// that fails rolls the whole batch back.
+func (b *gormBatch) UpdateOrganisation(in *orgv1.Organisation, paths []string) {
+	ids, err := repox.SplitName(in.GetName(), "organisations")
+	if err != nil {
+		b.u.Fail(err)
+		return
+	}
+	r := &GormOrganisationRepository{DB: b.db}
+	queueOrganisationReferences(b.u, in, paths)
+	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
+		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, nil)
+	})
+	b.u.Touch(in.GetName())
+}
+
+// UpdateOrganisationWithOutputOnly queues UpdateWithOutputOnly; in.Etag, when
+// set, guards it, and a guard that fails rolls the whole batch back.
+func (b *gormBatch) UpdateOrganisationWithOutputOnly(in *orgv1.Organisation, paths, outputPaths []string) {
+	ids, err := repox.SplitName(in.GetName(), "organisations")
+	if err != nil {
+		b.u.Fail(err)
+		return
+	}
+	r := &GormOrganisationRepository{DB: b.db}
+	queueOrganisationReferences(b.u, in, paths)
+	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
+		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, outputPaths)
+	})
+	b.u.Touch(in.GetName())
+}
+
+// UpdateOrganisationOutputOnly queues UpdateOutputOnly; in.Etag, when set, guards it.
+func (b *gormBatch) UpdateOrganisationOutputOnly(in *orgv1.Organisation, paths []string) {
+	r := &GormOrganisationRepository{DB: b.db}
+	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
+		return r.updateOutputOnlyTx(ctx, tx, in, paths)
+	})
+	b.u.Touch(in.GetName())
+}
+
+// DeleteOrganisation queues the record's removal for good. A record already
+// gone is not an error: two batches clearing the same row must not fail each
+// other.
+func (b *gormBatch) DeleteOrganisation(name string) {
+	ids, err := repox.SplitName(name, "organisations")
+	if err != nil {
+		b.u.Fail(err)
+		return
+	}
+	id := ids[len(ids)-1]
+	queueOrganisationDelete(b.u, name, true)
+	r := &GormOrganisationRepository{DB: b.db}
+	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
+		if err := r.purgeTx(ctx, tx, id); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		return nil
+	})
+	b.u.Touch(name)
 }
 
 // CreateUser queues a create and returns the name the record will have.
 func (b *gormBatch) CreateUser(in *orgv1.User) (string, error) {
-	m, name, err := (&GormUserRepository{DB: b.db}).newRow(in)
+	r := &GormUserRepository{DB: b.db}
+	m, named, err := r.newRow(in)
 	if err != nil {
 		return "", err
 	}
+	var locks []string
 	if k, ok := any(m).(interface{ NoOverlapKeys() []string }); ok {
-		b.locks = append(b.locks, k.NoOverlapKeys()...)
+		locks = k.NoOverlapKeys()
 	}
-	b.ops = append(b.ops, func(ctx context.Context, tx *gorm.DB) error {
+	queueUserReferences(b.u, named, nil)
+	b.u.QueueGorm(locks, func(ctx context.Context, tx *gorm.DB) error {
 		return orgv1gorm.NewUserStore(tx).Create(ctx, m)
 	})
-	return name, nil
+	b.u.Touch(named.GetName())
+	return named.GetName(), nil
+}
+
+// UpdateUser queues Update; in.Etag, when set, guards it, and a guard
+// that fails rolls the whole batch back.
+func (b *gormBatch) UpdateUser(in *orgv1.User, paths []string) {
+	ids, err := repox.SplitName(in.GetName(), "users")
+	if err != nil {
+		b.u.Fail(err)
+		return
+	}
+	r := &GormUserRepository{DB: b.db}
+	queueUserReferences(b.u, in, paths)
+	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
+		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, nil)
+	})
+	b.u.Touch(in.GetName())
 }
 
 // DeleteUser queues the record's removal for good. A record already
@@ -838,11 +1198,13 @@ func (b *gormBatch) CreateUser(in *orgv1.User) (string, error) {
 func (b *gormBatch) DeleteUser(name string) {
 	ids, err := repox.SplitName(name, "users")
 	if err != nil {
-		b.fail(err)
+		b.u.Fail(err)
 		return
 	}
 	id := ids[len(ids)-1]
-	b.ops = append(b.ops, func(ctx context.Context, tx *gorm.DB) error {
+	queueUserDelete(b.u, name, true)
+	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return tx.WithContext(ctx).Delete(&orgv1gorm.User{}, "id = ?", id).Error
 	})
+	b.u.Touch(name)
 }

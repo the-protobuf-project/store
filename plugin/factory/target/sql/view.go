@@ -14,6 +14,7 @@ import (
 	"github.com/the-protobuf-project/protokit/schema"
 	"github.com/the-protobuf-project/store/plugin/factory/facets"
 	"github.com/the-protobuf-project/store/plugin/factory/provenance"
+	"github.com/the-protobuf-project/store/plugin/factory/target/externalfk"
 	"github.com/the-protobuf-project/store/plugin/factory/target/nooverlap"
 	"github.com/the-protobuf-project/store/plugin/factory/target/searchindex"
 	"github.com/the-protobuf-project/store/plugin/factory/target/types"
@@ -272,6 +273,37 @@ func migrateView(db *schema.Database, typeOf types.TypeOf, fx facets.Set) map[st
 		"Functions":   functions,
 		"Triggers":    triggers,
 		"Comments":    comments,
+		"External":    externalAdds(db),
+	}
+}
+
+// externalAdds renders db's constraint-only foreign keys (externalfk): one
+// idempotent, NOT VALID ADD per reference, after every table exists.
+func externalAdds(db *schema.Database) []string {
+	var out []string
+	for _, c := range externalfk.For(db) {
+		out = append(out, c.Add())
+	}
+	return out
+}
+
+// validateView is validate.sql: VALIDATE CONSTRAINT for every constraint
+// migrate.sql added NOT VALID, run once the rows that predate it are clean.
+func validateView(db *schema.Database) map[string]any {
+	var stmts []string
+	for _, c := range externalfk.For(db) {
+		stmts = append(stmts, c.Validate())
+	}
+	return map[string]any{
+		"Header": provenance.Render("--", header.Info{
+			PluginVersion: db.PluginVersion,
+			ProtocVersion: db.ProtocVersion,
+			Database:      db.Name,
+			SchemaLabel:   "schemas",
+			Schema:        strings.Join(schemaLabels(db), ", "),
+			Notes:         []string{"Validates the NOT VALID foreign keys migrate.sql adds across databases. Idempotent."},
+		}),
+		"Validate": stmts,
 	}
 }
 

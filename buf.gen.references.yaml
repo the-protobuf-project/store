@@ -1,0 +1,42 @@
+version: v2
+
+# Generates examples/references: the reference contract end to end. Two
+# databases on one server with a cross-database foreign key, and a reference
+# to a resource of another service checked through its AIP Get.
+#
+# Run (with the dev plugin first on PATH): just references
+inputs:
+  - directory: examples/references/proto
+
+plugins:
+  - remote: buf.build/protocolbuffers/go:v1.36.11
+    out: examples/references/gen/pb
+    opt:
+      - module=github.com/the-protobuf-project/store/examples/references/gen/pb
+
+  - local: protoc-gen-store
+    out: examples/references/gen/gorm
+    strategy: all
+    opt:
+      - target=gorm
+      - stores=true
+      - converters=true
+      - filters=true
+      - go_module=github.com/the-protobuf-project/store/examples/references/gen/gorm
+      - config=examples/references/store.yaml
+
+  - local: protoc-gen-store
+    out: examples/references/gen/repository
+    strategy: all
+    opt:
+      - target=repository
+      - go_module=github.com/the-protobuf-project/store/examples/references/gen/repository
+      - gorm_module=github.com/the-protobuf-project/store/examples/references/gen/gorm
+      - config=examples/references/store.yaml
+
+  - local: protoc-gen-store
+    out: examples/references/gen/sql
+    strategy: all
+    opt:
+      - target=sql
+      - config=examples/references/store.yaml
