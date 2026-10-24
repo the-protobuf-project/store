@@ -28,9 +28,9 @@ type Plan struct {
 	Name   string   // constraint name
 	Schema string   // the table's schema, unquoted
 	Table  string   // quoted, schema-qualified table: "allocation"."resource"
-	Key   []string // equality column names
-	Start string   // range start column
-	End   string   // range end column
+	Key    []string // equality column names
+	Start  string   // range start column
+	End    string   // range end column
 }
 
 // Check validates every no_overlap rule in db, so a misspelt field fails

@@ -9,7 +9,7 @@
 //
 // Proto-facing repository interfaces; adapters compose the generated gorm and GraphQL outputs.
 // annotations: entity.v1 dev, store.v1 dev
-// engine:      protokit (devel)
+// engine:      protokit v1.3.4
 //
 // store — https://github.com/the-protobuf-project/store
 
@@ -35,6 +35,13 @@ type BookRepository interface {
 	Get(ctx context.Context, name string) (*catalogv1.Book, error)
 	// List returns one page of records under parent.
 	List(ctx context.Context, parent string, in repox.ListInput) ([]*catalogv1.Book, string, error)
+	// ListByKeys reads every record whose filter field field is one of keys
+	// -- a batched read by name, by parent, by any text, enum or reference
+	// field -- in statements of at most repox.KeysPerRead keys, at most
+	// repox.ReadParallelism at once, across every parent. in narrows
+	// each read; its page fields are ignored. See repox.ListByKeys for the
+	// order records come back in.
+	ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*catalogv1.Book, error)
 	// Update persists the masked fields of m; an empty mask replaces every
 	// mutable field. m.Etag, when set, guards against concurrent writes
 	// (repox.ErrConflict).
@@ -97,6 +104,13 @@ type ShelfRepository interface {
 	Get(ctx context.Context, name string) (*catalogv1.Shelf, error)
 	// List returns one page of records.
 	List(ctx context.Context, in repox.ListInput) ([]*catalogv1.Shelf, string, error)
+	// ListByKeys reads every record whose filter field field is one of keys
+	// -- a batched read by name, by parent, by any text, enum or reference
+	// field -- in statements of at most repox.KeysPerRead keys, at most
+	// repox.ReadParallelism at once. in narrows
+	// each read; its page fields are ignored. See repox.ListByKeys for the
+	// order records come back in.
+	ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*catalogv1.Shelf, error)
 	// Update persists the masked fields of m; an empty mask replaces every
 	// mutable field. m.Etag, when set, guards against concurrent writes
 	// (repox.ErrConflict).
@@ -227,6 +241,7 @@ func NewBatchIn(u *repox.Unit, opts ...Option) Batch {
 // the adapters they build.
 type options struct {
 	references     *repox.References
+	projections    *repox.Projections
 	bookHooks      BookHooks
 	bookOverrides  map[string]filterx.SQLHandler
 	shelfHooks     ShelfHooks
@@ -236,6 +251,14 @@ type options struct {
 
 // Option customizes the adapters a factory builds.
 type Option func(*options)
+
+// WithProjections keeps the projections p maintains current with every write
+// the repositories make (see repox.Projections): on GORM each write and its
+// projections share one transaction; on GraphQL the projections follow the
+// write in a request of their own. New passes repox.Conn.Projections.
+func WithProjections(p *repox.Projections) Option {
+	return func(o *options) { o.projections = p }
+}
 
 // WithReferences enforces reference integrity through refs (see
 // repox.References): New passes repox.Conn.References. With none, writes do
@@ -289,7 +312,7 @@ func WithShelfListOverride(field string, h filterx.SQLHandler) Option {
 // When conn carries a ChangeObserver, every write the returned repositories
 // make is reported to it (see observe).
 func New(conn repox.Conn, opts ...Option) Repositories {
-	opts = append([]Option{WithReferences(conn.References)}, opts...)
+	opts = append([]Option{WithReferences(conn.References), WithProjections(conn.Projections)}, opts...)
 	return observe(NewGorm(conn.Gorm, opts...), conn.Changes)
 }
 
@@ -299,10 +322,61 @@ func NewGorm(db *gorm.DB, opts ...Option) Repositories {
 	for _, opt := range opts {
 		opt(&o)
 	}
-	return guard(Repositories{
+	repos := Repositories{
 		Books:  &GormBookRepository{DB: db, Hooks: o.bookHooks, Refs: o.references, ListOverrides: o.bookOverrides, Retention: o.retention},
 		Shelfs: &GormShelfRepository{DB: db, Hooks: o.shelfHooks, Refs: o.references, ListOverrides: o.shelfOverrides, Retention: o.retention},
-	}, o.references)
+	}
+	if p := o.projections; p != nil {
+		if p.Watches("catalog.example.com/Book") {
+			g := repos.Books.(*GormBookRepository)
+			repos.Books = &projectedBookRepository{BookRepository: g, run: func(ctx context.Context, f func(BookRepository) ([]repox.Change, error)) error {
+				// The write and its projections in one transaction: the
+				// adapter is rebound to it, so its own transactions nest as
+				// savepoints and its re-reads see the write. The feed hears
+				// of it once it commits.
+				var committed []repox.Committed
+				err := repox.MapGormErr(db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+					bound := *g
+					bound.DB = tx
+					changes, err := f(&bound)
+					if err != nil {
+						return err
+					}
+					committed, err = p.Gorm(ctx, tx, changes)
+					return err
+				}))
+				if err == nil {
+					p.Publish(ctx, committed)
+				}
+				return err
+			}}
+		}
+		if p.Watches("catalog.example.com/Shelf") {
+			g := repos.Shelfs.(*GormShelfRepository)
+			repos.Shelfs = &projectedShelfRepository{ShelfRepository: g, run: func(ctx context.Context, f func(ShelfRepository) ([]repox.Change, error)) error {
+				// The write and its projections in one transaction: the
+				// adapter is rebound to it, so its own transactions nest as
+				// savepoints and its re-reads see the write. The feed hears
+				// of it once it commits.
+				var committed []repox.Committed
+				err := repox.MapGormErr(db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+					bound := *g
+					bound.DB = tx
+					changes, err := f(&bound)
+					if err != nil {
+						return err
+					}
+					committed, err = p.Gorm(ctx, tx, changes)
+					return err
+				}))
+				if err == nil {
+					p.Publish(ctx, committed)
+				}
+				return err
+			}}
+		}
+	}
+	return guard(repos, o.references)
 }
 
 // guard wraps every repository in repos so its writes keep reference
@@ -487,6 +561,226 @@ func (o *observedShelfRepository) PurgeExpired(ctx context.Context, now time.Tim
 	for _, name := range res.Purged {
 		o.changes.Changed(ctx, name)
 	}
+	return res, err
+}
+
+// projectedBookRepository runs the connection's projections over every
+// Book write; see WithProjections. run performs a write through the
+// repository it hands f and projects the changes f reports.
+type projectedBookRepository struct {
+	BookRepository
+	run func(ctx context.Context, f func(BookRepository) ([]repox.Change, error)) error
+}
+
+// getBook reads name through read, for a queued write's
+// Change.LoadPrior (repox.PriorOf).
+func getBook(ctx context.Context, read repox.Conn, name string) (*catalogv1.Book, error) {
+	return New(read).Books.Get(ctx, name)
+}
+
+// changedBook is the change one write of a Book makes.
+func changedBook(name string, op repox.ChangeOp, rec *catalogv1.Book) []repox.Change {
+	c := repox.Change{Type: "catalog.example.com/Book", Name: name, Op: op}
+	if rec != nil {
+		c.Record = rec
+	}
+	return []repox.Change{c}
+}
+
+func (p *projectedBookRepository) Create(ctx context.Context, parent string, m *catalogv1.Book) (out *catalogv1.Book, err error) {
+	err = p.run(ctx, func(r BookRepository) ([]repox.Change, error) {
+		var err error
+		out, err = r.Create(ctx, parent, m)
+		return changedBook(out.GetName(), repox.ChangeCreate, out), err
+	})
+	return out, err
+}
+
+func (p *projectedBookRepository) Update(ctx context.Context, m *catalogv1.Book, paths []string) (out *catalogv1.Book, err error) {
+	err = p.run(ctx, func(r BookRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, m.GetName()))
+		if err != nil {
+			return nil, err
+		}
+		out, err = r.Update(ctx, m, paths)
+		return repox.WithPrior(changedBook(m.GetName(), repox.ChangeUpdate, out), prior), err
+	})
+	return out, err
+}
+
+func (p *projectedBookRepository) UpdateOutputOnly(ctx context.Context, m *catalogv1.Book, paths []string) (out *catalogv1.Book, err error) {
+	err = p.run(ctx, func(r BookRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, m.GetName()))
+		if err != nil {
+			return nil, err
+		}
+		out, err = r.UpdateOutputOnly(ctx, m, paths)
+		return repox.WithPrior(changedBook(m.GetName(), repox.ChangeUpdate, out), prior), err
+	})
+	return out, err
+}
+
+func (p *projectedBookRepository) UpdateWithOutputOnly(ctx context.Context, m *catalogv1.Book, paths, outputPaths []string) (out *catalogv1.Book, err error) {
+	err = p.run(ctx, func(r BookRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, m.GetName()))
+		if err != nil {
+			return nil, err
+		}
+		out, err = r.UpdateWithOutputOnly(ctx, m, paths, outputPaths)
+		return repox.WithPrior(changedBook(m.GetName(), repox.ChangeUpdate, out), prior), err
+	})
+	return out, err
+}
+
+func (p *projectedBookRepository) Delete(ctx context.Context, name string) error {
+	return p.run(ctx, func(r BookRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, name))
+		if err != nil {
+			return nil, err
+		}
+		return repox.WithPrior(changedBook(name, repox.ChangeDelete, nil), prior), r.Delete(ctx, name)
+	})
+}
+
+func (p *projectedBookRepository) Undelete(ctx context.Context, name string) (out *catalogv1.Book, err error) {
+	err = p.run(ctx, func(r BookRepository) ([]repox.Change, error) {
+		var err error
+		out, err = r.Undelete(ctx, name)
+		return changedBook(name, repox.ChangeUndelete, out), err
+	})
+	return out, err
+}
+
+func (p *projectedBookRepository) Purge(ctx context.Context, name string) error {
+	return p.run(ctx, func(r BookRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, name))
+		if err != nil {
+			return nil, err
+		}
+		return repox.WithPrior(changedBook(name, repox.ChangePurge, nil), prior), r.Purge(ctx, name)
+	})
+}
+
+func (p *projectedBookRepository) PurgeExpired(ctx context.Context, now time.Time) (res repox.PurgeResult, err error) {
+	err = p.run(ctx, func(r BookRepository) ([]repox.Change, error) {
+		var err error
+		res, err = r.PurgeExpired(ctx, now)
+		var changes []repox.Change
+		for _, name := range res.Purged {
+			changes = append(changes, changedBook(name, repox.ChangePurge, nil)...)
+		}
+		return changes, err
+	})
+	return res, err
+}
+
+// projectedShelfRepository runs the connection's projections over every
+// Shelf write; see WithProjections. run performs a write through the
+// repository it hands f and projects the changes f reports.
+type projectedShelfRepository struct {
+	ShelfRepository
+	run func(ctx context.Context, f func(ShelfRepository) ([]repox.Change, error)) error
+}
+
+// getShelf reads name through read, for a queued write's
+// Change.LoadPrior (repox.PriorOf).
+func getShelf(ctx context.Context, read repox.Conn, name string) (*catalogv1.Shelf, error) {
+	return New(read).Shelfs.Get(ctx, name)
+}
+
+// changedShelf is the change one write of a Shelf makes.
+func changedShelf(name string, op repox.ChangeOp, rec *catalogv1.Shelf) []repox.Change {
+	c := repox.Change{Type: "catalog.example.com/Shelf", Name: name, Op: op}
+	if rec != nil {
+		c.Record = rec
+	}
+	return []repox.Change{c}
+}
+
+func (p *projectedShelfRepository) Create(ctx context.Context, m *catalogv1.Shelf) (out *catalogv1.Shelf, err error) {
+	err = p.run(ctx, func(r ShelfRepository) ([]repox.Change, error) {
+		var err error
+		out, err = r.Create(ctx, m)
+		return changedShelf(out.GetName(), repox.ChangeCreate, out), err
+	})
+	return out, err
+}
+
+func (p *projectedShelfRepository) Update(ctx context.Context, m *catalogv1.Shelf, paths []string) (out *catalogv1.Shelf, err error) {
+	err = p.run(ctx, func(r ShelfRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, m.GetName()))
+		if err != nil {
+			return nil, err
+		}
+		out, err = r.Update(ctx, m, paths)
+		return repox.WithPrior(changedShelf(m.GetName(), repox.ChangeUpdate, out), prior), err
+	})
+	return out, err
+}
+
+func (p *projectedShelfRepository) UpdateOutputOnly(ctx context.Context, m *catalogv1.Shelf, paths []string) (out *catalogv1.Shelf, err error) {
+	err = p.run(ctx, func(r ShelfRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, m.GetName()))
+		if err != nil {
+			return nil, err
+		}
+		out, err = r.UpdateOutputOnly(ctx, m, paths)
+		return repox.WithPrior(changedShelf(m.GetName(), repox.ChangeUpdate, out), prior), err
+	})
+	return out, err
+}
+
+func (p *projectedShelfRepository) UpdateWithOutputOnly(ctx context.Context, m *catalogv1.Shelf, paths, outputPaths []string) (out *catalogv1.Shelf, err error) {
+	err = p.run(ctx, func(r ShelfRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, m.GetName()))
+		if err != nil {
+			return nil, err
+		}
+		out, err = r.UpdateWithOutputOnly(ctx, m, paths, outputPaths)
+		return repox.WithPrior(changedShelf(m.GetName(), repox.ChangeUpdate, out), prior), err
+	})
+	return out, err
+}
+
+func (p *projectedShelfRepository) Delete(ctx context.Context, name string) error {
+	return p.run(ctx, func(r ShelfRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, name))
+		if err != nil {
+			return nil, err
+		}
+		return repox.WithPrior(changedShelf(name, repox.ChangeDelete, nil), prior), r.Delete(ctx, name)
+	})
+}
+
+func (p *projectedShelfRepository) Undelete(ctx context.Context, name string) (out *catalogv1.Shelf, err error) {
+	err = p.run(ctx, func(r ShelfRepository) ([]repox.Change, error) {
+		var err error
+		out, err = r.Undelete(ctx, name)
+		return changedShelf(name, repox.ChangeUndelete, out), err
+	})
+	return out, err
+}
+
+func (p *projectedShelfRepository) Purge(ctx context.Context, name string) error {
+	return p.run(ctx, func(r ShelfRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, name))
+		if err != nil {
+			return nil, err
+		}
+		return repox.WithPrior(changedShelf(name, repox.ChangePurge, nil), prior), r.Purge(ctx, name)
+	})
+}
+
+func (p *projectedShelfRepository) PurgeExpired(ctx context.Context, now time.Time) (res repox.PurgeResult, err error) {
+	err = p.run(ctx, func(r ShelfRepository) ([]repox.Change, error) {
+		var err error
+		res, err = r.PurgeExpired(ctx, now)
+		var changes []repox.Change
+		for _, name := range res.Purged {
+			changes = append(changes, changedShelf(name, repox.ChangePurge, nil)...)
+		}
+		return changes, err
+	})
 	return res, err
 }
 

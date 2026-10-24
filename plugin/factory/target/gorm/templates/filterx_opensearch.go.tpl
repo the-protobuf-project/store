@@ -1,0 +1,366 @@
+{{.Header}}
+
+// opensearch.go is the OpenSearch engine: OpenSearch builds a chainable
+// translator over a Spec that turns parsed AIP-160 conditions into a query
+// DSL clause and AIP-132 order_by into a sort, both as plain JSON-ready maps.
+// It imports no client: the generated search repositories (target=opensearch)
+// send what it builds. Documents name their fields by the spec's columns, so
+// the Spec that drives the SQL and GraphQL engines drives this one too.
+
+package filterx
+
+import (
+	"fmt"
+	"strings"
+)
+
+// OpenSearchTypedSuffix names the object a document keeps the declared hot
+// paths of a KindJSON field in ("attributes" -> "attributes_typed"): the
+// field itself is mapped `flat_object`, which stores every leaf as a keyword,
+// and a hot path is also copied, typed, under this object so it compares as
+// its kind (FieldSpec.JSONKeys).
+const OpenSearchTypedSuffix = "_typed"
+
+// OpenSearchHandler overrides (or extends) the engine's dispatch for one
+// filter field, returning a query clause.
+type OpenSearchHandler func(c Condition) (map[string]any, error)
+
+// OpenSearchEngine is the query-DSL translator for one Spec. Build it with
+// OpenSearch and tune it with Override.
+type OpenSearchEngine struct {
+	spec      Spec
+	overrides map[string]OpenSearchHandler
+}
+
+// OpenSearch builds the query-DSL translator for spec:
+//
+//	query, err := filterx.OpenSearch(spec).Query(conds)
+func OpenSearch(spec Spec) *OpenSearchEngine {
+	return &OpenSearchEngine{spec: spec}
+}
+
+// Override installs a custom handler for one filter field.
+func (e *OpenSearchEngine) Override(field string, h OpenSearchHandler) *OpenSearchEngine {
+	if e.overrides == nil {
+		e.overrides = map[string]OpenSearchHandler{}
+	}
+	e.overrides[field] = h
+	return e
+}
+
+// Query translates the conditions (AND-combined) into one bool query in
+// filter context (no scoring). No conditions is match_all. Unknown fields,
+// unsupported operators and malformed values are rejected with ErrInvalid; a
+// value-object path (FieldSpec.Via), which a document does not carry, is
+// rejected too unless it is a hint, which is left out.
+func (e *OpenSearchEngine) Query(conds []Condition) (map[string]any, error) {
+	clauses := make([]any, 0, len(conds))
+	for _, c := range conds {
+		if h, ok := e.overrides[c.Field]; ok {
+			q, err := h(c)
+			if err != nil {
+				return nil, err
+			}
+			clauses = append(clauses, q)
+			continue
+		}
+		if c.Hint && reachesVia(e.spec, c) {
+			continue
+		}
+		q, err := osCondition(e.spec, c)
+		if err != nil {
+			return nil, err
+		}
+		clauses = append(clauses, q)
+	}
+	if len(clauses) == 0 {
+		return map[string]any{"match_all": map[string]any{}}, nil
+	}
+	return map[string]any{"bool": map[string]any{"filter": clauses}}, nil
+}
+
+// Sort resolves an order_by string into an OpenSearch sort and the order
+// terms it came from (the primary key appended, as for every engine). Missing
+// values sort as PostgreSQL places NULLs: last ascending, first descending.
+func (e *OpenSearchEngine) Sort(orderBy string) ([]any, []OrderTerm, error) {
+	terms, err := OrderTerms(e.spec, orderBy)
+	if err != nil {
+		return nil, nil, err
+	}
+	out := make([]any, 0, len(terms))
+	for _, t := range terms {
+		order, missing := "asc", "_last"
+		if t.Desc {
+			order, missing = "desc", "_first"
+		}
+		out = append(out, map[string]any{t.Column: map[string]any{"order": order, "missing": missing}})
+	}
+	return out, terms, nil
+}
+
+func osNot(q map[string]any) map[string]any {
+	return map[string]any{"bool": map[string]any{"must_not": []any{q}}}
+}
+
+func osTerm(field string, v any) map[string]any {
+	return map[string]any{"term": map[string]any{field: v}}
+}
+
+func osExists(field string) map[string]any {
+	return map[string]any{"exists": map[string]any{"field": field}}
+}
+
+// osContains is a case-insensitive contains over a keyword field, the twin of
+// the SQL engine's ILIKE '%v%'.
+func osContains(field, v string) map[string]any {
+	r := strings.NewReplacer(`\`, `\\`, `*`, `\*`, `?`, `\?`)
+	return map[string]any{"wildcard": map[string]any{field: map[string]any{
+		"value": "*" + r.Replace(v) + "*", "case_insensitive": true,
+	}}}
+}
+
+func osRange(field string, op Op, v any) (map[string]any, bool) {
+	key := ""
+	switch op {
+	case OpLt:
+		key = "lt"
+	case OpLte:
+		key = "lte"
+	case OpGt:
+		key = "gt"
+	case OpGte:
+		key = "gte"
+	default:
+		return nil, false
+	}
+	return map[string]any{"range": map[string]any{field: map[string]any{key: v}}}, true
+}
+
+func osAny(qs []any) map[string]any {
+	if len(qs) == 0 {
+		return map[string]any{"match_none": map[string]any{}}
+	}
+	return map[string]any{"bool": map[string]any{"should": qs, "minimum_should_match": 1}}
+}
+
+// osCondition translates one spec-listed condition.
+func osCondition(spec Spec, c Condition) (map[string]any, error) {
+	if c.Op == OpOr {
+		alts := make([]any, 0, len(c.Any))
+		for _, alt := range c.Any {
+			q, err := osCondition(spec, alt)
+			if err != nil {
+				return nil, err
+			}
+			alts = append(alts, q)
+		}
+		return osAny(alts), nil
+	}
+	if c.Field == "" {
+		if len(spec.Search) == 0 {
+			return nil, fmt.Errorf("%w: free-text search is not supported here", ErrInvalid)
+		}
+		alts := make([]any, 0, len(spec.Search))
+		for _, col := range spec.Search {
+			alts = append(alts, osContains(col, c.Value))
+		}
+		return osAny(alts), nil
+	}
+	f, ok := spec.Fields[c.Field]
+	if !ok {
+		p, isPath, err := LookupJSON(spec, c.Field)
+		if err != nil {
+			return nil, err
+		}
+		if !isPath {
+			return nil, fmt.Errorf("%w: cannot filter by %q", ErrInvalid, c.Field)
+		}
+		return osJSONCondition(p, c)
+	}
+	if f.Via != nil {
+		return nil, fmt.Errorf("%w: %q is a value-object field, which a search document does not carry", ErrInvalid, c.Field)
+	}
+	col := f.Column
+	if c.Op == OpNull {
+		null, err := ParseBool(c.Value)
+		if err != nil {
+			return nil, err
+		}
+		if null {
+			return osNot(osExists(col)), nil
+		}
+		return osExists(col), nil
+	}
+	if c.Op == OpIn {
+		vals := make([]any, 0, len(c.Values))
+		for _, v := range c.Values {
+			switch f.Kind {
+			case KindText:
+				vals = append(vals, v)
+			case KindEnum:
+				vals = append(vals, NormalizeEnum(f, v))
+			case KindRef:
+				vals = append(vals, RefID(v))
+			default:
+				return nil, fmt.Errorf("%w: %q cannot be matched against a list", ErrInvalid, c.Field)
+			}
+		}
+		return map[string]any{"terms": map[string]any{col: vals}}, nil
+	}
+	eqNeq := func(v any) (map[string]any, bool) {
+		switch c.Op {
+		case OpEq:
+			return osTerm(col, v), true
+		case OpNeq:
+			return osNot(osTerm(col, v)), true
+		}
+		return nil, false
+	}
+	switch f.Kind {
+	case KindText:
+		if c.Op == OpHas {
+			return osContains(col, c.Value), nil
+		}
+		if q, ok := eqNeq(c.Value); ok {
+			return q, nil
+		}
+	case KindEnum:
+		if q, ok := eqNeq(NormalizeEnum(f, c.Value)); ok {
+			return q, nil
+		}
+	case KindRef:
+		if q, ok := eqNeq(RefID(c.Value)); ok {
+			return q, nil
+		}
+	case KindDate, KindTimestamp:
+		v := c.Value
+		if f.Kind == KindDate {
+			if _, err := ParseDate(v); err != nil {
+				return nil, err
+			}
+		} else if _, err := ParseTimestamp(v); err != nil {
+			return nil, err
+		}
+		if c.Op == OpEq {
+			return osTerm(col, v), nil
+		}
+		if q, ok := osRange(col, c.Op, v); ok {
+			return q, nil
+		}
+	case KindInt:
+		v, err := ParseInt(c.Value)
+		if err != nil {
+			return nil, err
+		}
+		if q, ok := eqNeq(v); ok {
+			return q, nil
+		}
+		if q, ok := osRange(col, c.Op, v); ok {
+			return q, nil
+		}
+	case KindFloat:
+		v, err := ParseFloat(c.Value)
+		if err != nil {
+			return nil, err
+		}
+		if q, ok := eqNeq(v); ok {
+			return q, nil
+		}
+		if q, ok := osRange(col, c.Op, v); ok {
+			return q, nil
+		}
+	case KindBool:
+		v, err := ParseBool(c.Value)
+		if err != nil {
+			return nil, err
+		}
+		if q, ok := eqNeq(v); ok {
+			return q, nil
+		}
+	case KindTags:
+		if c.Op == OpHas {
+			return osTerm(col, c.Value), nil
+		}
+	}
+	return nil, fmt.Errorf("%w: unsupported operator for %q", ErrInvalid, c.Field)
+}
+
+// osJSONCondition translates a condition on a path under a KindJSON field. A
+// declared path (FieldSpec.JSONKeys) is queried in its typed copy under
+// <column>_typed, where ranges compare as its kind. Any other path is queried
+// in the flat_object field, which holds every leaf as a keyword: equality,
+// membership and presence work, but an ordered comparison would compare text,
+// so it is rejected with ErrInvalid -- declare the path to compare it.
+func osJSONCondition(p JSONPath, c Condition) (map[string]any, error) {
+	field := p.Field.Column + "." + p.Key()
+	typed := p.Kind != KindJSON
+	if typed {
+		field = p.Field.Column + OpenSearchTypedSuffix + "." + p.Key()
+	}
+	// A flat_object field indexes every leaf as text, so its values are
+	// compared in their text form.
+	value := func(v any) any {
+		if typed || v == nil {
+			return v
+		}
+		return fmt.Sprint(v)
+	}
+	switch c.Op {
+	case OpNull:
+		null, err := ParseBool(c.Value)
+		if err != nil {
+			return nil, err
+		}
+		if null {
+			return osNot(osExists(field)), nil
+		}
+		return osExists(field), nil
+	case OpHas:
+		if IsPresenceTest(c) {
+			return osExists(field), nil
+		}
+		v, err := JSONValue(p, c)
+		if err != nil {
+			return nil, err
+		}
+		// A term on an array field matches any element, so "has" and "="
+		// are one query here.
+		return osTerm(field, value(v)), nil
+	case OpEq, OpNeq:
+		v, err := JSONValue(p, c)
+		if err != nil {
+			return nil, err
+		}
+		if v == nil {
+			if c.Op == OpEq {
+				return osNot(osExists(field)), nil
+			}
+			return osExists(field), nil
+		}
+		if c.Op == OpNeq {
+			return osNot(osTerm(field, value(v))), nil
+		}
+		return osTerm(field, value(v)), nil
+	case OpIn:
+		vals, err := JSONValues(p, c)
+		if err != nil {
+			return nil, err
+		}
+		terms := make([]any, 0, len(vals))
+		for _, v := range vals {
+			terms = append(terms, value(v))
+		}
+		return map[string]any{"terms": map[string]any{field: terms}}, nil
+	case OpLt, OpLte, OpGt, OpGte:
+		if !typed {
+			return nil, fmt.Errorf("%w: %q is not a declared attribute key, so it cannot be compared in order on OpenSearch", ErrInvalid, c.Field)
+		}
+		v, err := JSONValue(p, c)
+		if err != nil {
+			return nil, err
+		}
+		q, _ := osRange(field, c.Op, v)
+		return q, nil
+	}
+	return nil, fmt.Errorf("%w: unsupported operator for %q", ErrInvalid, c.Field)
+}

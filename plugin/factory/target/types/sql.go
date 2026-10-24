@@ -96,6 +96,9 @@ var gormColumnType = map[string]string{
 	"REAL": "real", "FLOAT4": "real",
 	"DOUBLE PRECISION": "double precision", "FLOAT8": "double precision",
 	"JSONB": "jsonb", "JSON": "json",
+	// A projection's range column (store.v1.projection range_field): GORM
+	// would otherwise migrate the string it maps to as text.
+	"TSTZRANGE": "tstzrange", "TSTZMULTIRANGE": "tstzmultirange",
 }
 
 // gormArrayColumnType maps an array element keyword to the GORM `type:` array
@@ -139,10 +142,20 @@ var prismaScalar = map[string]string{
 	"DATE": "DateTime", "TIME": "DateTime", "TIMETZ": "DateTime",
 }
 
+// prismaUnsupported are PostgreSQL types Prisma has no scalar for and must
+// declare as Unsupported("..."), so a Prisma migration creates the real type
+// rather than text.
+var prismaUnsupported = map[string]string{
+	"TSTZRANGE": "tstzrange", "TSTZMULTIRANGE": "tstzmultirange",
+}
+
 // PrismaType projects a canonical PostgreSQL type onto a Prisma scalar.
 // Arrays become Prisma lists; unknown keywords default to String.
 func PrismaType(pgType string) string {
 	base, isArray := BaseType(pgType)
+	if u, ok := prismaUnsupported[base]; ok && !isArray {
+		return `Unsupported("` + u + `")`
+	}
 	t, ok := prismaScalar[base]
 	if !ok {
 		t = "String"

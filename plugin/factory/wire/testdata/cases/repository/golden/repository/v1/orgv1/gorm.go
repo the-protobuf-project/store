@@ -423,6 +423,14 @@ func (r *GormMemberRepository) purgeTx(ctx context.Context, tx *gorm.DB, id stri
 	return nil
 }
 
+// ListByKeys reads every record whose filter field field is one of keys; see
+// repox.ListByKeys.
+func (r *GormMemberRepository) ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*orgv1.Member, error) {
+	return repox.ListByKeys(ctx, field, keys, in, func(ctx context.Context, in repox.ListInput) ([]*orgv1.Member, string, error) {
+		return r.List(ctx, "organisations/-", in)
+	})
+}
+
 // Compile-time proof the adapter satisfies the interface.
 var _ MemberRepository = (*GormMemberRepository)(nil)
 
@@ -780,6 +788,14 @@ func (r *GormOrganisationRepository) purgeTx(ctx context.Context, tx *gorm.DB, i
 	return nil
 }
 
+// ListByKeys reads every record whose filter field field is one of keys; see
+// repox.ListByKeys.
+func (r *GormOrganisationRepository) ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*orgv1.Organisation, error) {
+	return repox.ListByKeys(ctx, field, keys, in, func(ctx context.Context, in repox.ListInput) ([]*orgv1.Organisation, string, error) {
+		return r.List(ctx, in)
+	})
+}
+
 // Compile-time proof the adapter satisfies the interface.
 var _ OrganisationRepository = (*GormOrganisationRepository)(nil)
 
@@ -1007,6 +1023,14 @@ func (r *GormUserRepository) Delete(ctx context.Context, name string) error {
 	return repox.MapGormErr(orgv1gorm.NewUserStore(r.DB).DeleteByID(ctx, id))
 }
 
+// ListByKeys reads every record whose filter field field is one of keys; see
+// repox.ListByKeys.
+func (r *GormUserRepository) ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*orgv1.User, error) {
+	return repox.ListByKeys(ctx, field, keys, in, func(ctx context.Context, in repox.ListInput) ([]*orgv1.User, string, error) {
+		return r.List(ctx, in)
+	})
+}
+
 // Compile-time proof the adapter satisfies the interface.
 var _ UserRepository = (*GormUserRepository)(nil)
 
@@ -1035,7 +1059,7 @@ func (b *gormBatch) CreateMember(parent string, in *orgv1.Member) (string, error
 	b.u.QueueGorm(locks, func(ctx context.Context, tx *gorm.DB) error {
 		return r.insertTx(ctx, tx, named, m)
 	})
-	b.u.Touch(named.GetName())
+	b.u.Record(repox.Change{Type: "org.v1/Member", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
 }
 
@@ -1052,7 +1076,7 @@ func (b *gormBatch) UpdateMember(in *orgv1.Member, paths []string) {
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, nil)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "org.v1/Member", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getMember)})
 }
 
 // DeleteMember queues the record's removal for good. A record already
@@ -1073,7 +1097,7 @@ func (b *gormBatch) DeleteMember(name string) {
 		}
 		return nil
 	})
-	b.u.Touch(name)
+	b.u.Record(repox.Change{Type: "org.v1/Member", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getMember)})
 }
 
 // CreateOrganisation queues a create and returns the name the record will have.
@@ -1091,7 +1115,7 @@ func (b *gormBatch) CreateOrganisation(in *orgv1.Organisation) (string, error) {
 	b.u.QueueGorm(locks, func(ctx context.Context, tx *gorm.DB) error {
 		return r.insertTx(ctx, tx, named, m)
 	})
-	b.u.Touch(named.GetName())
+	b.u.Record(repox.Change{Type: "org.v1/Organisation", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
 }
 
@@ -1108,7 +1132,7 @@ func (b *gormBatch) UpdateOrganisation(in *orgv1.Organisation, paths []string) {
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, nil)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "org.v1/Organisation", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getOrganisation)})
 }
 
 // UpdateOrganisationWithOutputOnly queues UpdateWithOutputOnly; in.Etag, when
@@ -1124,7 +1148,7 @@ func (b *gormBatch) UpdateOrganisationWithOutputOnly(in *orgv1.Organisation, pat
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, outputPaths)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "org.v1/Organisation", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getOrganisation)})
 }
 
 // UpdateOrganisationOutputOnly queues UpdateOutputOnly; in.Etag, when set, guards it.
@@ -1133,7 +1157,7 @@ func (b *gormBatch) UpdateOrganisationOutputOnly(in *orgv1.Organisation, paths [
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.updateOutputOnlyTx(ctx, tx, in, paths)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "org.v1/Organisation", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getOrganisation)})
 }
 
 // DeleteOrganisation queues the record's removal for good. A record already
@@ -1154,7 +1178,7 @@ func (b *gormBatch) DeleteOrganisation(name string) {
 		}
 		return nil
 	})
-	b.u.Touch(name)
+	b.u.Record(repox.Change{Type: "org.v1/Organisation", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getOrganisation)})
 }
 
 // CreateUser queues a create and returns the name the record will have.
@@ -1172,7 +1196,7 @@ func (b *gormBatch) CreateUser(in *orgv1.User) (string, error) {
 	b.u.QueueGorm(locks, func(ctx context.Context, tx *gorm.DB) error {
 		return orgv1gorm.NewUserStore(tx).Create(ctx, m)
 	})
-	b.u.Touch(named.GetName())
+	b.u.Record(repox.Change{Type: "org.v1/User", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
 }
 
@@ -1189,7 +1213,7 @@ func (b *gormBatch) UpdateUser(in *orgv1.User, paths []string) {
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, nil)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "org.v1/User", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getUser)})
 }
 
 // DeleteUser queues the record's removal for good. A record already
@@ -1206,5 +1230,5 @@ func (b *gormBatch) DeleteUser(name string) {
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return tx.WithContext(ctx).Delete(&orgv1gorm.User{}, "id = ?", id).Error
 	})
-	b.u.Touch(name)
+	b.u.Record(repox.Change{Type: "org.v1/User", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getUser)})
 }

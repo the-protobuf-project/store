@@ -22,6 +22,7 @@ import (
 	"github.com/the-protobuf-project/store/plugin/factory/source/proto"
 	"github.com/the-protobuf-project/store/plugin/factory/target/database"
 	"github.com/the-protobuf-project/store/plugin/factory/target/gorm"
+	"github.com/the-protobuf-project/store/plugin/factory/target/opensearch"
 	"github.com/the-protobuf-project/store/plugin/factory/target/prisma"
 	"github.com/the-protobuf-project/store/plugin/factory/target/repository"
 	"github.com/the-protobuf-project/store/plugin/factory/target/sql"
@@ -38,6 +39,7 @@ func ProtoTargets() map[string]schema.Target {
 		"sql":        &sql.Generator{},
 		"prisma":     &prisma.Generator{},
 		"repository": &repository.Generator{},
+		"opensearch": &opensearch.Generator{},
 	}
 }
 

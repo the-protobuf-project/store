@@ -70,7 +70,8 @@ func ormCasePlugin(dir string) protokit.Plugin {
 	// testdata.
 	provenance.SetLicense(optFile(dir, "license_header"))
 	reader := backend.New(cfg, "example.com/test/gen", stores, telemetry, converters, filters).
-		WithRepositoryModules(optFile(dir, "gorm_module"), optFile(dir, "graphql_module"))
+		WithRepositoryModules(optFile(dir, "gorm_module"), optFile(dir, "graphql_module")).
+		WithSearchModules(optFile(dir, "repository_module"))
 	return wire.Plugin(backend.Readers(reader), backend.NewLayout(cfg))
 }
 

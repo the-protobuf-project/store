@@ -83,6 +83,11 @@ type Conn struct {
 	// connection, and something that must see every write -- a cache dropping
 	// what a write made stale -- cannot depend on each of them being wired.
 	Changes ChangeObserver
+	// Projections, when set, keeps the (store.v1.projection) tables derived
+	// from the resources this Conn writes current: every repository write
+	// and Batch commit that changes one of their sources runs them, inside
+	// the write's transaction on GORM. See Projections.
+	Projections *Projections
 }
 
 // ChangeObserver hears that the record named name was written: created,
@@ -119,15 +124,16 @@ func (cs Changes) Changed(ctx context.Context, name string) {
 // transaction when every table is on one connector; see Commit for what
 // happens before that request. A Unit is not safe for concurrent use.
 type Unit struct {
-	conn   Conn
-	before []func(ctx context.Context) error
-	after  []func(ctx context.Context)
-	gorm   []func(ctx context.Context, tx *gorm.DB) error
-	locks  []string // no_overlap keys of the rows queued for insert
-	ahead  []func(ctx context.Context) error
-	gql    []func(ctx context.Context, ops *Ops) (Check, error)
-	names  []string
-	err    error // the first queueing error; Commit returns it and writes nothing
+	conn    Conn
+	before  []func(ctx context.Context) error
+	after   []func(ctx context.Context)
+	gorm    []func(ctx context.Context, tx *gorm.DB) error
+	locks   []string // no_overlap keys of the rows queued for insert
+	ahead   []func(ctx context.Context) error
+	gql     []func(ctx context.Context, ops *Ops) (Check, error)
+	names   []string
+	changes []Change // what the queued writes change, for Conn.Projections
+	err     error    // the first queueing error; Commit returns it and writes nothing
 }
 
 // NewUnit returns an empty Unit on the backend conn carries: GraphQL when it
@@ -176,6 +182,16 @@ func (u *Unit) After(f func(ctx context.Context)) { u.after = append(u.after, f)
 // Touch records that the write being queued changes the record named name,
 // which Commit reports to the connection's ChangeObserver.
 func (u *Unit) Touch(name string) { u.names = append(u.names, name) }
+
+// Record is Touch for a write a projection may derive from: Commit reports
+// c.Name to the ChangeObserver and runs the connection's Projections over
+// every recorded change, inside the commit (see Projections).
+func (u *Unit) Record(c Change) {
+	u.names = append(u.names, c.Name)
+	if u.conn.Projections.Watches(c.Type) {
+		u.changes = append(u.changes, c)
+	}
+}
 
 // Fail records a queueing error: Commit returns the first one and writes
 // nothing.
@@ -240,11 +256,15 @@ func (u *Unit) commit(ctx context.Context) error {
 	if u.conn.GraphQL != nil {
 		return u.commitGraphQL(ctx)
 	}
-	if len(u.gorm) == 0 {
+	if len(u.gorm) == 0 && len(u.changes) == 0 {
 		return nil
 	}
-	return MapGormErr(u.conn.Gorm.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	var committed []Committed
+	err := MapGormErr(u.conn.Gorm.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := gormx.LockKeys(tx, u.locks...); err != nil {
+			return err
+		}
+		if err := loadPriors(ctx, Conn{Gorm: tx}, u.changes); err != nil {
 			return err
 		}
 		for _, op := range u.gorm {
@@ -252,11 +272,20 @@ func (u *Unit) commit(ctx context.Context) error {
 				return err
 			}
 		}
-		return nil
+		var err error
+		committed, err = u.conn.Projections.Gorm(ctx, tx, u.changes)
+		return err
 	}))
+	if err == nil {
+		u.conn.Projections.Publish(ctx, committed)
+	}
+	return err
 }
 
 func (u *Unit) commitGraphQL(ctx context.Context) error {
+	if err := loadPriors(ctx, Conn{GraphQL: u.conn.GraphQL}, u.changes); err != nil {
+		return err
+	}
 	for _, op := range u.ahead {
 		if err := op(ctx); err != nil {
 			return err
@@ -275,6 +304,10 @@ func (u *Unit) commitGraphQL(ctx context.Context) error {
 			checks = append(checks, check)
 		}
 	}
+	committed, err := u.conn.Projections.GraphQL(ctx, u.conn, &ops, u.changes)
+	if err != nil {
+		return err
+	}
 	tx := u.conn.GraphQL.Mutation.Tx()
 	for _, op := range ops {
 		tx.Add(op)
@@ -284,6 +317,9 @@ func (u *Unit) commitGraphQL(ctx context.Context) error {
 		if err := check(ctx, failed); err != nil {
 			return err
 		}
+	}
+	if failed == nil {
+		u.conn.Projections.Publish(ctx, committed)
 	}
 	return MapGraphQLErr(failed)
 }
@@ -351,6 +387,93 @@ type ListInput struct {
 	// Paths naming no field of the resource are rejected with
 	// ErrInvalidArgument.
 	ReadMask []string
+}
+
+// KeysPerRead bounds the keys one statement of ListByKeys names: past it an
+// IN list costs the planner more than a second statement does, and engines
+// cap a request's size. ReadParallelism bounds the statements in flight at
+// once. Both are variables so a process can tune them; set them before use.
+var (
+	KeysPerRead     = 1000
+	ReadParallelism = 4
+)
+
+// ListByKeys reads every record whose filter field field is one of keys, by
+// way of list (a repository's List, across parents): the keys, duplicates
+// dropped, in chunks of at most KeysPerRead, at most ReadParallelism chunks at
+// once, each chunk paged to the end. in narrows every read (Filter, Where,
+// ShowDeleted, ReadMask, OrderBy); its page fields are ignored. Records come
+// back chunk by chunk in key order, each chunk in in.OrderBy order. The first
+// error cancels the reads still running and is returned. field must be a
+// text, enum or reference filter field (filterx.In).
+func ListByKeys[T any](ctx context.Context, field string, keys []string, in ListInput, list func(ctx context.Context, in ListInput) ([]T, string, error)) ([]T, error) {
+	seen := make(map[string]bool, len(keys))
+	uniq := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if !seen[k] {
+			seen[k] = true
+			uniq = append(uniq, k)
+		}
+	}
+	if len(uniq) == 0 {
+		return nil, nil
+	}
+	size, par := max(KeysPerRead, 1), max(ReadParallelism, 1)
+	var chunks [][]string
+	for i := 0; i < len(uniq); i += size {
+		chunks = append(chunks, uniq[i:min(i+size, len(uniq))])
+	}
+	read := func(ctx context.Context, chunk []string) ([]T, error) {
+		page := in
+		page.PageSize, page.PageToken = 1000, ""
+		page.Where = append(append(make([]filterx.Condition, 0, len(in.Where)+1), in.Where...), filterx.In(field, chunk...))
+		var out []T
+		for {
+			rows, next, err := list(ctx, page)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, rows...)
+			if next == "" {
+				return out, nil
+			}
+			page.PageToken = next
+		}
+	}
+	if len(chunks) == 1 {
+		return read(ctx, chunks[0])
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	parts := make([][]T, len(chunks))
+	errs := make([]error, len(chunks))
+	sem := make(chan struct{}, par)
+	var wg sync.WaitGroup
+	for i, c := range chunks {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if parts[i], errs[i] = read(ctx, c); errs[i] != nil {
+				cancel()
+			}
+		}()
+	}
+	wg.Wait()
+	var out []T
+	for i := range chunks {
+		if errs[i] != nil && !errors.Is(errs[i], context.Canceled) {
+			return nil, errs[i]
+		}
+	}
+	for i := range chunks {
+		if errs[i] != nil {
+			return nil, errs[i]
+		}
+		out = append(out, parts[i]...)
+	}
+	return out, nil
 }
 
 // CheckReadMask rejects a read mask naming a field m does not have.

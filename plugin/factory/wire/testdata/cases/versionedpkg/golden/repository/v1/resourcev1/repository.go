@@ -34,6 +34,13 @@ type EventRepository interface {
 	Get(ctx context.Context, name string) (*resourcev1.Event, error)
 	// List returns one page of records.
 	List(ctx context.Context, in repox.ListInput) ([]*resourcev1.Event, string, error)
+	// ListByKeys reads every record whose filter field field is one of keys
+	// -- a batched read by name, by parent, by any text, enum or reference
+	// field -- in statements of at most repox.KeysPerRead keys, at most
+	// repox.ReadParallelism at once. in narrows
+	// each read; its page fields are ignored. See repox.ListByKeys for the
+	// order records come back in.
+	ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*resourcev1.Event, error)
 	// Update persists the masked fields of m; an empty mask replaces every
 	// mutable field. m.Etag, when set, guards against concurrent writes
 	// (repox.ErrConflict).
@@ -110,12 +117,21 @@ func NewBatchIn(u *repox.Unit, opts ...Option) Batch {
 // the adapters they build.
 type options struct {
 	references     *repox.References
+	projections    *repox.Projections
 	eventHooks     EventHooks
 	eventOverrides map[string]filterx.SQLHandler
 }
 
 // Option customizes the adapters a factory builds.
 type Option func(*options)
+
+// WithProjections keeps the projections p maintains current with every write
+// the repositories make (see repox.Projections): on GORM each write and its
+// projections share one transaction; on GraphQL the projections follow the
+// write in a request of their own. New passes repox.Conn.Projections.
+func WithProjections(p *repox.Projections) Option {
+	return func(o *options) { o.projections = p }
+}
 
 // WithReferences enforces reference integrity through refs (see
 // repox.References): New passes repox.Conn.References. With none, writes do
@@ -146,7 +162,7 @@ func WithEventListOverride(field string, h filterx.SQLHandler) Option {
 // When conn carries a ChangeObserver, every write the returned repositories
 // make is reported to it (see observe).
 func New(conn repox.Conn, opts ...Option) Repositories {
-	opts = append([]Option{WithReferences(conn.References)}, opts...)
+	opts = append([]Option{WithReferences(conn.References), WithProjections(conn.Projections)}, opts...)
 	return observe(NewGorm(conn.Gorm, opts...), conn.Changes)
 }
 
@@ -156,9 +172,36 @@ func NewGorm(db *gorm.DB, opts ...Option) Repositories {
 	for _, opt := range opts {
 		opt(&o)
 	}
-	return guard(Repositories{
+	repos := Repositories{
 		Events: &GormEventRepository{DB: db, Hooks: o.eventHooks, Refs: o.references, ListOverrides: o.eventOverrides},
-	}, o.references)
+	}
+	if p := o.projections; p != nil {
+		if p.Watches("resource.v1/Event") {
+			g := repos.Events.(*GormEventRepository)
+			repos.Events = &projectedEventRepository{EventRepository: g, run: func(ctx context.Context, f func(EventRepository) ([]repox.Change, error)) error {
+				// The write and its projections in one transaction: the
+				// adapter is rebound to it, so its own transactions nest as
+				// savepoints and its re-reads see the write. The feed hears
+				// of it once it commits.
+				var committed []repox.Committed
+				err := repox.MapGormErr(db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+					bound := *g
+					bound.DB = tx
+					changes, err := f(&bound)
+					if err != nil {
+						return err
+					}
+					committed, err = p.Gorm(ctx, tx, changes)
+					return err
+				}))
+				if err == nil {
+					p.Publish(ctx, committed)
+				}
+				return err
+			}}
+		}
+	}
+	return guard(repos, o.references)
 }
 
 // guard wraps every repository in repos so its writes keep reference
@@ -236,6 +279,60 @@ func (o *observedEventRepository) Delete(ctx context.Context, name string) error
 	err := o.EventRepository.Delete(ctx, name)
 	o.changes.Changed(ctx, name)
 	return err
+}
+
+// projectedEventRepository runs the connection's projections over every
+// Event write; see WithProjections. run performs a write through the
+// repository it hands f and projects the changes f reports.
+type projectedEventRepository struct {
+	EventRepository
+	run func(ctx context.Context, f func(EventRepository) ([]repox.Change, error)) error
+}
+
+// getEvent reads name through read, for a queued write's
+// Change.LoadPrior (repox.PriorOf).
+func getEvent(ctx context.Context, read repox.Conn, name string) (*resourcev1.Event, error) {
+	return New(read).Events.Get(ctx, name)
+}
+
+// changedEvent is the change one write of a Event makes.
+func changedEvent(name string, op repox.ChangeOp, rec *resourcev1.Event) []repox.Change {
+	c := repox.Change{Type: "resource.v1/Event", Name: name, Op: op}
+	if rec != nil {
+		c.Record = rec
+	}
+	return []repox.Change{c}
+}
+
+func (p *projectedEventRepository) Create(ctx context.Context, m *resourcev1.Event) (out *resourcev1.Event, err error) {
+	err = p.run(ctx, func(r EventRepository) ([]repox.Change, error) {
+		var err error
+		out, err = r.Create(ctx, m)
+		return changedEvent(out.GetName(), repox.ChangeCreate, out), err
+	})
+	return out, err
+}
+
+func (p *projectedEventRepository) Update(ctx context.Context, m *resourcev1.Event, paths []string) (out *resourcev1.Event, err error) {
+	err = p.run(ctx, func(r EventRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, m.GetName()))
+		if err != nil {
+			return nil, err
+		}
+		out, err = r.Update(ctx, m, paths)
+		return repox.WithPrior(changedEvent(m.GetName(), repox.ChangeUpdate, out), prior), err
+	})
+	return out, err
+}
+
+func (p *projectedEventRepository) Delete(ctx context.Context, name string) error {
+	return p.run(ctx, func(r EventRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, name))
+		if err != nil {
+			return nil, err
+		}
+		return repox.WithPrior(changedEvent(name, repox.ChangeDelete, nil), prior), r.Delete(ctx, name)
+	})
 }
 
 // guardedEventRepository keeps Event's references whole; see guard.

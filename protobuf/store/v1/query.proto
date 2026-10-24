@@ -34,4 +34,47 @@ message QueryOptions {
   // term with no field (e.g. `beach resort`) matches it with a
   // case-insensitive contains. Off by default.
   bool search = 3;
+
+  // json_keys declares the type of hot paths under a JSON field (a
+  // google.protobuf.Struct, or a map): `attributes.floor >= 3` then compares
+  // a number, and the OpenSearch mapping indexes the path typed. Any path is
+  // filterable without being declared; an undeclared one takes the type of
+  // the filter value, and on OpenSearch cannot be compared in order. Setting
+  // it also plans a GIN index on the column, which serves equality and
+  // membership on every path.
+  //
+  // Applied via:
+  //
+  //	google.protobuf.Struct attributes = 9 [(store.v1.query) = {
+  //	  json_keys: [{path: "floor", type: JSON_KEY_TYPE_INT64}]
+  //	}];
+  repeated JsonKey json_keys = 4;
+}
+
+// JsonKey is one declared path under a JSON field.
+message JsonKey {
+  // path is the dot-separated path below the field, e.g. "view.sea". Each
+  // segment holds letters, digits, '_' and '-'.
+  string path = 1;
+
+  // type is how the path's value compares.
+  JsonKeyType type = 2;
+}
+
+// JsonKeyType is the type a declared JSON path compares as.
+enum JsonKeyType {
+  // JSON_KEY_TYPE_UNSPECIFIED compares the path as its filter value's type.
+  JSON_KEY_TYPE_UNSPECIFIED = 0;
+  // JSON_KEY_TYPE_STRING compares text.
+  JSON_KEY_TYPE_STRING = 1;
+  // JSON_KEY_TYPE_INT64 compares integers.
+  JSON_KEY_TYPE_INT64 = 2;
+  // JSON_KEY_TYPE_DOUBLE compares floating-point numbers.
+  JSON_KEY_TYPE_DOUBLE = 3;
+  // JSON_KEY_TYPE_BOOL compares true/false.
+  JSON_KEY_TYPE_BOOL = 4;
+  // JSON_KEY_TYPE_DATE compares YYYY-MM-DD dates.
+  JSON_KEY_TYPE_DATE = 5;
+  // JSON_KEY_TYPE_TIMESTAMP compares RFC 3339 instants.
+  JSON_KEY_TYPE_TIMESTAMP = 6;
 }

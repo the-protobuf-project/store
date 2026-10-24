@@ -44,6 +44,10 @@ modules:
     # The references example (examples/references): the reference contract
     # end to end, compiled and tested against Postgres.
 
+  - path: examples/search/proto
+    # The search example (examples/search): a projection searched by time
+    # window, tags and JSON attributes, on Postgres and OpenSearch.
+
   - path: examples/proto
     # examples/proto can import entity options, store options, and googleapis
     # because they share this workspace; no separate buf dep update needed

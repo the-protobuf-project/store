@@ -176,6 +176,16 @@ func modelViewOf(t *schema.Table, provider types.Provider, dsName string, typeOf
 	// verbatim — Prisma has no named constant for gin_trgm_ops, which comes from
 	// an extension rather than core PostgreSQL.
 	for _, p := range searchindex.For(t, fx) {
+		if p.Expression != "" {
+			// Prisma cannot declare an expression index; the SQL target and
+			// the GORM registry create it.
+			continue
+		}
+		if col, ok := colByName[p.Column]; ok && strings.HasPrefix(typeOf(col), "TSTZ") {
+			// A range column is Unsupported(...) to Prisma, which cannot index
+			// it; the SQL target and the GORM registry create the GiST index.
+			continue
+		}
 		field := naming.Camel(p.Column)
 		if col, ok := colByName[p.Column]; ok {
 			field = scalarFieldName(col)
@@ -183,9 +193,13 @@ func modelViewOf(t *schema.Table, provider types.Provider, dsName string, typeOf
 		if p.Ops != "" {
 			field += `(ops: raw("` + p.Ops + `"))`
 		}
+		kind := "Gin"
+		if p.MethodOf() == searchindex.MethodGiST {
+			kind = "Gist"
+		}
 		m.Indexes = append(m.Indexes, fieldLine{
-			Doc:  "GIN index: " + p.Why + ".",
-			Decl: "@@index([" + field + "], type: Gin)",
+			Doc:  strings.ToUpper(p.MethodOf()) + " index: " + p.Why + ".",
+			Decl: "@@index([" + field + "], type: " + kind + ")",
 		})
 	}
 	return m

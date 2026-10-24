@@ -11,7 +11,7 @@
 //
 // Shared AIP-160 filter / AIP-132 order_by / paginated-list engines driven by the generated per-schema specs.
 // annotations: entity.v1 dev, store.v1 dev
-// engine:      protokit v1.3.1
+// engine:      protokit v1.3.4
 //
 // store — https://github.com/the-protobuf-project/store
 
@@ -19,9 +19,10 @@
 // vocabulary an AIP-160 filter parses into, the Spec data model the per-schema
 // filters.go files instantiate, the shared semantics (enum normalization,
 // date/number validation, ILIKE escaping, sort allowlists, page math), and the
-// two chainable engines built from a Spec — Gorm[M] for SQL and Hasura[M] for
-// GraphQL. Engines are code, specs are data: one Spec per table drives both
-// backends, so both accept identical filter strings by construction.
+// chainable engines built from a Spec — Gorm[M] for SQL, Hasura[M] for
+// GraphQL, and OpenSearch for the query DSL. Engines are code, specs are data:
+// one Spec per table drives every backend, so all accept identical filter
+// strings by construction.
 package filterx
 
 import (
@@ -87,6 +88,10 @@ type Condition struct {
 	// pushes a window down where the backend can follow a value-object path
 	// and stays correct where it cannot.
 	Hint bool
+	// Quoted records that Value was a quoted string in the filter text. It
+	// only matters for a JSON attribute path, where `floor = 3` compares a
+	// number and `floor = "3"` a string.
+	Quoted bool
 }
 
 // Or is the condition "any of these", e.g. a start given as a date or a
@@ -137,6 +142,16 @@ const (
 	KindRef
 	// KindTags is a text[] column: `:` containment of one tag.
 	KindTags
+	// KindJSON is a jsonb document of arbitrary attributes. The field itself
+	// only supports null checks; a dotted path under it
+	// (`attributes.floor`, `attributes.view.sea`) is a filter field of its
+	// own: = / != match the value at the path, `:` matches a value in an
+	// array at the path (or `:*`, the path being present), and the ordered
+	// operators compare it. A path FieldSpec.JSONKeys declares compares as its
+	// declared kind; any other path takes the value's own type (a quoted
+	// value is a string; an unquoted one a number, true/false or null when it
+	// reads as one).
+	KindJSON
 )
 
 // FieldSpec describes one filterable field: its physical column, its kind, and
@@ -149,6 +164,11 @@ type FieldSpec struct {
 	// event's "start.date_time" -- which is matched through the reference
 	// rather than on the row itself.
 	Via *Via
+	// JSONKeys declares the type of hot paths under a KindJSON field
+	// ("floor": KindInt), dot-separated below the field. A declared path is
+	// validated and compared as its kind, and on OpenSearch it is queried in
+	// its typed mapping rather than the flat_object one.
+	JSONKeys map[string]Kind
 }
 
 // Via locates a value-object field: the row's reference column (FieldSpec's
@@ -234,7 +254,7 @@ func Parse(filter string) ([]Condition, error) {
 			if err != nil {
 				return nil, err
 			}
-			conds = append(conds, Condition{Field: t.text, Op: op, Value: toks[i+2].text})
+			conds = append(conds, Condition{Field: t.text, Op: op, Value: toks[i+2].text, Quoted: toks[i+2].quoted})
 			i += 3
 			continue
 		}
@@ -328,6 +348,144 @@ func tokenize(s string) ([]token, error) {
 func isDelim(c byte) bool {
 	return c == ' ' || c == '\t' || c == '=' || c == ':' || c == '!' || c == '"' || c == '<' || c == '>'
 }
+
+// --- JSON attribute paths -----------------------------------------------------
+
+// JSONPath is a filter field resolved to a path under a KindJSON field.
+type JSONPath struct {
+	// Field is the KindJSON field's spec.
+	Field FieldSpec
+	// Path is the path below it, one key per element.
+	Path []string
+	// Kind is the path's declared kind (FieldSpec.JSONKeys), or KindJSON when
+	// it declares none.
+	Kind Kind
+}
+
+// Key is the path in its dotted form ("view.sea").
+func (p JSONPath) Key() string { return strings.Join(p.Path, ".") }
+
+// LookupJSON resolves field to a path under one of spec's KindJSON fields
+// ("attributes.view.sea" under "attributes"). ok is false for a field that is
+// not one. A path segment may hold letters, digits, '_' and '-'; anything else
+// is rejected with ErrInvalid, so a path never carries syntax into a query.
+func LookupJSON(spec Spec, field string) (JSONPath, bool, error) {
+	head, rest, dotted := strings.Cut(field, ".")
+	if !dotted {
+		return JSONPath{}, false, nil
+	}
+	f, ok := spec.Fields[head]
+	if !ok || f.Kind != KindJSON {
+		return JSONPath{}, false, nil
+	}
+	path := strings.Split(rest, ".")
+	for _, seg := range path {
+		if seg == "" {
+			return JSONPath{}, false, fmt.Errorf("%w: %q has an empty path segment", ErrInvalid, field)
+		}
+		for _, r := range seg {
+			if !(r == '_' || r == '-' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z') {
+				return JSONPath{}, false, fmt.Errorf("%w: %q: a path segment may only hold letters, digits, '_' and '-'", ErrInvalid, field)
+			}
+		}
+	}
+	kind, declared := f.JSONKeys[rest]
+	if !declared {
+		kind = KindJSON
+	}
+	return JSONPath{Field: f, Path: path, Kind: kind}, true, nil
+}
+
+// JSONValue is the typed value c compares the path with: parsed as the
+// path's declared kind, or -- undeclared -- a quoted value as a string and an
+// unquoted one as the number, boolean or null it reads as, else a string.
+func JSONValue(p JSONPath, c Condition) (any, error) {
+	return jsonScalar(p, c.Value, c.Quoted)
+}
+
+func jsonScalar(p JSONPath, v string, quoted bool) (any, error) {
+	switch p.Kind {
+	case KindJSON:
+		if quoted {
+			return v, nil
+		}
+		switch v {
+		case "true":
+			return true, nil
+		case "false":
+			return false, nil
+		case "null":
+			return nil, nil
+		}
+		if n, err := strconv.ParseFloat(v, 64); err == nil && !strings.ContainsAny(v, "xXnN") {
+			if i, err := strconv.ParseInt(v, 10, 64); err == nil {
+				return i, nil
+			}
+			return n, nil
+		}
+		return v, nil
+	case KindInt:
+		return ParseInt(v)
+	case KindFloat:
+		return ParseFloat(v)
+	case KindBool:
+		return ParseBool(v)
+	case KindDate:
+		if _, err := ParseDate(v); err != nil {
+			return nil, err
+		}
+		return v, nil
+	case KindTimestamp:
+		t, err := ParseTimestamp(v)
+		if err != nil {
+			return nil, err
+		}
+		return t.UTC().Format(time.RFC3339Nano), nil
+	default:
+		return v, nil
+	}
+}
+
+// JSONValues is JSONValue over OpIn's alternatives.
+func JSONValues(p JSONPath, c Condition) ([]any, error) {
+	out := make([]any, 0, len(c.Values))
+	for _, v := range c.Values {
+		x, err := jsonScalar(p, v, c.Quoted)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, x)
+	}
+	return out, nil
+}
+
+// JSONNest wraps v in the objects path names, innermost last:
+// JSONNest(["view","sea"], true) is {"view": {"sea": true}}, the document a
+// containment test (jsonb @>) matches.
+func JSONNest(path []string, v any) map[string]any {
+	out := map[string]any{path[len(path)-1]: v}
+	for i := len(path) - 2; i >= 0; i-- {
+		out = map[string]any{path[i]: out}
+	}
+	return out
+}
+
+// JSONPathText renders path as a SQL/JSON path ($."view"."sea"). Segments are
+// already restricted by LookupJSON, so quoting each is enough.
+func JSONPathText(path []string) string {
+	var b strings.Builder
+	b.WriteString("$")
+	for _, seg := range path {
+		b.WriteString(`."`)
+		b.WriteString(seg)
+		b.WriteString(`"`)
+	}
+	return b.String()
+}
+
+// IsPresenceTest reports whether c is `path:*`, which asks only whether the
+// path is there.
+func IsPresenceTest(c Condition) bool { return c.Op == OpHas && c.Value == "*" && !c.Quoted }
 
 // --- value normalization and validation ---------------------------------------
 

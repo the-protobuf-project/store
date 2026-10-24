@@ -517,6 +517,14 @@ func (r *GraphQLBookRepository) remove(ctx context.Context, id string) error {
 	return nil
 }
 
+// ListByKeys reads every record whose filter field field is one of keys; see
+// repox.ListByKeys.
+func (r *GraphQLBookRepository) ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*refdemov1.Book, error) {
+	return repox.ListByKeys(ctx, field, keys, in, func(ctx context.Context, in repox.ListInput) ([]*refdemov1.Book, string, error) {
+		return r.List(ctx, "shelves/-", in)
+	})
+}
+
 // Compile-time proof the adapter satisfies the interface.
 var _ BookRepository = (*GraphQLBookRepository)(nil)
 
@@ -954,6 +962,14 @@ func (r *GraphQLShelfRepository) remove(ctx context.Context, id string) error {
 	return nil
 }
 
+// ListByKeys reads every record whose filter field field is one of keys; see
+// repox.ListByKeys.
+func (r *GraphQLShelfRepository) ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*refdemov1.Shelf, error) {
+	return repox.ListByKeys(ctx, field, keys, in, func(ctx context.Context, in repox.ListInput) ([]*refdemov1.Shelf, string, error) {
+		return r.List(ctx, in)
+	})
+}
+
 // Compile-time proof the adapter satisfies the interface.
 var _ ShelfRepository = (*GraphQLShelfRepository)(nil)
 
@@ -982,7 +998,7 @@ func (b *graphQLBatch) CreateBook(parent string, in *refdemov1.Book) (string, er
 		ops.Add(b.svc.Mutation.Catalog.Books.CreateOp(ci, new(booksql.InsertCatalogBooksResponse)))
 		return nil, nil
 	})
-	b.u.Touch(named.GetName())
+	b.u.Record(repox.Change{Type: "catalog.example.com/Book", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
 }
 
@@ -999,7 +1015,7 @@ func (b *graphQLBatch) UpdateBook(in *refdemov1.Book, paths []string) {
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, nil)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "catalog.example.com/Book", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getBook)})
 }
 
 // UpdateBookWithOutputOnly queues UpdateWithOutputOnly; in.Etag, when
@@ -1015,7 +1031,7 @@ func (b *graphQLBatch) UpdateBookWithOutputOnly(in *refdemov1.Book, paths, outpu
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, outputPaths)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "catalog.example.com/Book", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getBook)})
 }
 
 // UpdateBookOutputOnly queues UpdateOutputOnly; in.Etag, when set, guards
@@ -1033,7 +1049,7 @@ func (b *graphQLBatch) UpdateBookOutputOnly(in *refdemov1.Book, paths []string) 
 	id := ids[len(ids)-1]
 	patch := bookToOutputPatch(in, paths)
 	patch.Etag = graphql.Value(repox.NewULID())
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "catalog.example.com/Book", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getBook)})
 	if etag := in.GetEtag(); etag != "" {
 		b.u.QueueGraphQLAhead(func(ctx context.Context) error {
 			_, err := b.svc.Mutation.Catalog.Books.UpdateIfMatch(ctx, id, patch, booksql.Etag.Eq(etag))
@@ -1061,7 +1077,7 @@ func (b *graphQLBatch) DeleteBook(name string) {
 		ops.Add(b.svc.Mutation.Catalog.Books.UpdateOp(ids[len(ids)-1], r.deletePatch(), new(booksql.UpdateCatalogBooksByIdResponse), booksql.Update().PreCheck(booksql.DeleteTime.IsNull(true))))
 		return nil, nil
 	})
-	b.u.Touch(name)
+	b.u.Record(repox.Change{Type: "catalog.example.com/Book", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getBook)})
 }
 
 // PurgeBook queues the record's removal for good. A record already
@@ -1085,7 +1101,7 @@ func (b *graphQLBatch) PurgeBook(name string) {
 		ops.Add(b.svc.Mutation.Catalog.Books.DeleteOp(id, new(booksql.DeleteCatalogBooksByIdResponse)))
 		return nil, nil
 	})
-	b.u.Touch(name)
+	b.u.Record(repox.Change{Type: "catalog.example.com/Book", Name: name, Op: repox.ChangePurge, LoadPrior: repox.PriorOf(name, getBook)})
 }
 
 // CreateShelf queues a create and returns the name the record will have.
@@ -1100,7 +1116,7 @@ func (b *graphQLBatch) CreateShelf(in *refdemov1.Shelf) (string, error) {
 		ops.Add(b.svc.Mutation.Catalog.Shelves.CreateOp(ci, new(shelvesql.InsertCatalogShelvesResponse)))
 		return nil, nil
 	})
-	b.u.Touch(named.GetName())
+	b.u.Record(repox.Change{Type: "catalog.example.com/Shelf", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
 }
 
@@ -1117,7 +1133,7 @@ func (b *graphQLBatch) UpdateShelf(in *refdemov1.Shelf, paths []string) {
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, nil)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "catalog.example.com/Shelf", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getShelf)})
 }
 
 // UpdateShelfWithOutputOnly queues UpdateWithOutputOnly; in.Etag, when
@@ -1133,7 +1149,7 @@ func (b *graphQLBatch) UpdateShelfWithOutputOnly(in *refdemov1.Shelf, paths, out
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, outputPaths)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "catalog.example.com/Shelf", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getShelf)})
 }
 
 // UpdateShelfOutputOnly queues UpdateOutputOnly; in.Etag, when set, guards
@@ -1151,7 +1167,7 @@ func (b *graphQLBatch) UpdateShelfOutputOnly(in *refdemov1.Shelf, paths []string
 	id := ids[len(ids)-1]
 	patch := shelfToOutputPatch(in, paths)
 	patch.Etag = graphql.Value(repox.NewULID())
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "catalog.example.com/Shelf", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getShelf)})
 	if etag := in.GetEtag(); etag != "" {
 		b.u.QueueGraphQLAhead(func(ctx context.Context) error {
 			_, err := b.svc.Mutation.Catalog.Shelves.UpdateIfMatch(ctx, id, patch, shelvesql.Etag.Eq(etag))
@@ -1179,7 +1195,7 @@ func (b *graphQLBatch) DeleteShelf(name string) {
 		ops.Add(b.svc.Mutation.Catalog.Shelves.UpdateOp(ids[len(ids)-1], r.deletePatch(), new(shelvesql.UpdateCatalogShelvesByIdResponse), shelvesql.Update().PreCheck(shelvesql.DeleteTime.IsNull(true))))
 		return nil, nil
 	})
-	b.u.Touch(name)
+	b.u.Record(repox.Change{Type: "catalog.example.com/Shelf", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getShelf)})
 }
 
 // PurgeShelf queues the record's removal for good. A record already
@@ -1203,5 +1219,5 @@ func (b *graphQLBatch) PurgeShelf(name string) {
 		ops.Add(b.svc.Mutation.Catalog.Shelves.DeleteOp(id, new(shelvesql.DeleteCatalogShelvesByIdResponse)))
 		return nil, nil
 	})
-	b.u.Touch(name)
+	b.u.Record(repox.Change{Type: "catalog.example.com/Shelf", Name: name, Op: repox.ChangePurge, LoadPrior: repox.PriorOf(name, getShelf)})
 }

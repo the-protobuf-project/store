@@ -35,6 +35,13 @@ type AgendaRepository interface {
 	Get(ctx context.Context, name string) (*deepv1.Agenda, error)
 	// List returns one page of records.
 	List(ctx context.Context, in repox.ListInput) ([]*deepv1.Agenda, string, error)
+	// ListByKeys reads every record whose filter field field is one of keys
+	// -- a batched read by name, by parent, by any text, enum or reference
+	// field -- in statements of at most repox.KeysPerRead keys, at most
+	// repox.ReadParallelism at once. in narrows
+	// each read; its page fields are ignored. See repox.ListByKeys for the
+	// order records come back in.
+	ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*deepv1.Agenda, error)
 	// Update persists the masked fields of m; an empty mask replaces every
 	// mutable field. m.Etag, when set, guards against concurrent writes
 	// (repox.ErrConflict).
@@ -82,6 +89,13 @@ type MeetingRepository interface {
 	Get(ctx context.Context, name string) (*deepv1.Meeting, error)
 	// List returns one page of records under parent.
 	List(ctx context.Context, parent string, in repox.ListInput) ([]*deepv1.Meeting, string, error)
+	// ListByKeys reads every record whose filter field field is one of keys
+	// -- a batched read by name, by parent, by any text, enum or reference
+	// field -- in statements of at most repox.KeysPerRead keys, at most
+	// repox.ReadParallelism at once, across every parent. in narrows
+	// each read; its page fields are ignored. See repox.ListByKeys for the
+	// order records come back in.
+	ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*deepv1.Meeting, error)
 	// Update persists the masked fields of m; an empty mask replaces every
 	// mutable field. m.Etag, when set, guards against concurrent writes
 	// (repox.ErrConflict).
@@ -174,6 +188,7 @@ func NewBatchIn(u *repox.Unit, opts ...Option) Batch {
 // the adapters they build.
 type options struct {
 	references          *repox.References
+	projections         *repox.Projections
 	agendaHooks         AgendaHooks
 	agendaOverrides     map[string]filterx.SQLHandler
 	meetingHooks        MeetingHooks
@@ -184,6 +199,14 @@ type options struct {
 
 // Option customizes the adapters a factory builds.
 type Option func(*options)
+
+// WithProjections keeps the projections p maintains current with every write
+// the repositories make (see repox.Projections): on GORM each write and its
+// projections share one transaction; on GraphQL the projections follow the
+// write in a request of their own. New passes repox.Conn.Projections.
+func WithProjections(p *repox.Projections) Option {
+	return func(o *options) { o.projections = p }
+}
 
 // WithReferences enforces reference integrity through refs (see
 // repox.References): New passes repox.Conn.References. With none, writes do
@@ -253,7 +276,7 @@ func WithMeetingGraphQLListOverride(field string, h filterx.GraphQLHandler) Opti
 // When conn carries a ChangeObserver, every write the returned repositories
 // make is reported to it (see observe).
 func New(conn repox.Conn, opts ...Option) Repositories {
-	opts = append([]Option{WithReferences(conn.References)}, opts...)
+	opts = append([]Option{WithReferences(conn.References), WithProjections(conn.Projections)}, opts...)
 	if conn.GraphQL != nil {
 		return observe(NewGraphQL(conn.GraphQL, opts...), conn.Changes)
 	}
@@ -266,10 +289,33 @@ func NewGraphQL(svc *genql.Service, opts ...Option) Repositories {
 	for _, opt := range opts {
 		opt(&o)
 	}
-	return guard(Repositories{
+	repos := Repositories{
 		Agendas:  &GraphQLAgendaRepository{Svc: svc, Hooks: o.agendaHooks, Refs: o.references, ListOverrides: o.agendaGQLOverrides},
 		Meetings: &GraphQLMeetingRepository{Svc: svc, Hooks: o.meetingHooks, Refs: o.references, ListOverrides: o.meetingGQLOverrides},
-	}, o.references)
+	}
+	if p := o.projections; p != nil {
+		if p.Watches("deep.v1/Agenda") {
+			r := repos.Agendas
+			repos.Agendas = &projectedAgendaRepository{AgendaRepository: r, run: func(ctx context.Context, f func(AgendaRepository) ([]repox.Change, error)) error {
+				changes, err := f(r)
+				if err != nil {
+					return err
+				}
+				return p.ProjectGraphQLAfter(ctx, repox.Conn{GraphQL: svc}, changes)
+			}}
+		}
+		if p.Watches("deep.v1/Meeting") {
+			r := repos.Meetings
+			repos.Meetings = &projectedMeetingRepository{MeetingRepository: r, run: func(ctx context.Context, f func(MeetingRepository) ([]repox.Change, error)) error {
+				changes, err := f(r)
+				if err != nil {
+					return err
+				}
+				return p.ProjectGraphQLAfter(ctx, repox.Conn{GraphQL: svc}, changes)
+			}}
+		}
+	}
+	return guard(repos, o.references)
 }
 
 // NewGorm builds the GORM adapter set over db.
@@ -278,10 +324,61 @@ func NewGorm(db *gorm.DB, opts ...Option) Repositories {
 	for _, opt := range opts {
 		opt(&o)
 	}
-	return guard(Repositories{
+	repos := Repositories{
 		Agendas:  &GormAgendaRepository{DB: db, Hooks: o.agendaHooks, Refs: o.references, ListOverrides: o.agendaOverrides},
 		Meetings: &GormMeetingRepository{DB: db, Hooks: o.meetingHooks, Refs: o.references, ListOverrides: o.meetingOverrides},
-	}, o.references)
+	}
+	if p := o.projections; p != nil {
+		if p.Watches("deep.v1/Agenda") {
+			g := repos.Agendas.(*GormAgendaRepository)
+			repos.Agendas = &projectedAgendaRepository{AgendaRepository: g, run: func(ctx context.Context, f func(AgendaRepository) ([]repox.Change, error)) error {
+				// The write and its projections in one transaction: the
+				// adapter is rebound to it, so its own transactions nest as
+				// savepoints and its re-reads see the write. The feed hears
+				// of it once it commits.
+				var committed []repox.Committed
+				err := repox.MapGormErr(db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+					bound := *g
+					bound.DB = tx
+					changes, err := f(&bound)
+					if err != nil {
+						return err
+					}
+					committed, err = p.Gorm(ctx, tx, changes)
+					return err
+				}))
+				if err == nil {
+					p.Publish(ctx, committed)
+				}
+				return err
+			}}
+		}
+		if p.Watches("deep.v1/Meeting") {
+			g := repos.Meetings.(*GormMeetingRepository)
+			repos.Meetings = &projectedMeetingRepository{MeetingRepository: g, run: func(ctx context.Context, f func(MeetingRepository) ([]repox.Change, error)) error {
+				// The write and its projections in one transaction: the
+				// adapter is rebound to it, so its own transactions nest as
+				// savepoints and its re-reads see the write. The feed hears
+				// of it once it commits.
+				var committed []repox.Committed
+				err := repox.MapGormErr(db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+					bound := *g
+					bound.DB = tx
+					changes, err := f(&bound)
+					if err != nil {
+						return err
+					}
+					committed, err = p.Gorm(ctx, tx, changes)
+					return err
+				}))
+				if err == nil {
+					p.Publish(ctx, committed)
+				}
+				return err
+			}}
+		}
+	}
+	return guard(repos, o.references)
 }
 
 // guard wraps every repository in repos so its writes keep reference
@@ -415,6 +512,133 @@ func (o *observedMeetingRepository) Delete(ctx context.Context, name string) err
 	err := o.MeetingRepository.Delete(ctx, name)
 	o.changes.Changed(ctx, name)
 	return err
+}
+
+// projectedAgendaRepository runs the connection's projections over every
+// Agenda write; see WithProjections. run performs a write through the
+// repository it hands f and projects the changes f reports.
+type projectedAgendaRepository struct {
+	AgendaRepository
+	run func(ctx context.Context, f func(AgendaRepository) ([]repox.Change, error)) error
+}
+
+// getAgenda reads name through read, for a queued write's
+// Change.LoadPrior (repox.PriorOf).
+func getAgenda(ctx context.Context, read repox.Conn, name string) (*deepv1.Agenda, error) {
+	return New(read).Agendas.Get(ctx, name)
+}
+
+// changedAgenda is the change one write of a Agenda makes.
+func changedAgenda(name string, op repox.ChangeOp, rec *deepv1.Agenda) []repox.Change {
+	c := repox.Change{Type: "deep.v1/Agenda", Name: name, Op: op}
+	if rec != nil {
+		c.Record = rec
+	}
+	return []repox.Change{c}
+}
+
+func (p *projectedAgendaRepository) Create(ctx context.Context, m *deepv1.Agenda) (out *deepv1.Agenda, err error) {
+	err = p.run(ctx, func(r AgendaRepository) ([]repox.Change, error) {
+		var err error
+		out, err = r.Create(ctx, m)
+		return changedAgenda(out.GetName(), repox.ChangeCreate, out), err
+	})
+	return out, err
+}
+
+func (p *projectedAgendaRepository) Update(ctx context.Context, m *deepv1.Agenda, paths []string) (out *deepv1.Agenda, err error) {
+	err = p.run(ctx, func(r AgendaRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, m.GetName()))
+		if err != nil {
+			return nil, err
+		}
+		out, err = r.Update(ctx, m, paths)
+		return repox.WithPrior(changedAgenda(m.GetName(), repox.ChangeUpdate, out), prior), err
+	})
+	return out, err
+}
+
+func (p *projectedAgendaRepository) Delete(ctx context.Context, name string) error {
+	return p.run(ctx, func(r AgendaRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, name))
+		if err != nil {
+			return nil, err
+		}
+		return repox.WithPrior(changedAgenda(name, repox.ChangeDelete, nil), prior), r.Delete(ctx, name)
+	})
+}
+
+func (p *projectedAgendaRepository) Undelete(ctx context.Context, name string) (out *deepv1.Agenda, err error) {
+	err = p.run(ctx, func(r AgendaRepository) ([]repox.Change, error) {
+		var err error
+		out, err = r.Undelete(ctx, name)
+		return changedAgenda(name, repox.ChangeUndelete, out), err
+	})
+	return out, err
+}
+
+func (p *projectedAgendaRepository) Purge(ctx context.Context, name string) error {
+	return p.run(ctx, func(r AgendaRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, name))
+		if err != nil {
+			return nil, err
+		}
+		return repox.WithPrior(changedAgenda(name, repox.ChangePurge, nil), prior), r.Purge(ctx, name)
+	})
+}
+
+// projectedMeetingRepository runs the connection's projections over every
+// Meeting write; see WithProjections. run performs a write through the
+// repository it hands f and projects the changes f reports.
+type projectedMeetingRepository struct {
+	MeetingRepository
+	run func(ctx context.Context, f func(MeetingRepository) ([]repox.Change, error)) error
+}
+
+// getMeeting reads name through read, for a queued write's
+// Change.LoadPrior (repox.PriorOf).
+func getMeeting(ctx context.Context, read repox.Conn, name string) (*deepv1.Meeting, error) {
+	return New(read).Meetings.Get(ctx, name)
+}
+
+// changedMeeting is the change one write of a Meeting makes.
+func changedMeeting(name string, op repox.ChangeOp, rec *deepv1.Meeting) []repox.Change {
+	c := repox.Change{Type: "deep.v1/Meeting", Name: name, Op: op}
+	if rec != nil {
+		c.Record = rec
+	}
+	return []repox.Change{c}
+}
+
+func (p *projectedMeetingRepository) Create(ctx context.Context, parent string, m *deepv1.Meeting) (out *deepv1.Meeting, err error) {
+	err = p.run(ctx, func(r MeetingRepository) ([]repox.Change, error) {
+		var err error
+		out, err = r.Create(ctx, parent, m)
+		return changedMeeting(out.GetName(), repox.ChangeCreate, out), err
+	})
+	return out, err
+}
+
+func (p *projectedMeetingRepository) Update(ctx context.Context, m *deepv1.Meeting, paths []string) (out *deepv1.Meeting, err error) {
+	err = p.run(ctx, func(r MeetingRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, m.GetName()))
+		if err != nil {
+			return nil, err
+		}
+		out, err = r.Update(ctx, m, paths)
+		return repox.WithPrior(changedMeeting(m.GetName(), repox.ChangeUpdate, out), prior), err
+	})
+	return out, err
+}
+
+func (p *projectedMeetingRepository) Delete(ctx context.Context, name string) error {
+	return p.run(ctx, func(r MeetingRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, name))
+		if err != nil {
+			return nil, err
+		}
+		return repox.WithPrior(changedMeeting(name, repox.ChangeDelete, nil), prior), r.Delete(ctx, name)
+	})
 }
 
 // guardedAgendaRepository keeps Agenda's references whole; see guard.

@@ -9,7 +9,7 @@
 //
 // AIP-160 filter / AIP-132 order_by specs — data for the shared filterx engines.
 // annotations: entity.v1 dev, store.v1 dev
-// engine:      protokit (devel)
+// engine:      protokit v1.3.4
 //
 // store — https://github.com/the-protobuf-project/store
 
@@ -20,7 +20,7 @@ import (
 )
 
 // ShelfFilterSpec is Shelf's AIP-160 filter / AIP-132 order_by surface,
-// consumed by the filterx.Gorm and filterx.Hasura engines.
+// consumed by the filterx.Gorm, filterx.Hasura and filterx.OpenSearch engines.
 var ShelfFilterSpec = filterx.Spec{
 	Table: `"catalog"."shelves"`,
 	Fields: map[string]filterx.FieldSpec{
@@ -41,7 +41,7 @@ var ShelfFilterSpec = filterx.Spec{
 }
 
 // BookFilterSpec is Book's AIP-160 filter / AIP-132 order_by surface,
-// consumed by the filterx.Gorm and filterx.Hasura engines.
+// consumed by the filterx.Gorm, filterx.Hasura and filterx.OpenSearch engines.
 var BookFilterSpec = filterx.Spec{
 	Table: `"catalog"."books"`,
 	Fields: map[string]filterx.FieldSpec{

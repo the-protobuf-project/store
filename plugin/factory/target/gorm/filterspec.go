@@ -18,10 +18,12 @@ import (
 
 	"google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
 	"github.com/the-protobuf-project/store/plugin/factory/facets"
+	"github.com/the-protobuf-project/store/plugin/pb/storepbv1"
 )
 
 // filterFieldView is one filterable field in a table spec.
@@ -34,6 +36,15 @@ type filterFieldView struct {
 	// row's reference to the object, these name the object's table, key and
 	// value column. Empty for a field of the row itself.
 	ViaTable, ViaKey, ViaColumn string
+	// JSONKeys are a KindJSON field's declared hot paths
+	// ((store.v1.query).json_keys), sorted by path.
+	JSONKeys []jsonKeyView
+}
+
+// jsonKeyView is one declared path under a JSON field.
+type jsonKeyView struct {
+	Path string
+	Kind string // filterx kind const name
 }
 
 // filterSortView is one sortable field in a table spec. Kind travels with the
@@ -109,6 +120,16 @@ func buildFilterTable(db *schema.Database, s *schema.Schema, t *schema.Table, fx
 			ff := filterFieldView{Field: field, Column: c.Name, Kind: kind}
 			if kind == "KindEnum" && c.Enum != nil {
 				ff.EnumPrefix = naming.ScreamingSnake(c.Enum.LocalName) + "_"
+			}
+			if kind == "KindEnum" && c.Enum == nil && c.Source.Enum() != nil {
+				// A projection stores an enum as its value name.
+				ff.EnumPrefix = naming.ScreamingSnake(string(c.Source.Enum().Name())) + "_"
+			}
+			if kind == "KindJSON" {
+				for _, k := range opts.GetJsonKeys() {
+					ff.JSONKeys = append(ff.JSONKeys, jsonKeyView{Path: k.GetPath(), Kind: jsonKeyKind(k.GetType())})
+				}
+				sort.Slice(ff.JSONKeys, func(i, j int) bool { return ff.JSONKeys[i].Path < ff.JSONKeys[j].Path })
 			}
 			v.Fields = append(v.Fields, ff)
 			if opts.GetSearch() && kind == "KindText" {
@@ -210,14 +231,28 @@ func classifyFilterColumn(c *schema.Column, nested map[*schema.Column]bool) (kin
 		return "KindRef", false, true
 	}
 	if c.List {
-		if c.Type == schema.TypeString {
+		if c.Type == schema.TypeString || c.Type == schema.TypeText {
 			return "KindTags", false, true
 		}
 		return "", false, false
 	}
+	if c.Source != nil && c.Source.Enum() != nil && c.Type == schema.TypeString {
+		return "KindEnum", true, true // a projection's enum, stored as its value name
+	}
 	switch c.Type {
 	case schema.TypeString:
 		return "KindText", true, true
+	case schema.TypeText:
+		// Long text from a string field (a projection's); a FieldMask's text
+		// is not a filter surface.
+		if c.Source != nil && c.Source.Kind() == protoreflect.StringKind {
+			return "KindText", true, true
+		}
+		return "", false, false
+	case schema.TypeJSON:
+		// A jsonb document: its dotted paths are filter fields
+		// (attributes.floor); the document itself only tests for null.
+		return "KindJSON", false, true
 	case schema.TypeEnum:
 		return "KindEnum", true, true
 	case schema.TypeDate:
@@ -232,6 +267,26 @@ func classifyFilterColumn(c *schema.Column, nested map[*schema.Column]bool) (kin
 		return "KindBool", true, true
 	default:
 		return "", false, false
+	}
+}
+
+// jsonKeyKind maps a declared JSON path type onto a filterx kind.
+func jsonKeyKind(t storepbv1.JsonKeyType) string {
+	switch t {
+	case storepbv1.JsonKeyType_JSON_KEY_TYPE_STRING:
+		return "KindText"
+	case storepbv1.JsonKeyType_JSON_KEY_TYPE_INT64:
+		return "KindInt"
+	case storepbv1.JsonKeyType_JSON_KEY_TYPE_DOUBLE:
+		return "KindFloat"
+	case storepbv1.JsonKeyType_JSON_KEY_TYPE_BOOL:
+		return "KindBool"
+	case storepbv1.JsonKeyType_JSON_KEY_TYPE_DATE:
+		return "KindDate"
+	case storepbv1.JsonKeyType_JSON_KEY_TYPE_TIMESTAMP:
+		return "KindTimestamp"
+	default:
+		return "KindJSON"
 	}
 }
 

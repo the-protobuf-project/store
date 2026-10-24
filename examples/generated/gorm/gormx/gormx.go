@@ -11,7 +11,7 @@
 //
 // Shared GORM runtime: ListOptions, the generic Store interface, the GenericStore engine, and EnsureSchemas.
 // annotations: entity.v1 dev, store.v1 dev
-// engine:      protokit v1.3.1
+// engine:      protokit v1.3.4
 // runtime:     gorm.io/gorm
 //
 // store — https://github.com/the-protobuf-project/store
@@ -26,6 +26,9 @@ package gormx
 
 import (
 	"context"
+	"fmt"
+	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -140,6 +143,47 @@ func (s *GenericStore[M]) DeleteByID(ctx context.Context, id string) error {
 
 // Compile-time proof that GenericStore[M] implements Store[M].
 var _ Store[struct{}] = (*GenericStore[struct{}])(nil)
+
+// LockKey is the advisory-lock key of one (store.v1.table).no_overlap rule for
+// a row: the constraint's name, then the row's value in each key column, each
+// after a unit separator (0x1F: Postgres text cannot hold a NUL). A pointer
+// counts as the value it points at, and nil as empty.
+func LockKey(constraint string, parts ...any) string {
+	var b strings.Builder
+	b.WriteString(constraint)
+	for _, p := range parts {
+		b.WriteByte(0x1f)
+		if v := reflect.ValueOf(p); v.Kind() == reflect.Pointer {
+			if v.IsNil() {
+				continue
+			}
+			p = v.Elem().Interface()
+		}
+		fmt.Fprint(&b, p)
+	}
+	return b.String()
+}
+
+// LockKeys takes a transaction-scoped advisory lock on each key, once each and
+// in sorted order, so writers of one key take turns and two transactions
+// locking several keys never wait on each other in a circle. tx must be a
+// transaction: the locks are released when it ends.
+//
+// This is what keeps an exclusion constraint from deadlocking. Two concurrent
+// inserts of conflicting rows can each place their index entry before
+// checking the other's, and then each waits for the other to finish -- a
+// deadlock Postgres breaks only after deadlock_timeout, one victim at a time.
+// Taken first, the lock makes the second writer wait for the first to commit,
+// then fail its check cleanly.
+func LockKeys(tx *gorm.DB, keys ...string) error {
+	keys = slices.Compact(slices.Sorted(slices.Values(keys)))
+	for _, k := range keys {
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", k).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // EnsureSchemas creates each named Postgres schema if it does not already exist,
 // so AutoMigrate can build schema-qualified tables (a TableName like

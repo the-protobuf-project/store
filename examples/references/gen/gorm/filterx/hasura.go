@@ -8,7 +8,7 @@
 //
 // Shared AIP-160 filter / AIP-132 order_by / paginated-list engines driven by the generated per-schema specs.
 // annotations: entity.v1 dev, store.v1 dev
-// engine:      protokit (devel)
+// engine:      protokit v1.3.4
 //
 // store — https://github.com/the-protobuf-project/store
 
@@ -562,7 +562,14 @@ func gqlCondition(spec Spec, c Condition) (graphql.Predicate, error) {
 	}
 	f, ok := spec.Fields[c.Field]
 	if !ok {
-		return graphql.Predicate{}, fmt.Errorf("%w: cannot filter by %q", ErrInvalid, c.Field)
+		p, isPath, err := LookupJSON(spec, c.Field)
+		if err != nil {
+			return graphql.Predicate{}, err
+		}
+		if !isPath {
+			return graphql.Predicate{}, fmt.Errorf("%w: cannot filter by %q", ErrInvalid, c.Field)
+		}
+		return gqlJSONCondition(CamelCase(p.Field.Column), p, c)
 	}
 	if f.Via != nil {
 		return graphql.Predicate{}, fmt.Errorf("%w: %q is a value-object field, which this GraphQL schema cannot reach", ErrInvalid, c.Field)
@@ -675,11 +682,72 @@ func gqlCondition(spec Spec, c Condition) (graphql.Predicate, error) {
 			return bf.Neq(v), nil
 		}
 	case KindTags:
-		// Array containment has no BoolExp operator in the generated schema;
-		// tags stay a gorm-only filter (register an Override to change that).
-		return graphql.Predicate{}, fmt.Errorf("%w: cannot filter by %q here", ErrInvalid, c.Field)
+		// The engine's array comparison: a text[] column holding the tag. DDN
+		// offers _contains on an array of scalars when the connector declares
+		// query.nested_fields.filter_by.nested_arrays.contains (NDC spec 0.2);
+		// against a connector that does not, the engine rejects the request
+		// rather than this engine guessing another shape.
+		if c.Op == OpHas {
+			return graphql.Op(col, "_contains", c.Value), nil
+		}
 	}
 	return graphql.Predicate{}, fmt.Errorf("%w: unsupported operator for %q", ErrInvalid, c.Field)
+}
+
+// gqlJSONCondition translates a condition on a path under a jsonb column onto
+// the comparisons ndc-postgres exposes on jsonb: jsonb_contains (@>) for
+// equality and membership, jsonb_exists (?) for a top-level key's presence.
+// The engine exposes no SQL/JSON path test, so the ordered comparisons, and
+// presence or null below the top level, are rejected with ErrInvalid; a
+// condition marked as a hint is left out instead (see AsHint).
+func gqlJSONCondition(col string, p JSONPath, c Condition) (graphql.Predicate, error) {
+	contains := func(v any) graphql.Predicate { return graphql.Op(col, "jsonb_contains", JSONNest(p.Path, v)) }
+	switch c.Op {
+	case OpEq, OpNeq:
+		v, err := JSONValue(p, c)
+		if err != nil {
+			return graphql.Predicate{}, err
+		}
+		if c.Op == OpNeq {
+			return graphql.Not(contains(v)), nil
+		}
+		return contains(v), nil
+	case OpHas:
+		if IsPresenceTest(c) {
+			if len(p.Path) != 1 {
+				break
+			}
+			return graphql.Op(col, "jsonb_exists", p.Path[0]), nil
+		}
+		v, err := JSONValue(p, c)
+		if err != nil {
+			return graphql.Predicate{}, err
+		}
+		return graphql.Or(contains(v), contains([]any{v})), nil
+	case OpNull:
+		null, err := ParseBool(c.Value)
+		if err != nil {
+			return graphql.Predicate{}, err
+		}
+		if len(p.Path) != 1 {
+			break
+		}
+		if null {
+			return graphql.Not(graphql.Op(col, "jsonb_exists", p.Path[0])), nil
+		}
+		return graphql.Op(col, "jsonb_exists", p.Path[0]), nil
+	case OpIn:
+		vals, err := JSONValues(p, c)
+		if err != nil {
+			return graphql.Predicate{}, err
+		}
+		preds := make([]graphql.Predicate, 0, len(vals))
+		for _, v := range vals {
+			preds = append(preds, contains(v))
+		}
+		return graphql.Or(preds...), nil
+	}
+	return graphql.Predicate{}, fmt.Errorf("%w: %q: this GraphQL schema cannot compare a JSON path that way (no SQL/JSON path operator)", ErrInvalid, c.Field)
 }
 
 // gqlSearchPredicate matches a bareword term against the spec's search columns.
@@ -745,6 +813,11 @@ func gqlConditionOrHint(spec Spec, c Condition) (graphql.Predicate, bool, error)
 		return graphql.Predicate{}, false, nil
 	}
 	p, err := gqlCondition(spec, c)
+	if err != nil && c.Hint {
+		if _, isPath, _ := LookupJSON(spec, c.Field); isPath {
+			return graphql.Predicate{}, false, nil // a JSON test this schema cannot make
+		}
+	}
 	return p, err == nil, err
 }
 

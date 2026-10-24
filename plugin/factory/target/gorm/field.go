@@ -142,8 +142,22 @@ func indexTagsByColumn(t *schema.Table) map[string][]string {
 func searchIndexTagsByColumn(t *schema.Table, plans []searchindex.Plan) map[string][]string {
 	out := map[string][]string{}
 	for _, p := range plans {
-		frag := "index:" + p.Name + ",type:gin"
-		if p.Ops != "" {
+		frag := "index:" + p.Name + ",type:" + p.MethodOf()
+		if len(p.Columns) > 1 {
+			for pos, col := range p.Columns {
+				out[col] = append(out[col], frag+",priority:"+strconv.Itoa(pos+1))
+			}
+			continue
+		}
+		switch {
+		case p.Expression != "":
+			// GORM splits index settings on commas: an expression holding one
+			// cannot ride on a tag, and is left to the SQL migration.
+			if strings.Contains(p.Expression, ",") {
+				continue
+			}
+			frag += ",expression:" + p.Expression
+		case p.Ops != "":
 			frag += ",expression:" + p.Column + " " + p.Ops
 		}
 		out[p.Column] = append(out[p.Column], frag)

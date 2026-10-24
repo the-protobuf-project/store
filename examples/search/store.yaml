@@ -1,0 +1,6 @@
+# The search example: one database, one schema.
+strip_version: true
+datasources:
+  - match: "searchdemo.**"
+    database: search
+    schema: search

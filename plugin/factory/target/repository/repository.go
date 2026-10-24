@@ -91,6 +91,10 @@ func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 			if err := renderGo(rf, "references.go.tpl", repoxView(db)); err != nil {
 				return fmt.Errorf("repository: %s/references.go: %w", repoxPkg, err)
 			}
+			pf := p.NewGeneratedFile(repoxPkg+"/projection.go", "")
+			if err := renderGo(pf, "projection_runtime.go.tpl", repoxView(db)); err != nil {
+				return fmt.Errorf("repository: %s/projection.go: %w", repoxPkg, err)
+			}
 			repoxEmitted = true
 			grpcDB = db
 		}
@@ -107,6 +111,16 @@ func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 			}
 		}
 		for _, s := range db.Schemas {
+			projections, err := projectionViews(pb, db, s, naming.GoPackage(s.Name))
+			if err != nil {
+				return err
+			}
+			for _, pv := range projections {
+				name := fmt.Sprintf("%s/%s/projection_%s.go", db.Name, pv.Package, naming.SnakeCase(pv.Model))
+				if err := renderGo(p.NewGeneratedFile(name, ""), "projection.go.tpl", pv); err != nil {
+					return fmt.Errorf("repository: %s: %w", name, err)
+				}
+			}
 			view, err := schemaView(pb, db, s, resources)
 			if err != nil {
 				return err

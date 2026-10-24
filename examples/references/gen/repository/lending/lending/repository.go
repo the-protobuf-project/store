@@ -9,7 +9,7 @@
 //
 // Proto-facing repository interfaces; adapters compose the generated gorm and GraphQL outputs.
 // annotations: entity.v1 dev, store.v1 dev
-// engine:      protokit (devel)
+// engine:      protokit v1.3.4
 //
 // store — https://github.com/the-protobuf-project/store
 
@@ -35,6 +35,13 @@ type LoanRepository interface {
 	Get(ctx context.Context, name string) (*lendingv1.Loan, error)
 	// List returns one page of records.
 	List(ctx context.Context, in repox.ListInput) ([]*lendingv1.Loan, string, error)
+	// ListByKeys reads every record whose filter field field is one of keys
+	// -- a batched read by name, by parent, by any text, enum or reference
+	// field -- in statements of at most repox.KeysPerRead keys, at most
+	// repox.ReadParallelism at once. in narrows
+	// each read; its page fields are ignored. See repox.ListByKeys for the
+	// order records come back in.
+	ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*lendingv1.Loan, error)
 	// Update persists the masked fields of m; an empty mask replaces every
 	// mutable field. m.Etag, when set, guards against concurrent writes
 	// (repox.ErrConflict).
@@ -146,6 +153,7 @@ func NewBatchIn(u *repox.Unit, opts ...Option) Batch {
 // the adapters they build.
 type options struct {
 	references    *repox.References
+	projections   *repox.Projections
 	loanHooks     LoanHooks
 	loanOverrides map[string]filterx.SQLHandler
 	retention     time.Duration
@@ -153,6 +161,14 @@ type options struct {
 
 // Option customizes the adapters a factory builds.
 type Option func(*options)
+
+// WithProjections keeps the projections p maintains current with every write
+// the repositories make (see repox.Projections): on GORM each write and its
+// projections share one transaction; on GraphQL the projections follow the
+// write in a request of their own. New passes repox.Conn.Projections.
+func WithProjections(p *repox.Projections) Option {
+	return func(o *options) { o.projections = p }
+}
 
 // WithReferences enforces reference integrity through refs (see
 // repox.References): New passes repox.Conn.References. With none, writes do
@@ -190,7 +206,7 @@ func WithLoanListOverride(field string, h filterx.SQLHandler) Option {
 // When conn carries a ChangeObserver, every write the returned repositories
 // make is reported to it (see observe).
 func New(conn repox.Conn, opts ...Option) Repositories {
-	opts = append([]Option{WithReferences(conn.References)}, opts...)
+	opts = append([]Option{WithReferences(conn.References), WithProjections(conn.Projections)}, opts...)
 	return observe(NewGorm(conn.Gorm, opts...), conn.Changes)
 }
 
@@ -200,9 +216,36 @@ func NewGorm(db *gorm.DB, opts ...Option) Repositories {
 	for _, opt := range opts {
 		opt(&o)
 	}
-	return guard(Repositories{
+	repos := Repositories{
 		Loans: &GormLoanRepository{DB: db, Hooks: o.loanHooks, Refs: o.references, ListOverrides: o.loanOverrides, Retention: o.retention},
-	}, o.references)
+	}
+	if p := o.projections; p != nil {
+		if p.Watches("lending.example.com/Loan") {
+			g := repos.Loans.(*GormLoanRepository)
+			repos.Loans = &projectedLoanRepository{LoanRepository: g, run: func(ctx context.Context, f func(LoanRepository) ([]repox.Change, error)) error {
+				// The write and its projections in one transaction: the
+				// adapter is rebound to it, so its own transactions nest as
+				// savepoints and its re-reads see the write. The feed hears
+				// of it once it commits.
+				var committed []repox.Committed
+				err := repox.MapGormErr(db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+					bound := *g
+					bound.DB = tx
+					changes, err := f(&bound)
+					if err != nil {
+						return err
+					}
+					committed, err = p.Gorm(ctx, tx, changes)
+					return err
+				}))
+				if err == nil {
+					p.Publish(ctx, committed)
+				}
+				return err
+			}}
+		}
+	}
+	return guard(repos, o.references)
 }
 
 // guard wraps every repository in repos so its writes keep reference
@@ -311,6 +354,116 @@ func (o *observedLoanRepository) PurgeExpired(ctx context.Context, now time.Time
 	for _, name := range res.Purged {
 		o.changes.Changed(ctx, name)
 	}
+	return res, err
+}
+
+// projectedLoanRepository runs the connection's projections over every
+// Loan write; see WithProjections. run performs a write through the
+// repository it hands f and projects the changes f reports.
+type projectedLoanRepository struct {
+	LoanRepository
+	run func(ctx context.Context, f func(LoanRepository) ([]repox.Change, error)) error
+}
+
+// getLoan reads name through read, for a queued write's
+// Change.LoadPrior (repox.PriorOf).
+func getLoan(ctx context.Context, read repox.Conn, name string) (*lendingv1.Loan, error) {
+	return New(read).Loans.Get(ctx, name)
+}
+
+// changedLoan is the change one write of a Loan makes.
+func changedLoan(name string, op repox.ChangeOp, rec *lendingv1.Loan) []repox.Change {
+	c := repox.Change{Type: "lending.example.com/Loan", Name: name, Op: op}
+	if rec != nil {
+		c.Record = rec
+	}
+	return []repox.Change{c}
+}
+
+func (p *projectedLoanRepository) Create(ctx context.Context, m *lendingv1.Loan) (out *lendingv1.Loan, err error) {
+	err = p.run(ctx, func(r LoanRepository) ([]repox.Change, error) {
+		var err error
+		out, err = r.Create(ctx, m)
+		return changedLoan(out.GetName(), repox.ChangeCreate, out), err
+	})
+	return out, err
+}
+
+func (p *projectedLoanRepository) Update(ctx context.Context, m *lendingv1.Loan, paths []string) (out *lendingv1.Loan, err error) {
+	err = p.run(ctx, func(r LoanRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, m.GetName()))
+		if err != nil {
+			return nil, err
+		}
+		out, err = r.Update(ctx, m, paths)
+		return repox.WithPrior(changedLoan(m.GetName(), repox.ChangeUpdate, out), prior), err
+	})
+	return out, err
+}
+
+func (p *projectedLoanRepository) UpdateOutputOnly(ctx context.Context, m *lendingv1.Loan, paths []string) (out *lendingv1.Loan, err error) {
+	err = p.run(ctx, func(r LoanRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, m.GetName()))
+		if err != nil {
+			return nil, err
+		}
+		out, err = r.UpdateOutputOnly(ctx, m, paths)
+		return repox.WithPrior(changedLoan(m.GetName(), repox.ChangeUpdate, out), prior), err
+	})
+	return out, err
+}
+
+func (p *projectedLoanRepository) UpdateWithOutputOnly(ctx context.Context, m *lendingv1.Loan, paths, outputPaths []string) (out *lendingv1.Loan, err error) {
+	err = p.run(ctx, func(r LoanRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, m.GetName()))
+		if err != nil {
+			return nil, err
+		}
+		out, err = r.UpdateWithOutputOnly(ctx, m, paths, outputPaths)
+		return repox.WithPrior(changedLoan(m.GetName(), repox.ChangeUpdate, out), prior), err
+	})
+	return out, err
+}
+
+func (p *projectedLoanRepository) Delete(ctx context.Context, name string) error {
+	return p.run(ctx, func(r LoanRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, name))
+		if err != nil {
+			return nil, err
+		}
+		return repox.WithPrior(changedLoan(name, repox.ChangeDelete, nil), prior), r.Delete(ctx, name)
+	})
+}
+
+func (p *projectedLoanRepository) Undelete(ctx context.Context, name string) (out *lendingv1.Loan, err error) {
+	err = p.run(ctx, func(r LoanRepository) ([]repox.Change, error) {
+		var err error
+		out, err = r.Undelete(ctx, name)
+		return changedLoan(name, repox.ChangeUndelete, out), err
+	})
+	return out, err
+}
+
+func (p *projectedLoanRepository) Purge(ctx context.Context, name string) error {
+	return p.run(ctx, func(r LoanRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, name))
+		if err != nil {
+			return nil, err
+		}
+		return repox.WithPrior(changedLoan(name, repox.ChangePurge, nil), prior), r.Purge(ctx, name)
+	})
+}
+
+func (p *projectedLoanRepository) PurgeExpired(ctx context.Context, now time.Time) (res repox.PurgeResult, err error) {
+	err = p.run(ctx, func(r LoanRepository) ([]repox.Change, error) {
+		var err error
+		res, err = r.PurgeExpired(ctx, now)
+		var changes []repox.Change
+		for _, name := range res.Purged {
+			changes = append(changes, changedLoan(name, repox.ChangePurge, nil)...)
+		}
+		return changes, err
+	})
 	return res, err
 }
 

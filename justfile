@@ -74,6 +74,16 @@ examples: build
 references: build
     PATH="{{bin}}:$PATH" buf generate --template buf.gen.references.yaml
 
+# Regenerate examples/search (projections searched on Postgres and
+# OpenSearch) with the freshly-built ./bin plugin.
+search: build
+    PATH="{{bin}}:$PATH" buf generate --template buf.gen.search.yaml
+
+# Run the search example's tests against a throwaway Postgres and OpenSearch,
+# e.g. STORE_TEST_POSTGRES_DSN="..." STORE_TEST_OPENSEARCH_URL=http://localhost:19201 just test-search
+test-search:
+    cd examples && go test -count=1 ./search/
+
 # Run the references example's tests against a throwaway Postgres, e.g.
 #   STORE_TEST_POSTGRES_DSN="host=localhost port=55432 user=postgres dbname=postgres sslmode=disable" just test-references
 test-references:

@@ -7,6 +7,7 @@ package store.v1;
 
 import "google/protobuf/descriptor.proto";
 import "store/v1/column.proto";
+import "store/v1/projection.proto";
 import "store/v1/query.proto";
 import "store/v1/reference.proto";
 import "store/v1/table.proto";
@@ -35,7 +36,7 @@ option java_package = "com.store.v1";
 // it.
 //
 // Field numbers 50000-99999 are reserved for non-Google options. store.v1 uses
-// 50010-50013, clear of entity.v1's 51000-51002, so a file may carry both.
+// 50010-50014, clear of entity.v1's 51000-51002, so a file may carry both.
 //
 // The pre-split orm.v1 vocabulary was removed in v2. See the migration table in
 // the repository README if you are coming from it.
@@ -43,6 +44,11 @@ option java_package = "com.store.v1";
 extend google.protobuf.MessageOptions {
   // table overrides table-level storage: the outbox companion table.
   TableOptions table = 50010;
+
+  // projection makes a non-resource message a projection: a table derived
+  // from source resources, kept current inside their writes and searched by a
+  // generated Search. See ProjectionOptions.
+  ProjectionOptions projection = 50014;
 }
 
 extend google.protobuf.FieldOptions {

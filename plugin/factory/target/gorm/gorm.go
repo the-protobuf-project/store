@@ -121,9 +121,10 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 					if !filterxEmitted {
 						fv := filterxView(db)
 						for path, tpl := range map[string]string{
-							filterxPkg + "/filterx.go": "filterx.go.tpl",
-							filterxPkg + "/gorm.go":    "filterx_gorm.go.tpl",
-							filterxPkg + "/hasura.go":  "filterx_hasura.go.tpl",
+							filterxPkg + "/filterx.go":    "filterx.go.tpl",
+							filterxPkg + "/gorm.go":       "filterx_gorm.go.tpl",
+							filterxPkg + "/hasura.go":     "filterx_hasura.go.tpl",
+							filterxPkg + "/opensearch.go": "filterx_opensearch.go.tpl",
 						} {
 							xf := p.NewGeneratedFile(path, "")
 							if err := renderGo(xf, tpl, fv); err != nil {

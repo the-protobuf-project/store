@@ -1,0 +1,52 @@
+version: v2
+
+# Generates examples/search: a (store.v1.projection) maintained by the
+# repositories and searched on Postgres, and the same projection indexed in
+# OpenSearch (target=opensearch).
+#
+# Run (with the dev plugin first on PATH): just search
+inputs:
+  - directory: examples/search/proto
+
+plugins:
+  - remote: buf.build/protocolbuffers/go:v1.36.11
+    out: examples/search/gen/pb
+    opt:
+      - module=github.com/the-protobuf-project/store/examples/search/gen/pb
+
+  - local: protoc-gen-store
+    out: examples/search/gen/gorm
+    strategy: all
+    opt:
+      - target=gorm
+      - stores=true
+      - converters=true
+      - filters=true
+      - go_module=github.com/the-protobuf-project/store/examples/search/gen/gorm
+      - config=examples/search/store.yaml
+
+  - local: protoc-gen-store
+    out: examples/search/gen/repository
+    strategy: all
+    opt:
+      - target=repository
+      - go_module=github.com/the-protobuf-project/store/examples/search/gen/repository
+      - gorm_module=github.com/the-protobuf-project/store/examples/search/gen/gorm
+      - config=examples/search/store.yaml
+
+  - local: protoc-gen-store
+    out: examples/search/gen/sql
+    strategy: all
+    opt:
+      - target=sql
+      - config=examples/search/store.yaml
+
+  - local: protoc-gen-store
+    out: examples/search/gen/opensearch
+    strategy: all
+    opt:
+      - target=opensearch
+      - go_module=github.com/the-protobuf-project/store/examples/search/gen/opensearch
+      - gorm_module=github.com/the-protobuf-project/store/examples/search/gen/gorm
+      - repository_module=github.com/the-protobuf-project/store/examples/search/gen/repository
+      - config=examples/search/store.yaml

@@ -24,6 +24,75 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// JsonKeyType is the type a declared JSON path compares as.
+type JsonKeyType int32
+
+const (
+	// JSON_KEY_TYPE_UNSPECIFIED compares the path as its filter value's type.
+	JsonKeyType_JSON_KEY_TYPE_UNSPECIFIED JsonKeyType = 0
+	// JSON_KEY_TYPE_STRING compares text.
+	JsonKeyType_JSON_KEY_TYPE_STRING JsonKeyType = 1
+	// JSON_KEY_TYPE_INT64 compares integers.
+	JsonKeyType_JSON_KEY_TYPE_INT64 JsonKeyType = 2
+	// JSON_KEY_TYPE_DOUBLE compares floating-point numbers.
+	JsonKeyType_JSON_KEY_TYPE_DOUBLE JsonKeyType = 3
+	// JSON_KEY_TYPE_BOOL compares true/false.
+	JsonKeyType_JSON_KEY_TYPE_BOOL JsonKeyType = 4
+	// JSON_KEY_TYPE_DATE compares YYYY-MM-DD dates.
+	JsonKeyType_JSON_KEY_TYPE_DATE JsonKeyType = 5
+	// JSON_KEY_TYPE_TIMESTAMP compares RFC 3339 instants.
+	JsonKeyType_JSON_KEY_TYPE_TIMESTAMP JsonKeyType = 6
+)
+
+// Enum value maps for JsonKeyType.
+var (
+	JsonKeyType_name = map[int32]string{
+		0: "JSON_KEY_TYPE_UNSPECIFIED",
+		1: "JSON_KEY_TYPE_STRING",
+		2: "JSON_KEY_TYPE_INT64",
+		3: "JSON_KEY_TYPE_DOUBLE",
+		4: "JSON_KEY_TYPE_BOOL",
+		5: "JSON_KEY_TYPE_DATE",
+		6: "JSON_KEY_TYPE_TIMESTAMP",
+	}
+	JsonKeyType_value = map[string]int32{
+		"JSON_KEY_TYPE_UNSPECIFIED": 0,
+		"JSON_KEY_TYPE_STRING":      1,
+		"JSON_KEY_TYPE_INT64":       2,
+		"JSON_KEY_TYPE_DOUBLE":      3,
+		"JSON_KEY_TYPE_BOOL":        4,
+		"JSON_KEY_TYPE_DATE":        5,
+		"JSON_KEY_TYPE_TIMESTAMP":   6,
+	}
+)
+
+func (x JsonKeyType) Enum() *JsonKeyType {
+	p := new(JsonKeyType)
+	*p = x
+	return p
+}
+
+func (x JsonKeyType) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (JsonKeyType) Descriptor() protoreflect.EnumDescriptor {
+	return file_store_v1_query_proto_enumTypes[0].Descriptor()
+}
+
+func (JsonKeyType) Type() protoreflect.EnumType {
+	return &file_store_v1_query_proto_enumTypes[0]
+}
+
+func (x JsonKeyType) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use JsonKeyType.Descriptor instead.
+func (JsonKeyType) EnumDescriptor() ([]byte, []int) {
+	return file_store_v1_query_proto_rawDescGZIP(), []int{0}
+}
+
 // QueryOptions tunes a field's generated list-query surface — the AIP-160
 // filter, AIP-132 order_by, and free-text search specs — separately from the
 // physical column options in ColumnOptions.
@@ -46,7 +115,21 @@ type QueryOptions struct {
 	// search includes this column in the bareword free-text search: a filter
 	// term with no field (e.g. `beach resort`) matches it with a
 	// case-insensitive contains. Off by default.
-	Search        bool `protobuf:"varint,3,opt,name=search,proto3" json:"search,omitempty"`
+	Search bool `protobuf:"varint,3,opt,name=search,proto3" json:"search,omitempty"`
+	// json_keys declares the type of hot paths under a JSON field (a
+	// google.protobuf.Struct, or a map): `attributes.floor >= 3` then compares
+	// a number, and the OpenSearch mapping indexes the path typed. Any path is
+	// filterable without being declared; an undeclared one takes the type of
+	// the filter value, and on OpenSearch cannot be compared in order. Setting
+	// it also plans a GIN index on the column, which serves equality and
+	// membership on every path.
+	//
+	// Applied via:
+	//
+	//	google.protobuf.Struct attributes = 9 [(store.v1.query) = {
+	//	  json_keys: [{path: "floor", type: JSON_KEY_TYPE_INT64}]
+	//	}];
+	JsonKeys      []*JsonKey `protobuf:"bytes,4,rep,name=json_keys,json=jsonKeys,proto3" json:"json_keys,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -102,19 +185,94 @@ func (x *QueryOptions) GetSearch() bool {
 	return false
 }
 
+func (x *QueryOptions) GetJsonKeys() []*JsonKey {
+	if x != nil {
+		return x.JsonKeys
+	}
+	return nil
+}
+
+// JsonKey is one declared path under a JSON field.
+type JsonKey struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// path is the dot-separated path below the field, e.g. "view.sea". Each
+	// segment holds letters, digits, '_' and '-'.
+	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	// type is how the path's value compares.
+	Type          JsonKeyType `protobuf:"varint,2,opt,name=type,proto3,enum=store.v1.JsonKeyType" json:"type,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *JsonKey) Reset() {
+	*x = JsonKey{}
+	mi := &file_store_v1_query_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *JsonKey) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*JsonKey) ProtoMessage() {}
+
+func (x *JsonKey) ProtoReflect() protoreflect.Message {
+	mi := &file_store_v1_query_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use JsonKey.ProtoReflect.Descriptor instead.
+func (*JsonKey) Descriptor() ([]byte, []int) {
+	return file_store_v1_query_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *JsonKey) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *JsonKey) GetType() JsonKeyType {
+	if x != nil {
+		return x.Type
+	}
+	return JsonKeyType_JSON_KEY_TYPE_UNSPECIFIED
+}
+
 var File_store_v1_query_proto protoreflect.FileDescriptor
 
 const file_store_v1_query_proto_rawDesc = "" +
 	"\n" +
-	"\x14store/v1/query.proto\x12\bstore.v1\"\x88\x01\n" +
+	"\x14store/v1/query.proto\x12\bstore.v1\"\xb8\x01\n" +
 	"\fQueryOptions\x12#\n" +
 	"\n" +
 	"filterable\x18\x01 \x01(\bH\x00R\n" +
 	"filterable\x88\x01\x01\x12\x1f\n" +
 	"\bsortable\x18\x02 \x01(\bH\x01R\bsortable\x88\x01\x01\x12\x16\n" +
-	"\x06search\x18\x03 \x01(\bR\x06searchB\r\n" +
+	"\x06search\x18\x03 \x01(\bR\x06search\x12.\n" +
+	"\tjson_keys\x18\x04 \x03(\v2\x11.store.v1.JsonKeyR\bjsonKeysB\r\n" +
 	"\v_filterableB\v\n" +
-	"\t_sortableB\xa0\x01\n" +
+	"\t_sortable\"H\n" +
+	"\aJsonKey\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12)\n" +
+	"\x04type\x18\x02 \x01(\x0e2\x15.store.v1.JsonKeyTypeR\x04type*\xc6\x01\n" +
+	"\vJsonKeyType\x12\x1d\n" +
+	"\x19JSON_KEY_TYPE_UNSPECIFIED\x10\x00\x12\x18\n" +
+	"\x14JSON_KEY_TYPE_STRING\x10\x01\x12\x17\n" +
+	"\x13JSON_KEY_TYPE_INT64\x10\x02\x12\x18\n" +
+	"\x14JSON_KEY_TYPE_DOUBLE\x10\x03\x12\x16\n" +
+	"\x12JSON_KEY_TYPE_BOOL\x10\x04\x12\x16\n" +
+	"\x12JSON_KEY_TYPE_DATE\x10\x05\x12\x1b\n" +
+	"\x17JSON_KEY_TYPE_TIMESTAMP\x10\x06B\xa0\x01\n" +
 	"\fcom.store.v1B\n" +
 	"QueryProtoP\x01ZCgithub.com/the-protobuf-project/store/plugin/pb/storepbv1;storepbv1\xa2\x02\x03SXX\xaa\x02\bStore.V1\xca\x02\bStore\\V1\xe2\x02\x14Store\\V1\\GPBMetadata\xea\x02\tStore::V1b\x06proto3"
 
@@ -130,16 +288,21 @@ func file_store_v1_query_proto_rawDescGZIP() []byte {
 	return file_store_v1_query_proto_rawDescData
 }
 
-var file_store_v1_query_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
+var file_store_v1_query_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_store_v1_query_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_store_v1_query_proto_goTypes = []any{
-	(*QueryOptions)(nil), // 0: store.v1.QueryOptions
+	(JsonKeyType)(0),     // 0: store.v1.JsonKeyType
+	(*QueryOptions)(nil), // 1: store.v1.QueryOptions
+	(*JsonKey)(nil),      // 2: store.v1.JsonKey
 }
 var file_store_v1_query_proto_depIdxs = []int32{
-	0, // [0:0] is the sub-list for method output_type
-	0, // [0:0] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	2, // 0: store.v1.QueryOptions.json_keys:type_name -> store.v1.JsonKey
+	0, // 1: store.v1.JsonKey.type:type_name -> store.v1.JsonKeyType
+	2, // [2:2] is the sub-list for method output_type
+	2, // [2:2] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_store_v1_query_proto_init() }
@@ -153,13 +316,14 @@ func file_store_v1_query_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_store_v1_query_proto_rawDesc), len(file_store_v1_query_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   1,
+			NumEnums:      1,
+			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_store_v1_query_proto_goTypes,
 		DependencyIndexes: file_store_v1_query_proto_depIdxs,
+		EnumInfos:         file_store_v1_query_proto_enumTypes,
 		MessageInfos:      file_store_v1_query_proto_msgTypes,
 	}.Build()
 	File_store_v1_query_proto = out.File

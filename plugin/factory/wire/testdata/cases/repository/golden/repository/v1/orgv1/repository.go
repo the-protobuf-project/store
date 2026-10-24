@@ -35,6 +35,13 @@ type MemberRepository interface {
 	Get(ctx context.Context, name string) (*orgv1.Member, error)
 	// List returns one page of records under parent.
 	List(ctx context.Context, parent string, in repox.ListInput) ([]*orgv1.Member, string, error)
+	// ListByKeys reads every record whose filter field field is one of keys
+	// -- a batched read by name, by parent, by any text, enum or reference
+	// field -- in statements of at most repox.KeysPerRead keys, at most
+	// repox.ReadParallelism at once, across every parent. in narrows
+	// each read; its page fields are ignored. See repox.ListByKeys for the
+	// order records come back in.
+	ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*orgv1.Member, error)
 	// Update persists the masked fields of m; an empty mask replaces every
 	// mutable field. m.Etag, when set, guards against concurrent writes
 	// (repox.ErrConflict).
@@ -71,6 +78,13 @@ type OrganisationRepository interface {
 	Get(ctx context.Context, name string) (*orgv1.Organisation, error)
 	// List returns one page of records.
 	List(ctx context.Context, in repox.ListInput) ([]*orgv1.Organisation, string, error)
+	// ListByKeys reads every record whose filter field field is one of keys
+	// -- a batched read by name, by parent, by any text, enum or reference
+	// field -- in statements of at most repox.KeysPerRead keys, at most
+	// repox.ReadParallelism at once. in narrows
+	// each read; its page fields are ignored. See repox.ListByKeys for the
+	// order records come back in.
+	ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*orgv1.Organisation, error)
 	// Update persists the masked fields of m; an empty mask replaces every
 	// mutable field. m.Etag, when set, guards against concurrent writes
 	// (repox.ErrConflict).
@@ -118,6 +132,13 @@ type UserRepository interface {
 	Get(ctx context.Context, name string) (*orgv1.User, error)
 	// List returns one page of records.
 	List(ctx context.Context, in repox.ListInput) ([]*orgv1.User, string, error)
+	// ListByKeys reads every record whose filter field field is one of keys
+	// -- a batched read by name, by parent, by any text, enum or reference
+	// field -- in statements of at most repox.KeysPerRead keys, at most
+	// repox.ReadParallelism at once. in narrows
+	// each read; its page fields are ignored. See repox.ListByKeys for the
+	// order records come back in.
+	ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*orgv1.User, error)
 	// Update persists the masked fields of m; an empty mask replaces every
 	// mutable field. m.Etag, when set, guards against concurrent writes
 	// (repox.ErrConflict).
@@ -223,6 +244,7 @@ func NewBatchIn(u *repox.Unit, opts ...Option) Batch {
 // the adapters they build.
 type options struct {
 	references               *repox.References
+	projections              *repox.Projections
 	memberHooks              MemberHooks
 	memberOverrides          map[string]filterx.SQLHandler
 	organisationHooks        OrganisationHooks
@@ -236,6 +258,14 @@ type options struct {
 
 // Option customizes the adapters a factory builds.
 type Option func(*options)
+
+// WithProjections keeps the projections p maintains current with every write
+// the repositories make (see repox.Projections): on GORM each write and its
+// projections share one transaction; on GraphQL the projections follow the
+// write in a request of their own. New passes repox.Conn.Projections.
+func WithProjections(p *repox.Projections) Option {
+	return func(o *options) { o.projections = p }
+}
 
 // WithReferences enforces reference integrity through refs (see
 // repox.References): New passes repox.Conn.References. With none, writes do
@@ -332,7 +362,7 @@ func WithUserGraphQLListOverride(field string, h filterx.GraphQLHandler) Option 
 // When conn carries a ChangeObserver, every write the returned repositories
 // make is reported to it (see observe).
 func New(conn repox.Conn, opts ...Option) Repositories {
-	opts = append([]Option{WithReferences(conn.References)}, opts...)
+	opts = append([]Option{WithReferences(conn.References), WithProjections(conn.Projections)}, opts...)
 	if conn.GraphQL != nil {
 		return observe(NewGraphQL(conn.GraphQL, opts...), conn.Changes)
 	}
@@ -345,11 +375,44 @@ func NewGraphQL(svc *genql.Service, opts ...Option) Repositories {
 	for _, opt := range opts {
 		opt(&o)
 	}
-	return guard(Repositories{
+	repos := Repositories{
 		Members:       &GraphQLMemberRepository{Svc: svc, Hooks: o.memberHooks, Refs: o.references, ListOverrides: o.memberGQLOverrides},
 		Organisations: &GraphQLOrganisationRepository{Svc: svc, Hooks: o.organisationHooks, Refs: o.references, ListOverrides: o.organisationGQLOverrides},
 		Users:         &GraphQLUserRepository{Svc: svc, Hooks: o.userHooks, Refs: o.references, ListOverrides: o.userGQLOverrides},
-	}, o.references)
+	}
+	if p := o.projections; p != nil {
+		if p.Watches("org.v1/Member") {
+			r := repos.Members
+			repos.Members = &projectedMemberRepository{MemberRepository: r, run: func(ctx context.Context, f func(MemberRepository) ([]repox.Change, error)) error {
+				changes, err := f(r)
+				if err != nil {
+					return err
+				}
+				return p.ProjectGraphQLAfter(ctx, repox.Conn{GraphQL: svc}, changes)
+			}}
+		}
+		if p.Watches("org.v1/Organisation") {
+			r := repos.Organisations
+			repos.Organisations = &projectedOrganisationRepository{OrganisationRepository: r, run: func(ctx context.Context, f func(OrganisationRepository) ([]repox.Change, error)) error {
+				changes, err := f(r)
+				if err != nil {
+					return err
+				}
+				return p.ProjectGraphQLAfter(ctx, repox.Conn{GraphQL: svc}, changes)
+			}}
+		}
+		if p.Watches("org.v1/User") {
+			r := repos.Users
+			repos.Users = &projectedUserRepository{UserRepository: r, run: func(ctx context.Context, f func(UserRepository) ([]repox.Change, error)) error {
+				changes, err := f(r)
+				if err != nil {
+					return err
+				}
+				return p.ProjectGraphQLAfter(ctx, repox.Conn{GraphQL: svc}, changes)
+			}}
+		}
+	}
+	return guard(repos, o.references)
 }
 
 // NewGorm builds the GORM adapter set over db.
@@ -358,11 +421,86 @@ func NewGorm(db *gorm.DB, opts ...Option) Repositories {
 	for _, opt := range opts {
 		opt(&o)
 	}
-	return guard(Repositories{
+	repos := Repositories{
 		Members:       &GormMemberRepository{DB: db, Hooks: o.memberHooks, Refs: o.references, ListOverrides: o.memberOverrides},
 		Organisations: &GormOrganisationRepository{DB: db, Hooks: o.organisationHooks, Refs: o.references, ListOverrides: o.organisationOverrides},
 		Users:         &GormUserRepository{DB: db, Hooks: o.userHooks, Refs: o.references, ListOverrides: o.userOverrides},
-	}, o.references)
+	}
+	if p := o.projections; p != nil {
+		if p.Watches("org.v1/Member") {
+			g := repos.Members.(*GormMemberRepository)
+			repos.Members = &projectedMemberRepository{MemberRepository: g, run: func(ctx context.Context, f func(MemberRepository) ([]repox.Change, error)) error {
+				// The write and its projections in one transaction: the
+				// adapter is rebound to it, so its own transactions nest as
+				// savepoints and its re-reads see the write. The feed hears
+				// of it once it commits.
+				var committed []repox.Committed
+				err := repox.MapGormErr(db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+					bound := *g
+					bound.DB = tx
+					changes, err := f(&bound)
+					if err != nil {
+						return err
+					}
+					committed, err = p.Gorm(ctx, tx, changes)
+					return err
+				}))
+				if err == nil {
+					p.Publish(ctx, committed)
+				}
+				return err
+			}}
+		}
+		if p.Watches("org.v1/Organisation") {
+			g := repos.Organisations.(*GormOrganisationRepository)
+			repos.Organisations = &projectedOrganisationRepository{OrganisationRepository: g, run: func(ctx context.Context, f func(OrganisationRepository) ([]repox.Change, error)) error {
+				// The write and its projections in one transaction: the
+				// adapter is rebound to it, so its own transactions nest as
+				// savepoints and its re-reads see the write. The feed hears
+				// of it once it commits.
+				var committed []repox.Committed
+				err := repox.MapGormErr(db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+					bound := *g
+					bound.DB = tx
+					changes, err := f(&bound)
+					if err != nil {
+						return err
+					}
+					committed, err = p.Gorm(ctx, tx, changes)
+					return err
+				}))
+				if err == nil {
+					p.Publish(ctx, committed)
+				}
+				return err
+			}}
+		}
+		if p.Watches("org.v1/User") {
+			g := repos.Users.(*GormUserRepository)
+			repos.Users = &projectedUserRepository{UserRepository: g, run: func(ctx context.Context, f func(UserRepository) ([]repox.Change, error)) error {
+				// The write and its projections in one transaction: the
+				// adapter is rebound to it, so its own transactions nest as
+				// savepoints and its re-reads see the write. The feed hears
+				// of it once it commits.
+				var committed []repox.Committed
+				err := repox.MapGormErr(db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+					bound := *g
+					bound.DB = tx
+					changes, err := f(&bound)
+					if err != nil {
+						return err
+					}
+					committed, err = p.Gorm(ctx, tx, changes)
+					return err
+				}))
+				if err == nil {
+					p.Publish(ctx, committed)
+				}
+				return err
+			}}
+		}
+	}
+	return guard(repos, o.references)
 }
 
 // guard wraps every repository in repos so its writes keep reference
@@ -540,6 +678,192 @@ func (o *observedUserRepository) Delete(ctx context.Context, name string) error 
 	err := o.UserRepository.Delete(ctx, name)
 	o.changes.Changed(ctx, name)
 	return err
+}
+
+// projectedMemberRepository runs the connection's projections over every
+// Member write; see WithProjections. run performs a write through the
+// repository it hands f and projects the changes f reports.
+type projectedMemberRepository struct {
+	MemberRepository
+	run func(ctx context.Context, f func(MemberRepository) ([]repox.Change, error)) error
+}
+
+// getMember reads name through read, for a queued write's
+// Change.LoadPrior (repox.PriorOf).
+func getMember(ctx context.Context, read repox.Conn, name string) (*orgv1.Member, error) {
+	return New(read).Members.Get(ctx, name)
+}
+
+// changedMember is the change one write of a Member makes.
+func changedMember(name string, op repox.ChangeOp, rec *orgv1.Member) []repox.Change {
+	c := repox.Change{Type: "org.v1/Member", Name: name, Op: op}
+	if rec != nil {
+		c.Record = rec
+	}
+	return []repox.Change{c}
+}
+
+func (p *projectedMemberRepository) Create(ctx context.Context, parent string, m *orgv1.Member) (out *orgv1.Member, err error) {
+	err = p.run(ctx, func(r MemberRepository) ([]repox.Change, error) {
+		var err error
+		out, err = r.Create(ctx, parent, m)
+		return changedMember(out.GetName(), repox.ChangeCreate, out), err
+	})
+	return out, err
+}
+
+func (p *projectedMemberRepository) Update(ctx context.Context, m *orgv1.Member, paths []string) (out *orgv1.Member, err error) {
+	err = p.run(ctx, func(r MemberRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, m.GetName()))
+		if err != nil {
+			return nil, err
+		}
+		out, err = r.Update(ctx, m, paths)
+		return repox.WithPrior(changedMember(m.GetName(), repox.ChangeUpdate, out), prior), err
+	})
+	return out, err
+}
+
+func (p *projectedMemberRepository) Delete(ctx context.Context, name string) error {
+	return p.run(ctx, func(r MemberRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, name))
+		if err != nil {
+			return nil, err
+		}
+		return repox.WithPrior(changedMember(name, repox.ChangeDelete, nil), prior), r.Delete(ctx, name)
+	})
+}
+
+// projectedOrganisationRepository runs the connection's projections over every
+// Organisation write; see WithProjections. run performs a write through the
+// repository it hands f and projects the changes f reports.
+type projectedOrganisationRepository struct {
+	OrganisationRepository
+	run func(ctx context.Context, f func(OrganisationRepository) ([]repox.Change, error)) error
+}
+
+// getOrganisation reads name through read, for a queued write's
+// Change.LoadPrior (repox.PriorOf).
+func getOrganisation(ctx context.Context, read repox.Conn, name string) (*orgv1.Organisation, error) {
+	return New(read).Organisations.Get(ctx, name)
+}
+
+// changedOrganisation is the change one write of a Organisation makes.
+func changedOrganisation(name string, op repox.ChangeOp, rec *orgv1.Organisation) []repox.Change {
+	c := repox.Change{Type: "org.v1/Organisation", Name: name, Op: op}
+	if rec != nil {
+		c.Record = rec
+	}
+	return []repox.Change{c}
+}
+
+func (p *projectedOrganisationRepository) Create(ctx context.Context, m *orgv1.Organisation) (out *orgv1.Organisation, err error) {
+	err = p.run(ctx, func(r OrganisationRepository) ([]repox.Change, error) {
+		var err error
+		out, err = r.Create(ctx, m)
+		return changedOrganisation(out.GetName(), repox.ChangeCreate, out), err
+	})
+	return out, err
+}
+
+func (p *projectedOrganisationRepository) Update(ctx context.Context, m *orgv1.Organisation, paths []string) (out *orgv1.Organisation, err error) {
+	err = p.run(ctx, func(r OrganisationRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, m.GetName()))
+		if err != nil {
+			return nil, err
+		}
+		out, err = r.Update(ctx, m, paths)
+		return repox.WithPrior(changedOrganisation(m.GetName(), repox.ChangeUpdate, out), prior), err
+	})
+	return out, err
+}
+
+func (p *projectedOrganisationRepository) UpdateOutputOnly(ctx context.Context, m *orgv1.Organisation, paths []string) (out *orgv1.Organisation, err error) {
+	err = p.run(ctx, func(r OrganisationRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, m.GetName()))
+		if err != nil {
+			return nil, err
+		}
+		out, err = r.UpdateOutputOnly(ctx, m, paths)
+		return repox.WithPrior(changedOrganisation(m.GetName(), repox.ChangeUpdate, out), prior), err
+	})
+	return out, err
+}
+
+func (p *projectedOrganisationRepository) UpdateWithOutputOnly(ctx context.Context, m *orgv1.Organisation, paths, outputPaths []string) (out *orgv1.Organisation, err error) {
+	err = p.run(ctx, func(r OrganisationRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, m.GetName()))
+		if err != nil {
+			return nil, err
+		}
+		out, err = r.UpdateWithOutputOnly(ctx, m, paths, outputPaths)
+		return repox.WithPrior(changedOrganisation(m.GetName(), repox.ChangeUpdate, out), prior), err
+	})
+	return out, err
+}
+
+func (p *projectedOrganisationRepository) Delete(ctx context.Context, name string) error {
+	return p.run(ctx, func(r OrganisationRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, name))
+		if err != nil {
+			return nil, err
+		}
+		return repox.WithPrior(changedOrganisation(name, repox.ChangeDelete, nil), prior), r.Delete(ctx, name)
+	})
+}
+
+// projectedUserRepository runs the connection's projections over every
+// User write; see WithProjections. run performs a write through the
+// repository it hands f and projects the changes f reports.
+type projectedUserRepository struct {
+	UserRepository
+	run func(ctx context.Context, f func(UserRepository) ([]repox.Change, error)) error
+}
+
+// getUser reads name through read, for a queued write's
+// Change.LoadPrior (repox.PriorOf).
+func getUser(ctx context.Context, read repox.Conn, name string) (*orgv1.User, error) {
+	return New(read).Users.Get(ctx, name)
+}
+
+// changedUser is the change one write of a User makes.
+func changedUser(name string, op repox.ChangeOp, rec *orgv1.User) []repox.Change {
+	c := repox.Change{Type: "org.v1/User", Name: name, Op: op}
+	if rec != nil {
+		c.Record = rec
+	}
+	return []repox.Change{c}
+}
+
+func (p *projectedUserRepository) Create(ctx context.Context, m *orgv1.User) (out *orgv1.User, err error) {
+	err = p.run(ctx, func(r UserRepository) ([]repox.Change, error) {
+		var err error
+		out, err = r.Create(ctx, m)
+		return changedUser(out.GetName(), repox.ChangeCreate, out), err
+	})
+	return out, err
+}
+
+func (p *projectedUserRepository) Update(ctx context.Context, m *orgv1.User, paths []string) (out *orgv1.User, err error) {
+	err = p.run(ctx, func(r UserRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, m.GetName()))
+		if err != nil {
+			return nil, err
+		}
+		out, err = r.Update(ctx, m, paths)
+		return repox.WithPrior(changedUser(m.GetName(), repox.ChangeUpdate, out), prior), err
+	})
+	return out, err
+}
+
+func (p *projectedUserRepository) Delete(ctx context.Context, name string) error {
+	return p.run(ctx, func(r UserRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, name))
+		if err != nil {
+			return nil, err
+		}
+		return repox.WithPrior(changedUser(name, repox.ChangeDelete, nil), prior), r.Delete(ctx, name)
+	})
 }
 
 // guardedMemberRepository keeps Member's references whole; see guard.

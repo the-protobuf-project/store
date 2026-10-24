@@ -11,7 +11,7 @@
 //
 // Shared AIP-160 filter / AIP-132 order_by / paginated-list engines driven by the generated per-schema specs.
 // annotations: entity.v1 dev, store.v1 dev
-// engine:      protokit v1.3.1
+// engine:      protokit v1.3.4
 //
 // store — https://github.com/the-protobuf-project/store
 
@@ -49,8 +49,13 @@ type HasuraEngine[M any] struct {
 	query     graphql.QueryHandler[M]
 	scope     []graphql.Predicate
 	overrides map[string]GraphQLHandler
+	vias      map[string]ViaLookup
 	observer  Observer
 }
+
+// ViaLookup reads a value-object table for the engine: which of keys name a
+// row matching where (a predicate over that table's own columns).
+type ViaLookup func(ctx context.Context, keys []string, where graphql.Predicate) ([]string, error)
 
 // Hasura builds the GraphQL engine for spec over q (any generated resource
 // query handler):
@@ -78,6 +83,26 @@ func (e *HasuraEngine[M]) Override(field string, h GraphQLHandler) *HasuraEngine
 	return e
 }
 
+// Via lets the engine reach the value object a row points at through its
+// reference field (an event's "start"): the dotted fields under it
+// ("start.date_time") become filterable, hints included, through lookup.
+//
+// The generated GraphQL schema has no relationships to traverse, so such a
+// filter cannot be one query. List reads each page of rows the other
+// conditions match, asks lookup which of the value objects those rows point
+// at match, and reads the page again keeping only the rows that do -- a few
+// round trips a page, in which the database does all the matching, rather
+// than every row of the scope being returned to be judged in Go. Pages may
+// come back short, even empty, with a next-page token: the page boundary is
+// the rows read, not the rows kept.
+func (e *HasuraEngine[M]) Via(field string, lookup ViaLookup) *HasuraEngine[M] {
+	if e.vias == nil {
+		e.vias = map[string]ViaLookup{}
+	}
+	e.vias[field] = lookup
+	return e
+}
+
 // Observe routes the engine's spans and debug events to o.
 func (e *HasuraEngine[M]) Observe(o Observer) *HasuraEngine[M] {
 	e.observer = o
@@ -87,7 +112,9 @@ func (e *HasuraEngine[M]) Observe(o Observer) *HasuraEngine[M] {
 // Predicate translates the conditions (AND-combined) into one BoolExp
 // predicate. The bool reports whether any predicate resulted (false for empty
 // conditions). Unknown fields, unsupported operators, and malformed values are
-// rejected with ErrInvalid.
+// rejected with ErrInvalid. A condition reaching a value object the engine has
+// a lookup for (see Via) is left out: List matches it page by page, which no
+// single predicate can.
 func (e *HasuraEngine[M]) Predicate(conds []Condition) (graphql.Predicate, bool, error) {
 	preds := make([]graphql.Predicate, 0, len(conds))
 	for _, c := range conds {
@@ -98,6 +125,9 @@ func (e *HasuraEngine[M]) Predicate(conds []Condition) (graphql.Predicate, bool,
 			}
 			preds = append(preds, p)
 			continue
+		}
+		if e.viaReady(c) {
+			continue // List matches it page by page (see Via)
 		}
 		p, ok, err := gqlConditionOrHint(e.spec, c)
 		if err != nil {
@@ -363,7 +393,158 @@ func (e *HasuraEngine[M]) List(ctx context.Context, in ListInput) ([]M, string, 
 	if err != nil {
 		return nil, "", err
 	}
-	return NextPage(rows, limit, terms, CamelCase, GraphQLColumn)
+	page, next, err := NextPage(rows, limit, terms, CamelCase, GraphQLColumn)
+	if err != nil || len(page) == 0 {
+		return page, next, err
+	}
+	var vias []Condition
+	for _, c := range in.Filter {
+		if _, ok := e.overrides[c.Field]; !ok && e.viaReady(c) {
+			vias = append(vias, c)
+		}
+	}
+	if len(vias) == 0 {
+		return page, next, nil
+	}
+	kept, err := e.keep(ctx, page, vias, order)
+	return kept, next, err
+}
+
+// viaReady reports whether c reaches a value object -- itself or through an
+// alternative -- and every value object it reaches has a lookup (see Via).
+func (e *HasuraEngine[M]) viaReady(c Condition) bool {
+	if len(e.vias) == 0 || !reachesVia(e.spec, c) {
+		return false
+	}
+	var ready func(c Condition) bool
+	ready = func(c Condition) bool {
+		if c.Op == OpOr {
+			for _, alt := range c.Any {
+				if !ready(alt) {
+					return false
+				}
+			}
+			return true
+		}
+		f, ok := e.spec.Fields[c.Field]
+		if !ok || f.Via == nil {
+			return true
+		}
+		head, _, _ := strings.Cut(c.Field, ".")
+		_, ok = e.vias[head]
+		return ok
+	}
+	return ready(c)
+}
+
+// keep reads page again, keeping the rows that match every condition in
+// vias: each value-object term becomes "the reference is one of the keys its
+// lookup matched among those these rows point at".
+func (e *HasuraEngine[M]) keep(ctx context.Context, page []M, vias []Condition, order []graphql.OrderTerm) ([]M, error) {
+	if len(e.spec.PK) == 0 {
+		return nil, fmt.Errorf("%w: %s has no key to match value objects by", ErrInvalid, e.spec.Table)
+	}
+	pk := CamelCase(e.spec.PK[0].Column)
+	preds := []graphql.Predicate{graphql.StringField{Col: pk}.In(columnValues(page, pk)...)}
+	for _, c := range vias {
+		p, err := e.viaPredicate(ctx, page, c)
+		if err != nil {
+			return nil, err
+		}
+		preds = append(preds, p)
+	}
+	req := (&graphql.ListRequest{}).Limit(len(page)).Where(graphql.And(preds...))
+	if len(order) > 0 {
+		req = req.OrderBy(order...)
+	}
+	var kept []M
+	err := e.observer.Span(ctx, "filterx.List/"+e.spec.Table, func(ctx context.Context) error {
+		var er error
+		kept, er = e.query.List(ctx, req)
+		return er
+	})
+	return kept, err
+}
+
+// viaPredicate renders c for keep, resolving each value-object term through
+// its lookup over the references page holds.
+func (e *HasuraEngine[M]) viaPredicate(ctx context.Context, page []M, c Condition) (graphql.Predicate, error) {
+	if c.Op == OpOr {
+		preds := make([]graphql.Predicate, 0, len(c.Any))
+		for _, alt := range c.Any {
+			p, err := e.viaPredicate(ctx, page, alt)
+			if err != nil {
+				return graphql.Predicate{}, err
+			}
+			preds = append(preds, p)
+		}
+		return graphql.Or(preds...), nil
+	}
+	f, ok := e.spec.Fields[c.Field]
+	if !ok || f.Via == nil {
+		return gqlCondition(e.spec, c)
+	}
+	col := CamelCase(f.Column)
+	if c.Op == OpNull {
+		// Whether the value object is there is whether the row points at one.
+		null, err := ParseBool(c.Value)
+		if err != nil {
+			return graphql.Predicate{}, err
+		}
+		return graphql.StringField{Col: col}.IsNull(null), nil
+	}
+	inner := Spec{Table: f.Via.Table, Fields: map[string]FieldSpec{
+		c.Field: {Column: f.Via.Column, Kind: f.Kind, EnumPrefix: f.EnumPrefix},
+	}}
+	where, err := gqlCondition(inner, c)
+	if err != nil {
+		return graphql.Predicate{}, err
+	}
+	matched := []string{}
+	if refs := columnValues(page, col); len(refs) > 0 {
+		head, _, _ := strings.Cut(c.Field, ".")
+		err = e.observer.Span(ctx, "filterx.List/"+f.Via.Table, func(ctx context.Context) error {
+			var er error
+			matched, er = e.vias[head](ctx, refs, where)
+			return er
+		})
+		if err != nil {
+			return graphql.Predicate{}, err
+		}
+	}
+	return graphql.StringField{Col: col}.In(matched...), nil
+}
+
+// columnValues collects the distinct non-empty values of the string column col
+// across rows; a *string column's nil is skipped.
+func columnValues[M any](rows []M, col string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for i := range rows {
+		v := reflect.ValueOf(&rows[i]).Elem()
+		if v.Kind() != reflect.Struct {
+			continue
+		}
+		t := v.Type()
+		for j := 0; j < t.NumField(); j++ {
+			if GraphQLColumn(t.Field(j)) != col {
+				continue
+			}
+			fv := v.Field(j)
+			if fv.Kind() == reflect.Pointer {
+				if fv.IsNil() {
+					break
+				}
+				fv = fv.Elem()
+			}
+			if fv.Kind() == reflect.String && fv.String() != "" && !seen[fv.String()] {
+				seen[fv.String()] = true
+				out = append(out, fv.String())
+			}
+			break
+		}
+	}
+	return out
 }
 
 // gqlCondition translates one spec-listed condition.
@@ -384,7 +565,14 @@ func gqlCondition(spec Spec, c Condition) (graphql.Predicate, error) {
 	}
 	f, ok := spec.Fields[c.Field]
 	if !ok {
-		return graphql.Predicate{}, fmt.Errorf("%w: cannot filter by %q", ErrInvalid, c.Field)
+		p, isPath, err := LookupJSON(spec, c.Field)
+		if err != nil {
+			return graphql.Predicate{}, err
+		}
+		if !isPath {
+			return graphql.Predicate{}, fmt.Errorf("%w: cannot filter by %q", ErrInvalid, c.Field)
+		}
+		return gqlJSONCondition(CamelCase(p.Field.Column), p, c)
 	}
 	if f.Via != nil {
 		return graphql.Predicate{}, fmt.Errorf("%w: %q is a value-object field, which this GraphQL schema cannot reach", ErrInvalid, c.Field)
@@ -497,11 +685,72 @@ func gqlCondition(spec Spec, c Condition) (graphql.Predicate, error) {
 			return bf.Neq(v), nil
 		}
 	case KindTags:
-		// Array containment has no BoolExp operator in the generated schema;
-		// tags stay a gorm-only filter (register an Override to change that).
-		return graphql.Predicate{}, fmt.Errorf("%w: cannot filter by %q here", ErrInvalid, c.Field)
+		// The engine's array comparison: a text[] column holding the tag. DDN
+		// offers _contains on an array of scalars when the connector declares
+		// query.nested_fields.filter_by.nested_arrays.contains (NDC spec 0.2);
+		// against a connector that does not, the engine rejects the request
+		// rather than this engine guessing another shape.
+		if c.Op == OpHas {
+			return graphql.Op(col, "_contains", c.Value), nil
+		}
 	}
 	return graphql.Predicate{}, fmt.Errorf("%w: unsupported operator for %q", ErrInvalid, c.Field)
+}
+
+// gqlJSONCondition translates a condition on a path under a jsonb column onto
+// the comparisons ndc-postgres exposes on jsonb: jsonb_contains (@>) for
+// equality and membership, jsonb_exists (?) for a top-level key's presence.
+// The engine exposes no SQL/JSON path test, so the ordered comparisons, and
+// presence or null below the top level, are rejected with ErrInvalid; a
+// condition marked as a hint is left out instead (see AsHint).
+func gqlJSONCondition(col string, p JSONPath, c Condition) (graphql.Predicate, error) {
+	contains := func(v any) graphql.Predicate { return graphql.Op(col, "jsonb_contains", JSONNest(p.Path, v)) }
+	switch c.Op {
+	case OpEq, OpNeq:
+		v, err := JSONValue(p, c)
+		if err != nil {
+			return graphql.Predicate{}, err
+		}
+		if c.Op == OpNeq {
+			return graphql.Not(contains(v)), nil
+		}
+		return contains(v), nil
+	case OpHas:
+		if IsPresenceTest(c) {
+			if len(p.Path) != 1 {
+				break
+			}
+			return graphql.Op(col, "jsonb_exists", p.Path[0]), nil
+		}
+		v, err := JSONValue(p, c)
+		if err != nil {
+			return graphql.Predicate{}, err
+		}
+		return graphql.Or(contains(v), contains([]any{v})), nil
+	case OpNull:
+		null, err := ParseBool(c.Value)
+		if err != nil {
+			return graphql.Predicate{}, err
+		}
+		if len(p.Path) != 1 {
+			break
+		}
+		if null {
+			return graphql.Not(graphql.Op(col, "jsonb_exists", p.Path[0])), nil
+		}
+		return graphql.Op(col, "jsonb_exists", p.Path[0]), nil
+	case OpIn:
+		vals, err := JSONValues(p, c)
+		if err != nil {
+			return graphql.Predicate{}, err
+		}
+		preds := make([]graphql.Predicate, 0, len(vals))
+		for _, v := range vals {
+			preds = append(preds, contains(v))
+		}
+		return graphql.Or(preds...), nil
+	}
+	return graphql.Predicate{}, fmt.Errorf("%w: %q: this GraphQL schema cannot compare a JSON path that way (no SQL/JSON path operator)", ErrInvalid, c.Field)
 }
 
 // gqlSearchPredicate matches a bareword term against the spec's search columns.
@@ -567,6 +816,11 @@ func gqlConditionOrHint(spec Spec, c Condition) (graphql.Predicate, bool, error)
 		return graphql.Predicate{}, false, nil
 	}
 	p, err := gqlCondition(spec, c)
+	if err != nil && c.Hint {
+		if _, isPath, _ := LookupJSON(spec, c.Field); isPath {
+			return graphql.Predicate{}, false, nil // a JSON test this schema cannot make
+		}
+	}
 	return p, err == nil, err
 }
 

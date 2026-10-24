@@ -912,6 +912,14 @@ func (r *GraphQLAgendaRepository) remove(ctx context.Context, id string) error {
 	return nil
 }
 
+// ListByKeys reads every record whose filter field field is one of keys; see
+// repox.ListByKeys.
+func (r *GraphQLAgendaRepository) ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*deepv1.Agenda, error) {
+	return repox.ListByKeys(ctx, field, keys, in, func(ctx context.Context, in repox.ListInput) ([]*deepv1.Agenda, string, error) {
+		return r.List(ctx, in)
+	})
+}
+
 // Compile-time proof the adapter satisfies the interface.
 var _ AgendaRepository = (*GraphQLAgendaRepository)(nil)
 
@@ -1683,6 +1691,14 @@ func (r *GraphQLMeetingRepository) remove(ctx context.Context, id string) error 
 	return nil
 }
 
+// ListByKeys reads every record whose filter field field is one of keys; see
+// repox.ListByKeys.
+func (r *GraphQLMeetingRepository) ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*deepv1.Meeting, error) {
+	return repox.ListByKeys(ctx, field, keys, in, func(ctx context.Context, in repox.ListInput) ([]*deepv1.Meeting, string, error) {
+		return r.List(ctx, "agendas/-", in)
+	})
+}
+
 // Compile-time proof the adapter satisfies the interface.
 var _ MeetingRepository = (*GraphQLMeetingRepository)(nil)
 
@@ -1709,7 +1725,7 @@ func (b *graphQLBatch) CreateAgenda(in *deepv1.Agenda) (string, error) {
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		return r.insertOps(ctx, ops, named, ci)
 	})
-	b.u.Touch(named.GetName())
+	b.u.Record(repox.Change{Type: "deep.v1/Agenda", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
 }
 
@@ -1726,7 +1742,7 @@ func (b *graphQLBatch) UpdateAgenda(in *deepv1.Agenda, paths []string) {
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, nil)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "deep.v1/Agenda", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getAgenda)})
 }
 
 // DeleteAgenda queues a soft delete. A record already deleted or gone is
@@ -1743,7 +1759,7 @@ func (b *graphQLBatch) DeleteAgenda(name string) {
 		ops.Add(b.svc.Mutation.DeepV1.Agendas.UpdateOp(ids[len(ids)-1], r.deletePatch(), new(agendasql.UpdateDeepV1AgendasByIdResponse), agendasql.Update().PreCheck(agendasql.DeleteTime.IsNull(true))))
 		return nil, nil
 	})
-	b.u.Touch(name)
+	b.u.Record(repox.Change{Type: "deep.v1/Agenda", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getAgenda)})
 }
 
 // PurgeAgenda queues the record's removal for good. A record already
@@ -1767,7 +1783,7 @@ func (b *graphQLBatch) PurgeAgenda(name string) {
 		}
 		return r.purgeOps(ctx, ops, id)
 	})
-	b.u.Touch(name)
+	b.u.Record(repox.Change{Type: "deep.v1/Agenda", Name: name, Op: repox.ChangePurge, LoadPrior: repox.PriorOf(name, getAgenda)})
 }
 
 // CreateMeeting queues a create and returns the name the record will have.
@@ -1781,7 +1797,7 @@ func (b *graphQLBatch) CreateMeeting(parent string, in *deepv1.Meeting) (string,
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		return r.insertOps(ctx, ops, named, ci)
 	})
-	b.u.Touch(named.GetName())
+	b.u.Record(repox.Change{Type: "deep.v1/Meeting", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
 }
 
@@ -1798,7 +1814,7 @@ func (b *graphQLBatch) UpdateMeeting(in *deepv1.Meeting, paths []string) {
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, nil)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "deep.v1/Meeting", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getMeeting)})
 }
 
 // DeleteMeeting queues the record's removal for good. A record already
@@ -1815,5 +1831,5 @@ func (b *graphQLBatch) DeleteMeeting(name string) {
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		return r.purgeOps(ctx, ops, id)
 	})
-	b.u.Touch(name)
+	b.u.Record(repox.Change{Type: "deep.v1/Meeting", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getMeeting)})
 }

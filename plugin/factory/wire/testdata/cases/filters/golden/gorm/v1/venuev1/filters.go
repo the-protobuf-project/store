@@ -20,10 +20,11 @@ import (
 )
 
 // VenueFilterSpec is Venue's AIP-160 filter / AIP-132 order_by surface,
-// consumed by the filterx.Gorm and filterx.Hasura engines.
+// consumed by the filterx.Gorm, filterx.Hasura and filterx.OpenSearch engines.
 var VenueFilterSpec = filterx.Spec{
 	Table: `"venue_v1"."venues"`,
 	Fields: map[string]filterx.FieldSpec{
+		"attributes":     {Column: "attributes", Kind: filterx.KindJSON},
 		"capacity":       {Column: "capacity", Kind: filterx.KindInt},
 		"create_time":    {Column: "create_time", Kind: filterx.KindTimestamp},
 		"display_name":   {Column: "display_name", Kind: filterx.KindText},
@@ -50,7 +51,7 @@ var VenueFilterSpec = filterx.Spec{
 }
 
 // OperatorFilterSpec is Operator's AIP-160 filter / AIP-132 order_by surface,
-// consumed by the filterx.Gorm and filterx.Hasura engines.
+// consumed by the filterx.Gorm, filterx.Hasura and filterx.OpenSearch engines.
 var OperatorFilterSpec = filterx.Spec{
 	Table: `"venue_v1"."operators"`,
 	Fields: map[string]filterx.FieldSpec{

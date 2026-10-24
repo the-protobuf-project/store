@@ -551,6 +551,14 @@ func (r *GraphQLMemberRepository) remove(ctx context.Context, id string) error {
 	return nil
 }
 
+// ListByKeys reads every record whose filter field field is one of keys; see
+// repox.ListByKeys.
+func (r *GraphQLMemberRepository) ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*orgv1.Member, error) {
+	return repox.ListByKeys(ctx, field, keys, in, func(ctx context.Context, in repox.ListInput) ([]*orgv1.Member, string, error) {
+		return r.List(ctx, "organisations/-", in)
+	})
+}
+
 // Compile-time proof the adapter satisfies the interface.
 var _ MemberRepository = (*GraphQLMemberRepository)(nil)
 
@@ -977,6 +985,14 @@ func (r *GraphQLOrganisationRepository) remove(ctx context.Context, id string) e
 	return nil
 }
 
+// ListByKeys reads every record whose filter field field is one of keys; see
+// repox.ListByKeys.
+func (r *GraphQLOrganisationRepository) ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*orgv1.Organisation, error) {
+	return repox.ListByKeys(ctx, field, keys, in, func(ctx context.Context, in repox.ListInput) ([]*orgv1.Organisation, string, error) {
+		return r.List(ctx, in)
+	})
+}
+
 // Compile-time proof the adapter satisfies the interface.
 var _ OrganisationRepository = (*GraphQLOrganisationRepository)(nil)
 
@@ -1256,6 +1272,14 @@ func (r *GraphQLUserRepository) remove(ctx context.Context, id string) error {
 	return nil
 }
 
+// ListByKeys reads every record whose filter field field is one of keys; see
+// repox.ListByKeys.
+func (r *GraphQLUserRepository) ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*orgv1.User, error) {
+	return repox.ListByKeys(ctx, field, keys, in, func(ctx context.Context, in repox.ListInput) ([]*orgv1.User, string, error) {
+		return r.List(ctx, in)
+	})
+}
+
 // Compile-time proof the adapter satisfies the interface.
 var _ UserRepository = (*GraphQLUserRepository)(nil)
 
@@ -1282,7 +1306,7 @@ func (b *graphQLBatch) CreateMember(parent string, in *orgv1.Member) (string, er
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		return r.insertOps(ctx, ops, named, ci)
 	})
-	b.u.Touch(named.GetName())
+	b.u.Record(repox.Change{Type: "org.v1/Member", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
 }
 
@@ -1299,7 +1323,7 @@ func (b *graphQLBatch) UpdateMember(in *orgv1.Member, paths []string) {
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, nil)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "org.v1/Member", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getMember)})
 }
 
 // DeleteMember queues the record's removal for good. A record already
@@ -1316,7 +1340,7 @@ func (b *graphQLBatch) DeleteMember(name string) {
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		return r.purgeOps(ctx, ops, id)
 	})
-	b.u.Touch(name)
+	b.u.Record(repox.Change{Type: "org.v1/Member", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getMember)})
 }
 
 // CreateOrganisation queues a create and returns the name the record will have.
@@ -1330,7 +1354,7 @@ func (b *graphQLBatch) CreateOrganisation(in *orgv1.Organisation) (string, error
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		return r.insertOps(ctx, ops, named, ci)
 	})
-	b.u.Touch(named.GetName())
+	b.u.Record(repox.Change{Type: "org.v1/Organisation", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
 }
 
@@ -1347,7 +1371,7 @@ func (b *graphQLBatch) UpdateOrganisation(in *orgv1.Organisation, paths []string
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, nil)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "org.v1/Organisation", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getOrganisation)})
 }
 
 // UpdateOrganisationWithOutputOnly queues UpdateWithOutputOnly; in.Etag, when
@@ -1363,7 +1387,7 @@ func (b *graphQLBatch) UpdateOrganisationWithOutputOnly(in *orgv1.Organisation, 
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, outputPaths)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "org.v1/Organisation", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getOrganisation)})
 }
 
 // UpdateOrganisationOutputOnly queues UpdateOutputOnly; in.Etag, when set, guards
@@ -1382,7 +1406,7 @@ func (b *graphQLBatch) UpdateOrganisationOutputOnly(in *orgv1.Organisation, path
 	patch := organisationToOutputPatch(in, paths)
 	patch.Etag = graphql.Value(repox.NewULID())
 	patch.UpdateTime = graphql.Value(tsToStr(timestamppb.New(time.Now().UTC())))
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "org.v1/Organisation", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getOrganisation)})
 	if etag := in.GetEtag(); etag != "" {
 		b.u.QueueGraphQLAhead(func(ctx context.Context) error {
 			_, err := b.svc.Mutation.OrgV1.Organisations.UpdateIfMatch(ctx, id, patch, organisationsql.Etag.Eq(etag))
@@ -1410,7 +1434,7 @@ func (b *graphQLBatch) DeleteOrganisation(name string) {
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		return r.purgeOps(ctx, ops, id)
 	})
-	b.u.Touch(name)
+	b.u.Record(repox.Change{Type: "org.v1/Organisation", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getOrganisation)})
 }
 
 // CreateUser queues a create and returns the name the record will have.
@@ -1425,7 +1449,7 @@ func (b *graphQLBatch) CreateUser(in *orgv1.User) (string, error) {
 		ops.Add(b.svc.Mutation.OrgV1.Users.CreateOp(ci, new(usersql.InsertOrgV1UsersResponse)))
 		return nil, nil
 	})
-	b.u.Touch(named.GetName())
+	b.u.Record(repox.Change{Type: "org.v1/User", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
 }
 
@@ -1442,7 +1466,7 @@ func (b *graphQLBatch) UpdateUser(in *orgv1.User, paths []string) {
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, nil)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "org.v1/User", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getUser)})
 }
 
 // DeleteUser queues the record's removal for good. A record already
@@ -1459,5 +1483,5 @@ func (b *graphQLBatch) DeleteUser(name string) {
 		ops.Add(b.svc.Mutation.OrgV1.Users.DeleteOp(id, new(usersql.DeleteOrgV1UsersByIdResponse)))
 		return nil, nil
 	})
-	b.u.Touch(name)
+	b.u.Record(repox.Change{Type: "org.v1/User", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getUser)})
 }

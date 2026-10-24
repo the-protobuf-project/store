@@ -92,7 +92,7 @@ func main() {
 	// flags are populated by protogen (ParamFunc maps each buf.gen.yaml opt:
 	// "key=value" to flags.Set) before the Run closure reads them.
 	var flags flag.FlagSet
-	target := flags.String("target", "", "output backend: gorm | sql | prisma")
+	target := flags.String("target", "", "output backend: gorm | sql | prisma | repository | opensearch | graphql")
 	strict := flags.String("strict", "",
 		"per-rule severity for schema problems: \"\"=all warn, \"true\"=all error, "+
 			"or \"ref:error,collision:warn,index:error,lint:warn\"")
@@ -125,6 +125,9 @@ func main() {
 	graphqlModule := flags.String("graphql_module", "",
 		"repository target only: Go import path of the generated GraphQL client the "+
 			"graphql repository adapters compose; empty emits gorm-only repositories")
+	repositoryModule := flags.String("repository_module", "",
+		"opensearch target only: Go import path of the generated repository output whose "+
+			"projections (store.v1.projection) the OpenSearch indices copy")
 	references := flags.String("references", "",
 		"comma-separated descriptor images (binary FileDescriptorSets, e.g. from "+
 			"`buf build <module> -o x.binpb`) read only to discover the targets of "+
@@ -166,7 +169,8 @@ func main() {
 		// Drive the proto build + render through the factory registry. In plugin mode
 		// buf selects exactly one target via opt: [target=...] and owns the output dir.
 		reader := backend.New(cfg, *goModule, *stores, *telemetry, *converters, *filters).
-			WithRepositoryModules(*gormModule, *graphqlModule)
+			WithRepositoryModules(*gormModule, *graphqlModule).
+			WithSearchModules(*repositoryModule)
 		reg := wire.Registry(
 			protokit.Options{Target: *target, Strict: *strict, Version: v, References: referenceImages(cfg, *references)},
 			backend.Readers(reader),

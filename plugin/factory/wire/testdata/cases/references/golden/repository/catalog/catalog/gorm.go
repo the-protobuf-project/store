@@ -486,6 +486,14 @@ func (r *GormBookRepository) PurgeExpired(ctx context.Context, now time.Time) (r
 	}
 }
 
+// ListByKeys reads every record whose filter field field is one of keys; see
+// repox.ListByKeys.
+func (r *GormBookRepository) ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*refdemov1.Book, error) {
+	return repox.ListByKeys(ctx, field, keys, in, func(ctx context.Context, in repox.ListInput) ([]*refdemov1.Book, string, error) {
+		return r.List(ctx, "shelves/-", in)
+	})
+}
+
 // Compile-time proof the adapter satisfies the interface.
 var _ BookRepository = (*GormBookRepository)(nil)
 
@@ -916,6 +924,14 @@ func (r *GormShelfRepository) PurgeExpired(ctx context.Context, now time.Time) (
 	}
 }
 
+// ListByKeys reads every record whose filter field field is one of keys; see
+// repox.ListByKeys.
+func (r *GormShelfRepository) ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*refdemov1.Shelf, error) {
+	return repox.ListByKeys(ctx, field, keys, in, func(ctx context.Context, in repox.ListInput) ([]*refdemov1.Shelf, string, error) {
+		return r.List(ctx, in)
+	})
+}
+
 // Compile-time proof the adapter satisfies the interface.
 var _ ShelfRepository = (*GormShelfRepository)(nil)
 
@@ -945,7 +961,7 @@ func (b *gormBatch) CreateBook(parent string, in *refdemov1.Book) (string, error
 	b.u.QueueGorm(locks, func(ctx context.Context, tx *gorm.DB) error {
 		return catalog.NewBookStore(tx).Create(ctx, m)
 	})
-	b.u.Touch(named.GetName())
+	b.u.Record(repox.Change{Type: "catalog.example.com/Book", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
 }
 
@@ -962,7 +978,7 @@ func (b *gormBatch) UpdateBook(in *refdemov1.Book, paths []string) {
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, nil)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "catalog.example.com/Book", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getBook)})
 }
 
 // UpdateBookWithOutputOnly queues UpdateWithOutputOnly; in.Etag, when
@@ -978,7 +994,7 @@ func (b *gormBatch) UpdateBookWithOutputOnly(in *refdemov1.Book, paths, outputPa
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, outputPaths)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "catalog.example.com/Book", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getBook)})
 }
 
 // UpdateBookOutputOnly queues UpdateOutputOnly; in.Etag, when set, guards it.
@@ -987,7 +1003,7 @@ func (b *gormBatch) UpdateBookOutputOnly(in *refdemov1.Book, paths []string) {
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.updateOutputOnlyTx(ctx, tx, in, paths)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "catalog.example.com/Book", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getBook)})
 }
 
 // DeleteBook queues a soft delete. A record already deleted or gone is
@@ -1003,7 +1019,7 @@ func (b *gormBatch) DeleteBook(name string) {
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.markDeleted(ctx, tx, ids[len(ids)-1]).Error
 	})
-	b.u.Touch(name)
+	b.u.Record(repox.Change{Type: "catalog.example.com/Book", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getBook)})
 }
 
 // PurgeBook queues the record's removal for good. A record already
@@ -1028,7 +1044,7 @@ func (b *gormBatch) PurgeBook(name string) {
 		}
 		return nil
 	})
-	b.u.Touch(name)
+	b.u.Record(repox.Change{Type: "catalog.example.com/Book", Name: name, Op: repox.ChangePurge, LoadPrior: repox.PriorOf(name, getBook)})
 }
 
 // CreateShelf queues a create and returns the name the record will have.
@@ -1046,7 +1062,7 @@ func (b *gormBatch) CreateShelf(in *refdemov1.Shelf) (string, error) {
 	b.u.QueueGorm(locks, func(ctx context.Context, tx *gorm.DB) error {
 		return catalog.NewShelfStore(tx).Create(ctx, m)
 	})
-	b.u.Touch(named.GetName())
+	b.u.Record(repox.Change{Type: "catalog.example.com/Shelf", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
 }
 
@@ -1063,7 +1079,7 @@ func (b *gormBatch) UpdateShelf(in *refdemov1.Shelf, paths []string) {
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, nil)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "catalog.example.com/Shelf", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getShelf)})
 }
 
 // UpdateShelfWithOutputOnly queues UpdateWithOutputOnly; in.Etag, when
@@ -1079,7 +1095,7 @@ func (b *gormBatch) UpdateShelfWithOutputOnly(in *refdemov1.Shelf, paths, output
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, outputPaths)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "catalog.example.com/Shelf", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getShelf)})
 }
 
 // UpdateShelfOutputOnly queues UpdateOutputOnly; in.Etag, when set, guards it.
@@ -1088,7 +1104,7 @@ func (b *gormBatch) UpdateShelfOutputOnly(in *refdemov1.Shelf, paths []string) {
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.updateOutputOnlyTx(ctx, tx, in, paths)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "catalog.example.com/Shelf", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getShelf)})
 }
 
 // DeleteShelf queues a soft delete. A record already deleted or gone is
@@ -1104,7 +1120,7 @@ func (b *gormBatch) DeleteShelf(name string) {
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.markDeleted(ctx, tx, ids[len(ids)-1]).Error
 	})
-	b.u.Touch(name)
+	b.u.Record(repox.Change{Type: "catalog.example.com/Shelf", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getShelf)})
 }
 
 // PurgeShelf queues the record's removal for good. A record already
@@ -1129,5 +1145,5 @@ func (b *gormBatch) PurgeShelf(name string) {
 		}
 		return nil
 	})
-	b.u.Touch(name)
+	b.u.Record(repox.Change{Type: "catalog.example.com/Shelf", Name: name, Op: repox.ChangePurge, LoadPrior: repox.PriorOf(name, getShelf)})
 }

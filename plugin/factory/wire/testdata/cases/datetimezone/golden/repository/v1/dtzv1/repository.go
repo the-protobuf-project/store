@@ -35,6 +35,13 @@ type SessionRepository interface {
 	Get(ctx context.Context, name string) (*dtzv1.Session, error)
 	// List returns one page of records.
 	List(ctx context.Context, in repox.ListInput) ([]*dtzv1.Session, string, error)
+	// ListByKeys reads every record whose filter field field is one of keys
+	// -- a batched read by name, by parent, by any text, enum or reference
+	// field -- in statements of at most repox.KeysPerRead keys, at most
+	// repox.ReadParallelism at once. in narrows
+	// each read; its page fields are ignored. See repox.ListByKeys for the
+	// order records come back in.
+	ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*dtzv1.Session, error)
 	// Update persists the masked fields of m; an empty mask replaces every
 	// mutable field. m.Etag, when set, guards against concurrent writes
 	// (repox.ErrConflict).
@@ -131,6 +138,7 @@ func NewBatchIn(u *repox.Unit, opts ...Option) Batch {
 // the adapters they build.
 type options struct {
 	references          *repox.References
+	projections         *repox.Projections
 	sessionHooks        SessionHooks
 	sessionOverrides    map[string]filterx.SQLHandler
 	sessionGQLOverrides map[string]filterx.GraphQLHandler
@@ -138,6 +146,14 @@ type options struct {
 
 // Option customizes the adapters a factory builds.
 type Option func(*options)
+
+// WithProjections keeps the projections p maintains current with every write
+// the repositories make (see repox.Projections): on GORM each write and its
+// projections share one transaction; on GraphQL the projections follow the
+// write in a request of their own. New passes repox.Conn.Projections.
+func WithProjections(p *repox.Projections) Option {
+	return func(o *options) { o.projections = p }
+}
 
 // WithReferences enforces reference integrity through refs (see
 // repox.References): New passes repox.Conn.References. With none, writes do
@@ -180,7 +196,7 @@ func WithSessionGraphQLListOverride(field string, h filterx.GraphQLHandler) Opti
 // When conn carries a ChangeObserver, every write the returned repositories
 // make is reported to it (see observe).
 func New(conn repox.Conn, opts ...Option) Repositories {
-	opts = append([]Option{WithReferences(conn.References)}, opts...)
+	opts = append([]Option{WithReferences(conn.References), WithProjections(conn.Projections)}, opts...)
 	if conn.GraphQL != nil {
 		return observe(NewGraphQL(conn.GraphQL, opts...), conn.Changes)
 	}
@@ -193,9 +209,22 @@ func NewGraphQL(svc *genql.Service, opts ...Option) Repositories {
 	for _, opt := range opts {
 		opt(&o)
 	}
-	return guard(Repositories{
+	repos := Repositories{
 		Sessions: &GraphQLSessionRepository{Svc: svc, Hooks: o.sessionHooks, Refs: o.references, ListOverrides: o.sessionGQLOverrides},
-	}, o.references)
+	}
+	if p := o.projections; p != nil {
+		if p.Watches("dtz.v1/Session") {
+			r := repos.Sessions
+			repos.Sessions = &projectedSessionRepository{SessionRepository: r, run: func(ctx context.Context, f func(SessionRepository) ([]repox.Change, error)) error {
+				changes, err := f(r)
+				if err != nil {
+					return err
+				}
+				return p.ProjectGraphQLAfter(ctx, repox.Conn{GraphQL: svc}, changes)
+			}}
+		}
+	}
+	return guard(repos, o.references)
 }
 
 // NewGorm builds the GORM adapter set over db.
@@ -204,9 +233,36 @@ func NewGorm(db *gorm.DB, opts ...Option) Repositories {
 	for _, opt := range opts {
 		opt(&o)
 	}
-	return guard(Repositories{
+	repos := Repositories{
 		Sessions: &GormSessionRepository{DB: db, Hooks: o.sessionHooks, Refs: o.references, ListOverrides: o.sessionOverrides},
-	}, o.references)
+	}
+	if p := o.projections; p != nil {
+		if p.Watches("dtz.v1/Session") {
+			g := repos.Sessions.(*GormSessionRepository)
+			repos.Sessions = &projectedSessionRepository{SessionRepository: g, run: func(ctx context.Context, f func(SessionRepository) ([]repox.Change, error)) error {
+				// The write and its projections in one transaction: the
+				// adapter is rebound to it, so its own transactions nest as
+				// savepoints and its re-reads see the write. The feed hears
+				// of it once it commits.
+				var committed []repox.Committed
+				err := repox.MapGormErr(db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+					bound := *g
+					bound.DB = tx
+					changes, err := f(&bound)
+					if err != nil {
+						return err
+					}
+					committed, err = p.Gorm(ctx, tx, changes)
+					return err
+				}))
+				if err == nil {
+					p.Publish(ctx, committed)
+				}
+				return err
+			}}
+		}
+	}
+	return guard(repos, o.references)
 }
 
 // guard wraps every repository in repos so its writes keep reference
@@ -296,6 +352,84 @@ func (o *observedSessionRepository) Delete(ctx context.Context, name string) err
 	err := o.SessionRepository.Delete(ctx, name)
 	o.changes.Changed(ctx, name)
 	return err
+}
+
+// projectedSessionRepository runs the connection's projections over every
+// Session write; see WithProjections. run performs a write through the
+// repository it hands f and projects the changes f reports.
+type projectedSessionRepository struct {
+	SessionRepository
+	run func(ctx context.Context, f func(SessionRepository) ([]repox.Change, error)) error
+}
+
+// getSession reads name through read, for a queued write's
+// Change.LoadPrior (repox.PriorOf).
+func getSession(ctx context.Context, read repox.Conn, name string) (*dtzv1.Session, error) {
+	return New(read).Sessions.Get(ctx, name)
+}
+
+// changedSession is the change one write of a Session makes.
+func changedSession(name string, op repox.ChangeOp, rec *dtzv1.Session) []repox.Change {
+	c := repox.Change{Type: "dtz.v1/Session", Name: name, Op: op}
+	if rec != nil {
+		c.Record = rec
+	}
+	return []repox.Change{c}
+}
+
+func (p *projectedSessionRepository) Create(ctx context.Context, m *dtzv1.Session) (out *dtzv1.Session, err error) {
+	err = p.run(ctx, func(r SessionRepository) ([]repox.Change, error) {
+		var err error
+		out, err = r.Create(ctx, m)
+		return changedSession(out.GetName(), repox.ChangeCreate, out), err
+	})
+	return out, err
+}
+
+func (p *projectedSessionRepository) Update(ctx context.Context, m *dtzv1.Session, paths []string) (out *dtzv1.Session, err error) {
+	err = p.run(ctx, func(r SessionRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, m.GetName()))
+		if err != nil {
+			return nil, err
+		}
+		out, err = r.Update(ctx, m, paths)
+		return repox.WithPrior(changedSession(m.GetName(), repox.ChangeUpdate, out), prior), err
+	})
+	return out, err
+}
+
+func (p *projectedSessionRepository) UpdateOutputOnly(ctx context.Context, m *dtzv1.Session, paths []string) (out *dtzv1.Session, err error) {
+	err = p.run(ctx, func(r SessionRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, m.GetName()))
+		if err != nil {
+			return nil, err
+		}
+		out, err = r.UpdateOutputOnly(ctx, m, paths)
+		return repox.WithPrior(changedSession(m.GetName(), repox.ChangeUpdate, out), prior), err
+	})
+	return out, err
+}
+
+func (p *projectedSessionRepository) UpdateWithOutputOnly(ctx context.Context, m *dtzv1.Session, paths, outputPaths []string) (out *dtzv1.Session, err error) {
+	err = p.run(ctx, func(r SessionRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, m.GetName()))
+		if err != nil {
+			return nil, err
+		}
+		out, err = r.UpdateWithOutputOnly(ctx, m, paths, outputPaths)
+		return repox.WithPrior(changedSession(m.GetName(), repox.ChangeUpdate, out), prior), err
+	})
+	return out, err
+}
+
+func (p *projectedSessionRepository) Delete(ctx context.Context, name string) error {
+	return p.run(ctx, func(r SessionRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, name))
+		if err != nil {
+			return nil, err
+		}
+		return repox.WithPrior(changedSession(name, repox.ChangeDelete, nil), prior), r.Delete(ctx, name)
+	})
 }
 
 // guardedSessionRepository keeps Session's references whole; see guard.

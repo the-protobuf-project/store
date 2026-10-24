@@ -11,7 +11,7 @@
 //
 // Shared AIP-160 filter / AIP-132 order_by / paginated-list engines driven by the generated per-schema specs.
 // annotations: entity.v1 dev, store.v1 dev
-// engine:      protokit v1.3.1
+// engine:      protokit v1.3.4
 //
 // store — https://github.com/the-protobuf-project/store
 
@@ -26,6 +26,7 @@ package filterx
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -323,7 +324,14 @@ func sqlCondition(spec Spec, c Condition) (string, []any, error) {
 	}
 	f, ok := spec.Fields[c.Field]
 	if !ok {
-		return "", nil, fmt.Errorf("%w: cannot filter by %q", ErrInvalid, c.Field)
+		p, isPath, err := LookupJSON(spec, c.Field)
+		if err != nil {
+			return "", nil, err
+		}
+		if !isPath {
+			return "", nil, fmt.Errorf("%w: cannot filter by %q", ErrInvalid, c.Field)
+		}
+		return sqlJSONCondition(spec.Table+`."`+p.Field.Column+`"`, p, c)
 	}
 	col := spec.Table + `."` + f.Column + `"`
 	if c.Op == OpNull {
@@ -424,6 +432,106 @@ func sqlCondition(spec Spec, c Condition) (string, []any, error) {
 		}
 	}
 	return "", nil, fmt.Errorf("%w: unsupported operator for %q", ErrInvalid, c.Field)
+}
+
+// sqlJSONCondition translates a condition on a path under a jsonb column.
+// Equality and membership are containment (@>), which a GIN index on the
+// column serves; presence, null and the ordered comparisons are SQL/JSON path
+// tests (jsonb_path_exists), which it does not. The path travels as a bound
+// jsonpath argument and the value as bound jsonb, never as SQL text. (The
+// jsonb ? and @? operators are not used: GORM would read their '?' as a
+// placeholder.)
+func sqlJSONCondition(col string, p JSONPath, c Condition) (string, []any, error) {
+	path := JSONPathText(p.Path)
+	contains := func(v any) (string, []any, error) {
+		doc, err := json.Marshal(JSONNest(p.Path, v))
+		if err != nil {
+			return "", nil, fmt.Errorf("%w: %q: %v", ErrInvalid, c.Field, err)
+		}
+		return col + " @> ?::jsonb", []any{string(doc)}, nil
+	}
+	switch c.Op {
+	case OpNull:
+		null, err := ParseBool(c.Value)
+		if err != nil {
+			return "", nil, err
+		}
+		if null {
+			return "NOT jsonb_path_exists(" + col + ", ?::jsonpath)", []any{path}, nil
+		}
+		return "jsonb_path_exists(" + col + ", ?::jsonpath)", []any{path}, nil
+	case OpEq, OpNeq:
+		v, err := JSONValue(p, c)
+		if err != nil {
+			return "", nil, err
+		}
+		cl, args, err := contains(v)
+		if err != nil || c.Op == OpEq {
+			return cl, args, err
+		}
+		return "NOT (" + cl + ")", args, nil
+	case OpHas:
+		if IsPresenceTest(c) {
+			return "jsonb_path_exists(" + col + ", ?::jsonpath)", []any{path}, nil
+		}
+		v, err := JSONValue(p, c)
+		if err != nil {
+			return "", nil, err
+		}
+		// The value itself, or an element of an array at the path: jsonb
+		// containment only reaches into an array for an array.
+		one, a1, err := contains(v)
+		if err != nil {
+			return "", nil, err
+		}
+		many, a2, err := contains([]any{v})
+		if err != nil {
+			return "", nil, err
+		}
+		return "(" + one + " OR " + many + ")", append(a1, a2...), nil
+	case OpIn:
+		vals, err := JSONValues(p, c)
+		if err != nil {
+			return "", nil, err
+		}
+		if len(vals) == 0 {
+			return "FALSE", nil, nil
+		}
+		parts := make([]string, 0, len(vals))
+		var args []any
+		for _, v := range vals {
+			cl, a, err := contains(v)
+			if err != nil {
+				return "", nil, err
+			}
+			parts, args = append(parts, cl), append(args, a...)
+		}
+		return "(" + strings.Join(parts, " OR ") + ")", args, nil
+	case OpLt, OpLte, OpGt, OpGte:
+		v, err := JSONValue(p, c)
+		if err != nil {
+			return "", nil, err
+		}
+		if v == nil {
+			return "", nil, fmt.Errorf("%w: %q cannot be compared with null", ErrInvalid, c.Field)
+		}
+		op, _ := sqlOrderedOp(c.Op)
+		arg, err := json.Marshal(v)
+		if err != nil {
+			return "", nil, fmt.Errorf("%w: %q: %v", ErrInvalid, c.Field, err)
+		}
+		return "jsonb_path_exists(" + col + ", ?::jsonpath, jsonb_build_object('v', ?::jsonb))",
+			[]any{path + " ? (@ " + jsonPathOp(op) + " $v)", string(arg)}, nil
+	}
+	return "", nil, fmt.Errorf("%w: unsupported operator for %q", ErrInvalid, c.Field)
+}
+
+// jsonPathOp is the SQL/JSON path spelling of a SQL comparison.
+func jsonPathOp(op string) string {
+	if op == "=" {
+		return "=="
+	}
+	return op
 }
 
 // sqlSearchCondition matches a bareword term against the spec's search columns

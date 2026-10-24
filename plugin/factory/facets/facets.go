@@ -24,6 +24,7 @@ import (
 	"github.com/the-protobuf-project/protokit"
 	"github.com/the-protobuf-project/protokit/schema"
 	"github.com/the-protobuf-project/store/plugin/pb/storepbv1"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 // KeyStore namespaces this plugin's facet side-table. It names the vocabulary,
@@ -36,6 +37,14 @@ const KeyStore = "store.v1"
 type Field struct {
 	Column *storepbv1.ColumnOptions
 	Query  *storepbv1.QueryOptions
+}
+
+// Projection is the facet attached to a message carrying
+// (store.v1.projection): the options and the message they describe, whose
+// fields become the projection table's columns during enrichment.
+type Projection struct {
+	Options *storepbv1.ProjectionOptions
+	Message protoreflect.MessageDescriptor
 }
 
 // Set is the per-run facet lookup a target resolves from the IR once and threads
@@ -79,4 +88,27 @@ func (s Set) Table(t *schema.Table) *storepbv1.TableOptions {
 		return o
 	}
 	return &storepbv1.TableOptions{}
+}
+
+// Projection returns the projection a table was synthesized from, or nil for
+// an ordinary table.
+func (s Set) Projection(t *schema.Table) *Projection {
+	if t == nil || t.Node == "" {
+		return nil
+	}
+	if p, ok := protokit.Facet[*Projection](s.ir, KeyStore, t.Node); ok {
+		return p
+	}
+	return nil
+}
+
+// Projections returns every projection the run declares, in node order.
+func (s Set) Projections() []*Projection {
+	var out []*Projection
+	for _, id := range protokit.FacetNodes(s.ir, KeyStore) {
+		if p, ok := protokit.Facet[*Projection](s.ir, KeyStore, id); ok {
+			out = append(out, p)
+		}
+	}
+	return out
 }

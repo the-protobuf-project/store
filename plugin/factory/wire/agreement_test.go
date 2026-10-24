@@ -66,8 +66,10 @@ func TestIRAgreement(t *testing.T) {
 // companion (package dtzone) is how this plugin stores the zone a TIMESTAMPTZ
 // instant cannot hold. Neither renames anything the protos name; a generator
 // that needs either derives it the same way -- which is composition working,
-// not the two disagreeing about what the protos say.
-var synthesizesTables = map[string]bool{"outbox": true, "datetimezone": true}
+// not the two disagreeing about what the protos say. A (store.v1.projection)
+// table is likewise this plugin's storage of a message that is no table in
+// entity.v1's terms.
+var synthesizesTables = map[string]bool{"outbox": true, "datetimezone": true, "projection": true}
 
 // TestDeterminism requires two builds of the same case to produce byte-identical
 // output. Map iteration and unordered facet collection are the usual sources of

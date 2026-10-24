@@ -20,7 +20,7 @@ import (
 )
 
 // LoanFilterSpec is Loan's AIP-160 filter / AIP-132 order_by surface,
-// consumed by the filterx.Gorm and filterx.Hasura engines.
+// consumed by the filterx.Gorm, filterx.Hasura and filterx.OpenSearch engines.
 var LoanFilterSpec = filterx.Spec{
 	Table: `"lending"."loans"`,
 	Fields: map[string]filterx.FieldSpec{

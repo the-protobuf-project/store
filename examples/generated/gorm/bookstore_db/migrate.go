@@ -11,7 +11,7 @@
 //
 // Migration aggregator: every model in one factory Registry.
 // annotations: entity.v1 dev, store.v1 dev
-// engine:      protokit v1.3.1
+// engine:      protokit v1.3.4
 //
 // store — https://github.com/the-protobuf-project/store
 
@@ -64,6 +64,14 @@ func (r *Registry) Models() []any { return r.models }
 func (r *Registry) Migrate(db Migrator) error {
 	return db.AutoMigrate(r.models...)
 }
+
+// MigrateExternal adds this database's foreign keys into other databases'
+// tables after every registry's Migrate. This database has none, so it does
+// nothing; it exists so startup code can call it on every registry alike.
+func (*Registry) MigrateExternal(*gorm.DB) error { return nil }
+
+// ValidateExternal validates what MigrateExternal added. Nothing here.
+func (*Registry) ValidateExternal(*gorm.DB) error { return nil }
 
 // EnsureSchemas creates every Postgres schema the registered models live in, if
 // it does not already exist. AutoMigrate does not create schemas, so call this

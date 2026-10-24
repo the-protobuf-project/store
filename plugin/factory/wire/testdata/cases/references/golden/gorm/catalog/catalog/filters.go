@@ -20,7 +20,7 @@ import (
 )
 
 // ShelfFilterSpec is Shelf's AIP-160 filter / AIP-132 order_by surface,
-// consumed by the filterx.Gorm and filterx.Hasura engines.
+// consumed by the filterx.Gorm, filterx.Hasura and filterx.OpenSearch engines.
 var ShelfFilterSpec = filterx.Spec{
 	Table: `"catalog"."shelves"`,
 	Fields: map[string]filterx.FieldSpec{
@@ -41,7 +41,7 @@ var ShelfFilterSpec = filterx.Spec{
 }
 
 // BookFilterSpec is Book's AIP-160 filter / AIP-132 order_by surface,
-// consumed by the filterx.Gorm and filterx.Hasura engines.
+// consumed by the filterx.Gorm, filterx.Hasura and filterx.OpenSearch engines.
 var BookFilterSpec = filterx.Spec{
 	Table: `"catalog"."books"`,
 	Fields: map[string]filterx.FieldSpec{

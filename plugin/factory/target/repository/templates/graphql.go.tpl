@@ -801,6 +801,14 @@ func (r *GraphQL{{.Model}}Repository) remove(ctx context.Context, id string) err
 	return nil
 }
 
+// ListByKeys reads every record whose filter field field is one of keys; see
+// repox.ListByKeys.
+func (r *GraphQL{{.Model}}Repository) ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*{{.PB}}, error) {
+	return repox.ListByKeys(ctx, field, keys, in, func(ctx context.Context, in repox.ListInput) ([]*{{.PB}}, string, error) {
+		return r.List(ctx, {{if .Parented}}{{printf "%q" .WildcardParent}}, {{end}}in)
+	})
+}
+
 // Compile-time proof the adapter satisfies the interface.
 var _ {{.Model}}Repository = (*GraphQL{{.Model}}Repository)(nil)
 {{- end}}
@@ -838,7 +846,7 @@ func (b *graphQLBatch) Create{{.Model}}({{if .Parented}}parent string, {{end}}in
 		return r.insertOps(ctx, ops, named, ci)
 		{{- end}}
 	})
-	b.u.Touch(named.GetName())
+	b.u.Record(repox.Change{Type: {{printf "%q" .Type}}, Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
 }
 
@@ -855,7 +863,7 @@ func (b *graphQLBatch) Update{{.Model}}(in *{{.PB}}, paths []string) {
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, nil)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: {{printf "%q" .Type}}, Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), get{{.Model}})})
 }
 {{- if .OutputOnly}}
 
@@ -872,7 +880,7 @@ func (b *graphQLBatch) Update{{.Model}}WithOutputOnly(in *{{.PB}}, paths, output
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, outputPaths)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: {{printf "%q" .Type}}, Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), get{{.Model}})})
 }
 {{- end}}
 {{- if .OutputOnly}}
@@ -897,7 +905,7 @@ func (b *graphQLBatch) Update{{.Model}}OutputOnly(in *{{.PB}}, paths []string) {
 	{{- if .UpdateTimeField}}
 	patch.{{.UpdateTimeField}} = graphql.Value(tsToStr(timestamppb.New(time.Now().UTC())))
 	{{- end}}
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: {{printf "%q" .Type}}, Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), get{{.Model}})})
 	{{- if .HasEtag}}
 	if etag := in.GetEtag(); etag != "" {
 		b.u.QueueGraphQLAhead(func(ctx context.Context) error {
@@ -929,7 +937,7 @@ func (b *graphQLBatch) Delete{{.Model}}(name string) {
 		ops.Add(b.svc.Mutation.{{.Domain}}.{{.Resource}}.UpdateOp(ids[len(ids)-1], r.deletePatch(), new({{.UpdateResp}}), {{.ResPkg}}.Update().PreCheck({{.DeleteTimePred}}.IsNull(true))))
 		return nil, nil
 	})
-	b.u.Touch(name)
+	b.u.Record(repox.Change{Type: {{printf "%q" .Type}}, Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, get{{.Model}})})
 }
 {{- end}}
 
@@ -972,7 +980,7 @@ func (b *graphQLBatch) {{if .SoftDelete}}Purge{{else}}Delete{{end}}{{.Model}}(na
 		return r.purgeOps(ctx, ops, id)
 	})
 	{{- end}}
-	b.u.Touch(name)
+	b.u.Record(repox.Change{Type: {{printf "%q" .Type}}, Name: name, Op: {{if .SoftDelete}}repox.ChangePurge{{else}}repox.ChangeDelete{{end}}, LoadPrior: repox.PriorOf(name, get{{.Model}})})
 }
 {{- end}}
 {{- end}}

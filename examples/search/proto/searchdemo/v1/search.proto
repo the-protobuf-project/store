@@ -1,0 +1,153 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+// Package searchdemo.v1 is the search example: rooms, their bookings, and
+// RoomDay, a projection of each room's free time per day that a search by
+// time window, tags and attributes reads.
+package searchdemo.v1;
+
+import "entity/v1/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+import "google/type/date.proto";
+import "google/type/interval.proto";
+import "store/v1/annotations.proto";
+
+option go_package = "github.com/the-protobuf-project/store/examples/search/gen/pb/searchdemov1;searchdemov1";
+option java_multiple_files = true;
+option java_outer_classname = "SearchProto";
+option java_package = "com.searchdemo.v1";
+
+// A room that can be booked.
+message Room {
+  option (google.api.resource) = {
+    type: "searchdemo.v1/Room"
+    pattern: "rooms/{room}"
+    singular: "room"
+    plural: "rooms"
+  };
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
+
+  // The room's resource name.
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  // A label for people.
+  string display_name = 2 [(google.api.field_behavior) = REQUIRED];
+
+  // What the room is, e.g. "meeting", "desk".
+  repeated string kinds = 3;
+
+  // The floor it is on.
+  int32 floor = 4;
+
+  // Anything else about it.
+  google.protobuf.Struct attributes = 5 [(store.v1.query) = {
+    json_keys: [
+      {
+        path: "seats"
+        type: JSON_KEY_TYPE_INT64
+      }
+    ]
+  }];
+}
+
+// A booking of a room for a time.
+message Booking {
+  option (google.api.resource) = {
+    type: "searchdemo.v1/Booking"
+    pattern: "bookings/{booking}"
+    singular: "booking"
+    plural: "bookings"
+  };
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
+
+  // The booking's resource name.
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  // The room booked.
+  string room = 2 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference) = {type: "searchdemo.v1/Room"}
+  ];
+
+  // When it starts.
+  google.protobuf.Timestamp start_time = 3 [(google.api.field_behavior) = REQUIRED];
+
+  // When it ends.
+  google.protobuf.Timestamp end_time = 4 [(google.api.field_behavior) = REQUIRED];
+}
+
+// RoomDay is one room's free time on one day: the projection a search by
+// time window reads instead of the bookings.
+message RoomDay {
+  option (store.v1.projection) = {
+    sources: [
+      "searchdemo.v1/Room",
+      "searchdemo.v1/Booking"
+    ]
+    key: [
+      "room",
+      "day"
+    ]
+    range_field: "free"
+    indexes: [
+      {
+        fields: [
+          "floor",
+          "day"
+        ]
+      },
+      {
+        expression: "((attributes->>'seats')::int)"
+        index: "idx_room_days_seats"
+      }
+    ]
+  };
+
+  // The room.
+  string room = 1;
+
+  // The day, in UTC.
+  google.type.Date day = 2;
+
+  // The room's free intervals that day.
+  repeated google.type.Interval free = 3;
+
+  // The room's kinds.
+  repeated string kinds = 4;
+
+  // The room's floor.
+  int32 floor = 5;
+
+  // The room's attributes.
+  google.protobuf.Struct attributes = 6 [(store.v1.query) = {
+    json_keys: [
+      {
+        path: "seats"
+        type: JSON_KEY_TYPE_INT64
+      }
+    ]
+  }];
+
+  // How busy the day is.
+  Occupancy occupancy = 7;
+
+  // The room's label, for free-text search.
+  string display_name = 8 [(store.v1.query) = {search: true}];
+}
+
+// How busy a room is on a day.
+enum Occupancy {
+  // Unknown.
+  OCCUPANCY_UNSPECIFIED = 0;
+  // Nothing booked.
+  OCCUPANCY_FREE = 1;
+  // Some of the day booked.
+  OCCUPANCY_PARTIAL = 2;
+  // All of the day booked.
+  OCCUPANCY_FULL = 3;
+}

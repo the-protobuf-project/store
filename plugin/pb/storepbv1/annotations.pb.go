@@ -34,6 +34,14 @@ var file_store_v1_annotations_proto_extTypes = []protoimpl.ExtensionInfo{
 		Filename:      "store/v1/annotations.proto",
 	},
 	{
+		ExtendedType:  (*descriptorpb.MessageOptions)(nil),
+		ExtensionType: (*ProjectionOptions)(nil),
+		Field:         50014,
+		Name:          "store.v1.projection",
+		Tag:           "bytes,50014,opt,name=projection",
+		Filename:      "store/v1/annotations.proto",
+	},
+	{
 		ExtendedType:  (*descriptorpb.FieldOptions)(nil),
 		ExtensionType: (*ColumnOptions)(nil),
 		Field:         50011,
@@ -65,6 +73,12 @@ var (
 	//
 	// optional store.v1.TableOptions table = 50010;
 	E_Table = &file_store_v1_annotations_proto_extTypes[0]
+	// projection makes a non-resource message a projection: a table derived
+	// from source resources, kept current inside their writes and searched by a
+	// generated Search. See ProjectionOptions.
+	//
+	// optional store.v1.ProjectionOptions projection = 50014;
+	E_Projection = &file_store_v1_annotations_proto_extTypes[1]
 )
 
 // Extension fields to descriptorpb.FieldOptions.
@@ -73,25 +87,28 @@ var (
 	// constraints, and foreign-key referential actions.
 	//
 	// optional store.v1.ColumnOptions column = 50011;
-	E_Column = &file_store_v1_annotations_proto_extTypes[1]
+	E_Column = &file_store_v1_annotations_proto_extTypes[2]
 	// query tunes the field's generated list-query surface: AIP-160 filter,
 	// AIP-132 order_by, and free-text search.
 	//
 	// optional store.v1.QueryOptions query = 50012;
-	E_Query = &file_store_v1_annotations_proto_extTypes[2]
+	E_Query = &file_store_v1_annotations_proto_extTypes[3]
 	// reference says what a google.api.resource_reference field asks of a
 	// resource in another database or service: see ReferenceOptions.
 	//
 	// optional store.v1.ReferenceOptions reference = 50013;
-	E_Reference = &file_store_v1_annotations_proto_extTypes[3]
+	E_Reference = &file_store_v1_annotations_proto_extTypes[4]
 )
 
 var File_store_v1_annotations_proto protoreflect.FileDescriptor
 
 const file_store_v1_annotations_proto_rawDesc = "" +
 	"\n" +
-	"\x1astore/v1/annotations.proto\x12\bstore.v1\x1a google/protobuf/descriptor.proto\x1a\x15store/v1/column.proto\x1a\x14store/v1/query.proto\x1a\x18store/v1/reference.proto\x1a\x14store/v1/table.proto:O\n" +
-	"\x05table\x12\x1f.google.protobuf.MessageOptions\x18چ\x03 \x01(\v2\x16.store.v1.TableOptionsR\x05table:P\n" +
+	"\x1astore/v1/annotations.proto\x12\bstore.v1\x1a google/protobuf/descriptor.proto\x1a\x15store/v1/column.proto\x1a\x19store/v1/projection.proto\x1a\x14store/v1/query.proto\x1a\x18store/v1/reference.proto\x1a\x14store/v1/table.proto:O\n" +
+	"\x05table\x12\x1f.google.protobuf.MessageOptions\x18چ\x03 \x01(\v2\x16.store.v1.TableOptionsR\x05table:^\n" +
+	"\n" +
+	"projection\x12\x1f.google.protobuf.MessageOptions\x18ކ\x03 \x01(\v2\x1b.store.v1.ProjectionOptionsR\n" +
+	"projection:P\n" +
 	"\x06column\x12\x1d.google.protobuf.FieldOptions\x18ۆ\x03 \x01(\v2\x17.store.v1.ColumnOptionsR\x06column:M\n" +
 	"\x05query\x12\x1d.google.protobuf.FieldOptions\x18܆\x03 \x01(\v2\x16.store.v1.QueryOptionsR\x05query:Y\n" +
 	"\treference\x12\x1d.google.protobuf.FieldOptions\x18݆\x03 \x01(\v2\x1a.store.v1.ReferenceOptionsR\treferenceB\xa6\x01\n" +
@@ -101,24 +118,27 @@ var file_store_v1_annotations_proto_goTypes = []any{
 	(*descriptorpb.MessageOptions)(nil), // 0: google.protobuf.MessageOptions
 	(*descriptorpb.FieldOptions)(nil),   // 1: google.protobuf.FieldOptions
 	(*TableOptions)(nil),                // 2: store.v1.TableOptions
-	(*ColumnOptions)(nil),               // 3: store.v1.ColumnOptions
-	(*QueryOptions)(nil),                // 4: store.v1.QueryOptions
-	(*ReferenceOptions)(nil),            // 5: store.v1.ReferenceOptions
+	(*ProjectionOptions)(nil),           // 3: store.v1.ProjectionOptions
+	(*ColumnOptions)(nil),               // 4: store.v1.ColumnOptions
+	(*QueryOptions)(nil),                // 5: store.v1.QueryOptions
+	(*ReferenceOptions)(nil),            // 6: store.v1.ReferenceOptions
 }
 var file_store_v1_annotations_proto_depIdxs = []int32{
-	0, // 0: store.v1.table:extendee -> google.protobuf.MessageOptions
-	1, // 1: store.v1.column:extendee -> google.protobuf.FieldOptions
-	1, // 2: store.v1.query:extendee -> google.protobuf.FieldOptions
-	1, // 3: store.v1.reference:extendee -> google.protobuf.FieldOptions
-	2, // 4: store.v1.table:type_name -> store.v1.TableOptions
-	3, // 5: store.v1.column:type_name -> store.v1.ColumnOptions
-	4, // 6: store.v1.query:type_name -> store.v1.QueryOptions
-	5, // 7: store.v1.reference:type_name -> store.v1.ReferenceOptions
-	8, // [8:8] is the sub-list for method output_type
-	8, // [8:8] is the sub-list for method input_type
-	4, // [4:8] is the sub-list for extension type_name
-	0, // [0:4] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	0,  // 0: store.v1.table:extendee -> google.protobuf.MessageOptions
+	0,  // 1: store.v1.projection:extendee -> google.protobuf.MessageOptions
+	1,  // 2: store.v1.column:extendee -> google.protobuf.FieldOptions
+	1,  // 3: store.v1.query:extendee -> google.protobuf.FieldOptions
+	1,  // 4: store.v1.reference:extendee -> google.protobuf.FieldOptions
+	2,  // 5: store.v1.table:type_name -> store.v1.TableOptions
+	3,  // 6: store.v1.projection:type_name -> store.v1.ProjectionOptions
+	4,  // 7: store.v1.column:type_name -> store.v1.ColumnOptions
+	5,  // 8: store.v1.query:type_name -> store.v1.QueryOptions
+	6,  // 9: store.v1.reference:type_name -> store.v1.ReferenceOptions
+	10, // [10:10] is the sub-list for method output_type
+	10, // [10:10] is the sub-list for method input_type
+	5,  // [5:10] is the sub-list for extension type_name
+	0,  // [0:5] is the sub-list for extension extendee
+	0,  // [0:0] is the sub-list for field type_name
 }
 
 func init() { file_store_v1_annotations_proto_init() }
@@ -127,6 +147,7 @@ func file_store_v1_annotations_proto_init() {
 		return
 	}
 	file_store_v1_column_proto_init()
+	file_store_v1_projection_proto_init()
 	file_store_v1_query_proto_init()
 	file_store_v1_reference_proto_init()
 	file_store_v1_table_proto_init()
@@ -137,7 +158,7 @@ func file_store_v1_annotations_proto_init() {
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_store_v1_annotations_proto_rawDesc), len(file_store_v1_annotations_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   0,
-			NumExtensions: 4,
+			NumExtensions: 5,
 			NumServices:   0,
 		},
 		GoTypes:           file_store_v1_annotations_proto_goTypes,

@@ -524,6 +524,14 @@ func (r *GormAgendaRepository) purge(ctx context.Context, db *gorm.DB, id, name 
 // holds a foreign key to the Agenda row with the given id.
 const agendaReferencedSQL = `SELECT EXISTS (SELECT 1 FROM "deep_v1"."meetings" r0 WHERE r0."agenda_id" = t."id") FROM "deep_v1"."agendas" t WHERE t."id" = ?`
 
+// ListByKeys reads every record whose filter field field is one of keys; see
+// repox.ListByKeys.
+func (r *GormAgendaRepository) ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*deepv1.Agenda, error) {
+	return repox.ListByKeys(ctx, field, keys, in, func(ctx context.Context, in repox.ListInput) ([]*deepv1.Agenda, string, error) {
+		return r.List(ctx, in)
+	})
+}
+
 // Compile-time proof the adapter satisfies the interface.
 var _ AgendaRepository = (*GormAgendaRepository)(nil)
 
@@ -969,6 +977,14 @@ func (r *GormMeetingRepository) purgeTx(ctx context.Context, tx *gorm.DB, id str
 	return nil
 }
 
+// ListByKeys reads every record whose filter field field is one of keys; see
+// repox.ListByKeys.
+func (r *GormMeetingRepository) ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*deepv1.Meeting, error) {
+	return repox.ListByKeys(ctx, field, keys, in, func(ctx context.Context, in repox.ListInput) ([]*deepv1.Meeting, string, error) {
+		return r.List(ctx, "agendas/-", in)
+	})
+}
+
 // Compile-time proof the adapter satisfies the interface.
 var _ MeetingRepository = (*GormMeetingRepository)(nil)
 
@@ -997,7 +1013,7 @@ func (b *gormBatch) CreateAgenda(in *deepv1.Agenda) (string, error) {
 	b.u.QueueGorm(locks, func(ctx context.Context, tx *gorm.DB) error {
 		return r.insertTx(ctx, tx, named, m)
 	})
-	b.u.Touch(named.GetName())
+	b.u.Record(repox.Change{Type: "deep.v1/Agenda", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
 }
 
@@ -1014,7 +1030,7 @@ func (b *gormBatch) UpdateAgenda(in *deepv1.Agenda, paths []string) {
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, nil)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "deep.v1/Agenda", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getAgenda)})
 }
 
 // DeleteAgenda queues a soft delete. A record already deleted or gone is
@@ -1030,7 +1046,7 @@ func (b *gormBatch) DeleteAgenda(name string) {
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.markDeleted(ctx, tx, ids[len(ids)-1]).Error
 	})
-	b.u.Touch(name)
+	b.u.Record(repox.Change{Type: "deep.v1/Agenda", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getAgenda)})
 }
 
 // PurgeAgenda queues the record's removal for good. A record already
@@ -1055,7 +1071,7 @@ func (b *gormBatch) PurgeAgenda(name string) {
 		}
 		return nil
 	})
-	b.u.Touch(name)
+	b.u.Record(repox.Change{Type: "deep.v1/Agenda", Name: name, Op: repox.ChangePurge, LoadPrior: repox.PriorOf(name, getAgenda)})
 }
 
 // CreateMeeting queues a create and returns the name the record will have.
@@ -1073,7 +1089,7 @@ func (b *gormBatch) CreateMeeting(parent string, in *deepv1.Meeting) (string, er
 	b.u.QueueGorm(locks, func(ctx context.Context, tx *gorm.DB) error {
 		return r.insertTx(ctx, tx, named, m)
 	})
-	b.u.Touch(named.GetName())
+	b.u.Record(repox.Change{Type: "deep.v1/Meeting", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
 }
 
@@ -1090,7 +1106,7 @@ func (b *gormBatch) UpdateMeeting(in *deepv1.Meeting, paths []string) {
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, nil)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "deep.v1/Meeting", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getMeeting)})
 }
 
 // DeleteMeeting queues the record's removal for good. A record already
@@ -1111,5 +1127,5 @@ func (b *gormBatch) DeleteMeeting(name string) {
 		}
 		return nil
 	})
-	b.u.Touch(name)
+	b.u.Record(repox.Change{Type: "deep.v1/Meeting", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getMeeting)})
 }

@@ -9,7 +9,7 @@
 //
 // GORM adapters composing the generated models, stores, converters, and filterx specs.
 // annotations: entity.v1 dev, store.v1 dev
-// engine:      protokit (devel)
+// engine:      protokit v1.3.4
 //
 // store — https://github.com/the-protobuf-project/store
 
@@ -455,6 +455,14 @@ func (r *GormLoanRepository) PurgeExpired(ctx context.Context, now time.Time) (r
 	}
 }
 
+// ListByKeys reads every record whose filter field field is one of keys; see
+// repox.ListByKeys.
+func (r *GormLoanRepository) ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*lendingv1.Loan, error) {
+	return repox.ListByKeys(ctx, field, keys, in, func(ctx context.Context, in repox.ListInput) ([]*lendingv1.Loan, string, error) {
+		return r.List(ctx, in)
+	})
+}
+
 // Compile-time proof the adapter satisfies the interface.
 var _ LoanRepository = (*GormLoanRepository)(nil)
 
@@ -484,7 +492,7 @@ func (b *gormBatch) CreateLoan(in *lendingv1.Loan) (string, error) {
 	b.u.QueueGorm(locks, func(ctx context.Context, tx *gorm.DB) error {
 		return lending.NewLoanStore(tx).Create(ctx, m)
 	})
-	b.u.Touch(named.GetName())
+	b.u.Record(repox.Change{Type: "lending.example.com/Loan", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
 }
 
@@ -501,7 +509,7 @@ func (b *gormBatch) UpdateLoan(in *lendingv1.Loan, paths []string) {
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, nil)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "lending.example.com/Loan", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getLoan)})
 }
 
 // UpdateLoanWithOutputOnly queues UpdateWithOutputOnly; in.Etag, when
@@ -517,7 +525,7 @@ func (b *gormBatch) UpdateLoanWithOutputOnly(in *lendingv1.Loan, paths, outputPa
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, outputPaths)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "lending.example.com/Loan", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getLoan)})
 }
 
 // UpdateLoanOutputOnly queues UpdateOutputOnly; in.Etag, when set, guards it.
@@ -526,7 +534,7 @@ func (b *gormBatch) UpdateLoanOutputOnly(in *lendingv1.Loan, paths []string) {
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.updateOutputOnlyTx(ctx, tx, in, paths)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "lending.example.com/Loan", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getLoan)})
 }
 
 // DeleteLoan queues a soft delete. A record already deleted or gone is
@@ -542,7 +550,7 @@ func (b *gormBatch) DeleteLoan(name string) {
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.markDeleted(ctx, tx, ids[len(ids)-1]).Error
 	})
-	b.u.Touch(name)
+	b.u.Record(repox.Change{Type: "lending.example.com/Loan", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getLoan)})
 }
 
 // PurgeLoan queues the record's removal for good. A record already
@@ -567,5 +575,5 @@ func (b *gormBatch) PurgeLoan(name string) {
 		}
 		return nil
 	})
-	b.u.Touch(name)
+	b.u.Record(repox.Change{Type: "lending.example.com/Loan", Name: name, Op: repox.ChangePurge, LoadPrior: repox.PriorOf(name, getLoan)})
 }

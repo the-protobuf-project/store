@@ -383,8 +383,18 @@ func searchIndexStmts(s *schema.Schema, t *schema.Table, plans []searchindex.Pla
 		if p.Ops != "" {
 			col += " " + p.Ops
 		}
-		out = append(out, fmt.Sprintf("-- %s\nCREATE INDEX IF NOT EXISTS %s ON %s USING gin (%s);",
-			p.Why, quoteIdent(p.Name), qualified(s.Name, t.Name), col))
+		if len(p.Columns) > 1 {
+			quoted := make([]string, len(p.Columns))
+			for i, c := range p.Columns {
+				quoted[i] = quoteIdent(c)
+			}
+			col = strings.Join(quoted, ", ")
+		}
+		if p.Expression != "" {
+			col = p.Expression
+		}
+		out = append(out, fmt.Sprintf("-- %s\nCREATE INDEX IF NOT EXISTS %s ON %s USING %s (%s);",
+			p.Why, quoteIdent(p.Name), qualified(s.Name, t.Name), p.MethodOf(), col))
 	}
 	return out
 }

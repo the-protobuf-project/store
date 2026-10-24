@@ -31,6 +31,13 @@ type {{.Model}}Repository interface {
 	// List returns one page of records.
 	List(ctx context.Context, in repox.ListInput) ([]*{{.PB}}, string, error)
 {{- end}}
+	// ListByKeys reads every record whose filter field field is one of keys
+	// -- a batched read by name, by parent, by any text, enum or reference
+	// field -- in statements of at most repox.KeysPerRead keys, at most
+	// repox.ReadParallelism at once{{if .Parented}}, across every parent{{end}}. in narrows
+	// each read; its page fields are ignored. See repox.ListByKeys for the
+	// order records come back in.
+	ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*{{.PB}}, error)
 	// Update persists the masked fields of m; an empty mask replaces every
 	// mutable field. m.Etag, when set, guards against concurrent writes
 	// (repox.ErrConflict).
@@ -170,7 +177,8 @@ func NewBatchIn(u *repox.Unit, opts ...Option) Batch {
 // options collects the per-resource customizations the factories thread into
 // the adapters they build.
 type options struct {
-	references *repox.References
+	references  *repox.References
+	projections *repox.Projections
 {{- range .Resources}}
 	{{.LowerModel}}Hooks     {{.Model}}Hooks
 	{{.LowerModel}}Overrides map[string]filterx.SQLHandler
@@ -187,6 +195,14 @@ type options struct {
 
 // Option customizes the adapters a factory builds.
 type Option func(*options)
+
+// WithProjections keeps the projections p maintains current with every write
+// the repositories make (see repox.Projections): on GORM each write and its
+// projections share one transaction; on GraphQL the projections follow the
+// write in a request of their own. New passes repox.Conn.Projections.
+func WithProjections(p *repox.Projections) Option {
+	return func(o *options) { o.projections = p }
+}
 
 // WithReferences enforces reference integrity through refs (see
 // repox.References): New passes repox.Conn.References. With none, writes do
@@ -246,7 +262,7 @@ func With{{.Model}}GraphQLListOverride(field string, h filterx.GraphQLHandler) O
 // When conn carries a ChangeObserver, every write the returned repositories
 // make is reported to it (see observe).
 func New(conn repox.Conn, opts ...Option) Repositories {
-	opts = append([]Option{WithReferences(conn.References)}, opts...)
+	opts = append([]Option{WithReferences(conn.References), WithProjections(conn.Projections)}, opts...)
 	if conn.GraphQL != nil {
 		return observe(NewGraphQL(conn.GraphQL, opts...), conn.Changes)
 	}
@@ -259,11 +275,26 @@ func NewGraphQL(svc *{{.ClientPkg}}.Service, opts ...Option) Repositories {
 	for _, opt := range opts {
 		opt(&o)
 	}
-	return guard(Repositories{
+	repos := Repositories{
 {{- range .Resources}}
 		{{.PluralField}}: &GraphQL{{.Model}}Repository{Svc: svc, Hooks: o.{{.LowerModel}}Hooks, Refs: o.references, ListOverrides: o.{{.LowerModel}}GQLOverrides{{if .Expiring}}, Retention: o.retention{{end}}},
 {{- end}}
-	}, o.references)
+	}
+	if p := o.projections; p != nil {
+{{- range .Resources}}
+		if p.Watches({{printf "%q" .Type}}) {
+			r := repos.{{.PluralField}}
+			repos.{{.PluralField}} = &projected{{.Model}}Repository{ {{- .Model}}Repository: r, run: func(ctx context.Context, f func({{.Model}}Repository) ([]repox.Change, error)) error {
+				changes, err := f(r)
+				if err != nil {
+					return err
+				}
+				return p.ProjectGraphQLAfter(ctx, repox.Conn{GraphQL: svc}, changes)
+			}}
+		}
+{{- end}}
+	}
+	return guard(repos, o.references)
 }
 {{- else}}
 
@@ -272,7 +303,7 @@ func NewGraphQL(svc *{{.ClientPkg}}.Service, opts ...Option) Repositories {
 // When conn carries a ChangeObserver, every write the returned repositories
 // make is reported to it (see observe).
 func New(conn repox.Conn, opts ...Option) Repositories {
-	opts = append([]Option{WithReferences(conn.References)}, opts...)
+	opts = append([]Option{WithReferences(conn.References), WithProjections(conn.Projections)}, opts...)
 	return observe(NewGorm(conn.Gorm, opts...), conn.Changes)
 }
 {{- end}}
@@ -283,11 +314,40 @@ func NewGorm(db *gorm.DB, opts ...Option) Repositories {
 	for _, opt := range opts {
 		opt(&o)
 	}
-	return guard(Repositories{
+	repos := Repositories{
 {{- range .Resources}}
 		{{.PluralField}}: &Gorm{{.Model}}Repository{DB: db, Hooks: o.{{.LowerModel}}Hooks, Refs: o.references, ListOverrides: o.{{.LowerModel}}Overrides{{if .Expiring}}, Retention: o.retention{{end}}},
 {{- end}}
-	}, o.references)
+	}
+	if p := o.projections; p != nil {
+{{- range .Resources}}
+		if p.Watches({{printf "%q" .Type}}) {
+			g := repos.{{.PluralField}}.(*Gorm{{.Model}}Repository)
+			repos.{{.PluralField}} = &projected{{.Model}}Repository{ {{- .Model}}Repository: g, run: func(ctx context.Context, f func({{.Model}}Repository) ([]repox.Change, error)) error {
+				// The write and its projections in one transaction: the
+				// adapter is rebound to it, so its own transactions nest as
+				// savepoints and its re-reads see the write. The feed hears
+				// of it once it commits.
+				var committed []repox.Committed
+				err := repox.MapGormErr(db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+					bound := *g
+					bound.DB = tx
+					changes, err := f(&bound)
+					if err != nil {
+						return err
+					}
+					committed, err = p.Gorm(ctx, tx, changes)
+					return err
+				}))
+				if err == nil {
+					p.Publish(ctx, committed)
+				}
+				return err
+			}}
+		}
+{{- end}}
+	}
+	return guard(repos, o.references)
 }
 
 // guard wraps every repository in repos so its writes keep reference
@@ -421,6 +481,137 @@ func (o *observed{{.Model}}Repository) PurgeExpired(ctx context.Context, now tim
 {{- end}}
 {{- end}}
 
+
+{{- range .Resources}}
+
+// projected{{.Model}}Repository runs the connection's projections over every
+// {{.Model}} write; see WithProjections. run performs a write through the
+// repository it hands f and projects the changes f reports.
+type projected{{.Model}}Repository struct {
+	{{.Model}}Repository
+	run func(ctx context.Context, f func({{.Model}}Repository) ([]repox.Change, error)) error
+}
+
+// get{{.Model}} reads name through read, for a queued write's
+// Change.LoadPrior (repox.PriorOf).
+func get{{.Model}}(ctx context.Context, read repox.Conn, name string) (*{{.PB}}, error) {
+	return New(read).{{.PluralField}}.Get(ctx, name)
+}
+
+// changed{{.Model}} is the change one write of a {{.Model}} makes.
+func changed{{.Model}}(name string, op repox.ChangeOp, rec *{{.PB}}) []repox.Change {
+	c := repox.Change{Type: {{printf "%q" .Type}}, Name: name, Op: op}
+	if rec != nil {
+		c.Record = rec
+	}
+	return []repox.Change{c}
+}
+{{- if .Parented}}
+
+func (p *projected{{.Model}}Repository) Create(ctx context.Context, parent string, m *{{.PB}}) (out *{{.PB}}, err error) {
+	err = p.run(ctx, func(r {{.Model}}Repository) ([]repox.Change, error) {
+		var err error
+		out, err = r.Create(ctx, parent, m)
+		return changed{{.Model}}(out.GetName(), repox.ChangeCreate, out), err
+	})
+	return out, err
+}
+{{- else}}
+
+func (p *projected{{.Model}}Repository) Create(ctx context.Context, m *{{.PB}}) (out *{{.PB}}, err error) {
+	err = p.run(ctx, func(r {{.Model}}Repository) ([]repox.Change, error) {
+		var err error
+		out, err = r.Create(ctx, m)
+		return changed{{.Model}}(out.GetName(), repox.ChangeCreate, out), err
+	})
+	return out, err
+}
+{{- end}}
+
+func (p *projected{{.Model}}Repository) Update(ctx context.Context, m *{{.PB}}, paths []string) (out *{{.PB}}, err error) {
+	err = p.run(ctx, func(r {{.Model}}Repository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, m.GetName()))
+		if err != nil {
+			return nil, err
+		}
+		out, err = r.Update(ctx, m, paths)
+		return repox.WithPrior(changed{{.Model}}(m.GetName(), repox.ChangeUpdate, out), prior), err
+	})
+	return out, err
+}
+{{- if .OutputOnly}}
+
+func (p *projected{{.Model}}Repository) UpdateOutputOnly(ctx context.Context, m *{{.PB}}, paths []string) (out *{{.PB}}, err error) {
+	err = p.run(ctx, func(r {{.Model}}Repository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, m.GetName()))
+		if err != nil {
+			return nil, err
+		}
+		out, err = r.UpdateOutputOnly(ctx, m, paths)
+		return repox.WithPrior(changed{{.Model}}(m.GetName(), repox.ChangeUpdate, out), prior), err
+	})
+	return out, err
+}
+
+func (p *projected{{.Model}}Repository) UpdateWithOutputOnly(ctx context.Context, m *{{.PB}}, paths, outputPaths []string) (out *{{.PB}}, err error) {
+	err = p.run(ctx, func(r {{.Model}}Repository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, m.GetName()))
+		if err != nil {
+			return nil, err
+		}
+		out, err = r.UpdateWithOutputOnly(ctx, m, paths, outputPaths)
+		return repox.WithPrior(changed{{.Model}}(m.GetName(), repox.ChangeUpdate, out), prior), err
+	})
+	return out, err
+}
+{{- end}}
+
+func (p *projected{{.Model}}Repository) Delete(ctx context.Context, name string) error {
+	return p.run(ctx, func(r {{.Model}}Repository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, name))
+		if err != nil {
+			return nil, err
+		}
+		return repox.WithPrior(changed{{.Model}}(name, repox.ChangeDelete, nil), prior), r.Delete(ctx, name)
+	})
+}
+{{- if .SoftDelete}}
+
+func (p *projected{{.Model}}Repository) Undelete(ctx context.Context, name string) (out *{{.PB}}, err error) {
+	err = p.run(ctx, func(r {{.Model}}Repository) ([]repox.Change, error) {
+		var err error
+		out, err = r.Undelete(ctx, name)
+		return changed{{.Model}}(name, repox.ChangeUndelete, out), err
+	})
+	return out, err
+}
+
+func (p *projected{{.Model}}Repository) Purge(ctx context.Context, name string) error {
+	return p.run(ctx, func(r {{.Model}}Repository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, name))
+		if err != nil {
+			return nil, err
+		}
+		return repox.WithPrior(changed{{.Model}}(name, repox.ChangePurge, nil), prior), r.Purge(ctx, name)
+	})
+}
+{{- if .Expiring}}
+
+func (p *projected{{.Model}}Repository) PurgeExpired(ctx context.Context, now time.Time) (res repox.PurgeResult, err error) {
+	err = p.run(ctx, func(r {{.Model}}Repository) ([]repox.Change, error) {
+		var err error
+		res, err = r.PurgeExpired(ctx, now)
+		var changes []repox.Change
+		for _, name := range res.Purged {
+			changes = append(changes, changed{{.Model}}(name, repox.ChangePurge, nil)...)
+		}
+		return changes, err
+	})
+	return res, err
+}
+{{- end}}
+{{- end}}
+{{- end}}
 
 {{- range .Resources}}
 

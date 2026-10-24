@@ -304,6 +304,14 @@ func (r *GormEventRepository) purgeTx(ctx context.Context, tx *gorm.DB, id strin
 	return nil
 }
 
+// ListByKeys reads every record whose filter field field is one of keys; see
+// repox.ListByKeys.
+func (r *GormEventRepository) ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*resourcev1.Event, error) {
+	return repox.ListByKeys(ctx, field, keys, in, func(ctx context.Context, in repox.ListInput) ([]*resourcev1.Event, string, error) {
+		return r.List(ctx, in)
+	})
+}
+
 // Compile-time proof the adapter satisfies the interface.
 var _ EventRepository = (*GormEventRepository)(nil)
 
@@ -332,7 +340,7 @@ func (b *gormBatch) CreateEvent(in *resourcev1.Event) (string, error) {
 	b.u.QueueGorm(locks, func(ctx context.Context, tx *gorm.DB) error {
 		return r.insertTx(ctx, tx, named, m)
 	})
-	b.u.Touch(named.GetName())
+	b.u.Record(repox.Change{Type: "resource.v1/Event", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
 }
 
@@ -349,7 +357,7 @@ func (b *gormBatch) UpdateEvent(in *resourcev1.Event, paths []string) {
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, nil)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "resource.v1/Event", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getEvent)})
 }
 
 // DeleteEvent queues the record's removal for good. A record already
@@ -370,5 +378,5 @@ func (b *gormBatch) DeleteEvent(name string) {
 		}
 		return nil
 	})
-	b.u.Touch(name)
+	b.u.Record(repox.Change{Type: "resource.v1/Event", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getEvent)})
 }

@@ -23,6 +23,7 @@
 - [Quick start](#quick-start)
 - [Output layout](#output-layout)
 - [GraphQL client SDK](#graphql-client-sdk)
+- [Projections and search](#projections-and-search)
 - [Reference integrity](#reference-integrity)
 - [Annotations reference](#annotations-reference)
 - [Configuration — `store.yaml`](#configuration--ormyaml)
@@ -532,6 +533,36 @@ verified against a live `ddn-engine` + Tempo. No store codegen involved: this is
 a `runtime-go/network` capability the generated `queryHandler` already threads
 `ctx` through to, the same way `Headers` carries auth tokens today.
 
+**JSON attribute paths.** A `google.protobuf.Struct` (or map) field is a
+`KindJSON` filter field: any dotted path under it is filterable without being
+declared — `attributes.floor >= 3`, `attributes.view.sea = true`,
+`attributes.badge:*` (present), `attributes.tags:"wifi"` (an array holds it).
+One parsed tree goes to every engine:
+
+| Path | PostgreSQL (`filterx.Gorm`) | Hasura DDN (`filterx.Hasura`) | OpenSearch (`filterx.OpenSearch`) |
+|---|---|---|---|
+| `=` / `!=` / `:` value | `col @> '{"a":{"b":v}}'` (GIN) | `jsonb_contains` | `term` on the `flat_object` subfield (declared: the typed copy) |
+| `:*` / null test | `jsonb_path_exists` / `?` | `jsonb_exists` (top-level keys only) | `exists` |
+| `<` `<=` `>` `>=` | `jsonb_path_exists(col, '$.a.b ? (@ > $v)')`, typed | rejected (no path operator in DDN) | declared paths only (`range` on the typed copy) |
+
+An unquoted value compares as the number, boolean or null it reads as; a quoted
+one as a string. `(store.v1.query).json_keys` declares hot paths with a type
+(`{path: "seats", type: JSON_KEY_TYPE_INT64}`): a declared path validates its
+value, compares as its kind, and on OpenSearch is indexed typed under
+`<column>_typed`. Path segments may only hold letters, digits, `_` and `-`, so
+a path never carries syntax into a query. The filter grammar has no `OR`;
+alternatives are typed conditions (`filterx.Or(...)` in `ListInput.Where` /
+`SearchInput.Where`).
+
+**Tags on Hasura.** A `repeated string` (`text[]`) field filters with `:`
+(`kinds:desk`). The SQL engine compiles it to `col @> ARRAY[?]` (GIN); the
+Hasura engine sends `{col: {_contains: v}}`, which DDN serves when the
+connector declares array containment (NDC
+`query.nested_fields.filter_by.nested_arrays.contains`). ndc-postgres builds
+that do not reject the request rather than the engine guessing another shape —
+query such fields through the GORM repositories (one Postgres connection) in
+that case.
+
 Every engine is tunable through its chainable options: `Override` installs a
 custom handler for one filter field (the escape hatch for derived predicates
 the schema can't express), and `Observe` plugs an `Observer` in for query spans
@@ -709,6 +740,17 @@ GORM and a GraphQL adapter behind one interface. Besides `Create`, `Get`, `List`
   The GraphQL adapter maps the engine's "violates exclusion constraint" and
   "violates unique constraint" messages the same way.
 
+#### Batched reads: `ListByKeys`
+
+Every repository has `ListByKeys(ctx, field, keys, in)`: every record whose
+filter field (`name`, a reference, any text or enum field) is one of `keys`,
+duplicates dropped, read in statements of at most `repox.KeysPerRead` keys
+(1,000) with at most `repox.ReadParallelism` (4) in flight, each chunk paged to
+the end. `in` narrows every read (`Filter`, `Where`, `ShowDeleted`,
+`ReadMask`); records come back chunk by chunk in key order. Both adapters
+(GORM, GraphQL) implement it over their `List`, across parents for a parented
+resource.
+
 ## GraphQL client SDK
 
 The same `protoc-gen-store` binary also generates a **typed Go GraphQL client** from
@@ -772,6 +814,158 @@ Generated files are collision-proof: if a schema name would clash with the
 runtime `graphql`/`runtime` import identifiers, the import is deterministically
 aliased (`gqlnet`/`rtnet`) and its references rewritten, so the output always
 compiles regardless of the source schema's naming.
+
+## Projections and search
+
+A **projection** is a table derived from other resources, kept current inside
+the writes to them, and searched by time window, tags, JSON attributes and
+any AIP-160 filter: the "free time per resource per day" a booking search
+reads instead of recomputing availability from events. Mark a plain (non-resource)
+message with `(store.v1.projection)`; its fields are the table's columns:
+
+```proto
+message RoomDay {
+  option (store.v1.projection) = {
+    sources: ["searchdemo.v1/Room", "searchdemo.v1/Booking"]  // resource types
+    key: ["room", "day"]                                       // row identity
+    range_field: "free"                                        // searched for containment
+    indexes: [
+      {fields: ["floor", "day"]},
+      {expression: "((attributes->>'seats')::int)", index: "idx_room_days_seats"}
+    ]
+    // maintain: PROJECTION_MAINTENANCE_MANUAL  -- default SAME_TRANSACTION
+    // search_index: "room_days"                -- OpenSearch alias
+  };
+  string room = 1;
+  google.type.Date day = 2;
+  repeated google.type.Interval free = 3;   // TSTZMULTIRANGE + GiST
+  repeated string kinds = 4;                // TEXT[] + GIN
+  int32 floor = 5;
+  google.protobuf.Struct attributes = 6 [(store.v1.query) = {
+    json_keys: [{path: "seats", type: JSON_KEY_TYPE_INT64}]
+  }];                                       // JSONB + GIN
+  Occupancy occupancy = 7;                  // stored as the value name
+  string display_name = 8 [(store.v1.query) = {search: true}];  // + trigram GIN
+}
+```
+
+The design keeps columns as typed message fields rather than a column list in
+the option, so the row is a proto message end to end (writer input, search
+output, OpenSearch document) and every target derives the same columns.
+
+**What is generated.** The gorm, sql and prisma targets render the table like
+any other: a primary key `id` (the key fields as a JSON array, so every
+backend deletes by one column), a unique index on the key, `row_version
+BIGINT` (raised by every upsert), the range column as `TSTZMULTIRANGE`
+(`TSTZRANGE` for a single Interval) under GiST, GIN on `text[]` and `jsonb`,
+trigram GIN on `search: true` text, and the declared B-tree/GIN/GiST/expression
+indexes. The repository target emits `projection_<name>.go` (a
+`repox.Projection[*T]` value, e.g. `RoomDays`, and `<Model>Writer`/`<Model>Rows`
+aliases) and the runtime `repox/projection.go`.
+
+**Keeping it current.** The application computes rows; the generated code owns
+the transaction, the upsert by key and the deletes:
+
+```go
+w := search.RoomDayWriterFunc(func(ctx context.Context, read repox.Conn, changes []repox.Change) (search.RoomDayRows, error) {
+    // changes: Type, Name, Op, Record (after the write), Prior (before an
+    // update/delete, read inside the write's transaction). read sees the write.
+    var out search.RoomDayRows
+    out.Prune = append(out.Prune, []filterx.Condition{{Field: "room", Op: filterx.OpEq, Value: room}})
+    out.Upsert = append(out.Upsert, rows...)
+    return out, nil
+})
+conn := repox.Conn{Gorm: db, Projections: repox.NewProjections(search.RoomDays.Projector(w))}
+repos := search.New(conn) // Create/Update/Delete/... and NewBatch(conn) commits project
+```
+
+On GORM every repository write and every `Batch`/`Unit` commit touching a
+source runs the writer inside the same transaction; a writer error rolls the
+write back. `Projections.Feed` (a `repox.ProjectionFeed`) hears, after each
+commit, what it stored (`Key`, `Version`, row) and removed — the change feed
+the OpenSearch indexer follows. `Apply` writes rows by hand
+(`PROJECTION_MAINTENANCE_MANUAL`), `Rebuild(ctx, conn, w, batches, opts)`
+backfills or repairs from the sources, `Stored(ctx, conn, since)` reads the
+table's rows with versions.
+
+**Searching.**
+
+```go
+page, next, err := search.RoomDays.Search(ctx, conn, repox.SearchInput{
+    Range:    &repox.Span{Start: from, End: to},      // free covers [from, to)
+    Filter:   `kinds:desk AND attributes.seats >= 5`, // AIP-160, JSON paths
+    OrderBy:  "floor desc, day",                      // AIP-132
+    PageSize: 50, PageToken: tok,                     // keyset paging
+    ReadMask: []string{"room", "day", "free"},
+})
+n, err := search.RoomDays.Count(ctx, conn, in)
+buckets, err := search.RoomDays.Facet(ctx, conn, in, "kinds", 20) // also enums, numbers, attributes.<path>
+```
+
+**On Hasura/GraphQL** (`graphql_module` set, `repox.Conn{GraphQL: svc}`): a
+`Batch`/`Unit` commit sends the projection's mutations in the same request as
+the writes (one DDN transaction); a single repository write projects in a
+request of its own right after it (`Projections.OnError`, or
+`ErrProjectionStale`, when that fails — `Rebuild` repairs). DDN has no upsert,
+range operators or GROUP BY, so: an upsert is delete-and-insert, versions come
+from the client's clock, `Range` is checked on the rows read (pages may come
+back short), and a ranged `Count` or a `Facet` scans at most
+`repox.GraphQLScanLimit` rows. The table lives in the same Postgres, so the
+safest setup for search-heavy paths is to keep writes on Hasura and run
+`Search`/`Count`/`Facet` over a `repox.Conn{Gorm: db}` to that Postgres (or on
+OpenSearch).
+
+### OpenSearch (`target=opensearch`)
+
+```yaml
+- local: protoc-gen-store
+  out: gen/opensearch
+  strategy: all
+  opt:
+    - target=opensearch
+    - go_module=example.com/app/gen/opensearch
+    - gorm_module=example.com/app/gen/gorm            # filterx
+    - repository_module=example.com/app/gen/repository # repox + projections
+```
+
+It emits `osx/osx.go` (runtime, on
+[`github.com/oh-tarnished/opensearch-go-sdk`](https://github.com/oh-tarnished/opensearch-go-sdk))
+and `<db>/<schema>/<model>_index.go` per projection: `<Model>Index` with a
+generated mapping — `keyword` (text, enums, tags), `long`/`double`/
+`unsigned_long`/`boolean`, `date` (dates keep `YYYY-MM-DD`), `date_range` for
+the range column, `flat_object` for JSON plus typed properties under
+`<column>_typed` for declared `json_keys`.
+
+```go
+ix := search.RoomDayIndex
+ix.Ensure(ctx, c)                                  // index template, <alias>-v<ms>, alias (write index)
+ixr := ix.Indexer(c, osx.IndexerOptions{Queue: 1024, OnError: logErr})
+conn.Projections.Feed = repox.Feeds(ixr /*, more */) // bulk, version_type=external, version = row_version
+defer ixr.Close(ctx)
+
+page, next, err := ix.Search(ctx, c, repox.SearchInput{Range: ..., Filter: ..., OrderBy: ..., ReadMask: ...})
+m, found, err := ix.Get(ctx, c, &pb.RoomDay{Room: r, Day: d}, mask)
+n, err := ix.Count(ctx, c, in)
+facets, err := ix.Facets(ctx, c, in, []string{"kinds", "occupancy", "attributes.seats"}, 20)
+for m, err := range ix.Iterate(ctx, c, in) { ... }       // PIT + search_after over every match
+res, err := ix.Reindex(ctx, c, ix.Source(ctx, pgConn), osx.ReindexOptions{})
+```
+
+Search pages read one point in time (`PageKeepAlive`, default 1m; negative
+pages the live index) and continue with `search_after`; the key breaks ties.
+The range is a `date_range` `contains` query; adjacent free spans are merged
+before indexing, as a multirange merges them. Facets are `terms` aggregations;
+an undeclared JSON path (which `flat_object` cannot aggregate) is counted from
+the matching documents, up to `osx.FacetScanLimit`. An ordered comparison on an
+undeclared JSON path is rejected (`flat_object` holds every leaf as a keyword):
+declare it. A stale or repeated change loses to the newer version (409s are
+ignored); removals are versioned past the row. `Reindex` loads a new versioned
+index from the table, swaps the alias atomically, re-applies rows changed
+during the load (`row_version >= start - Skew`), deletes documents whose row
+is gone, and drops the old index.
+
+The example in [`examples/search`](examples/search) runs all of this against
+Postgres and OpenSearch (`just search`, `just test-search`).
 
 ## Reference integrity
 
@@ -965,6 +1159,21 @@ string state = 5 [(store.v1.query) = { filterable: false, sortable: false }];
 | `filterable` | Override the type-derived default in the generated filter spec (scalar columns are filterable by default, operators inferred from the type). Presence matters: `filterable: false` removes the field; unset keeps the default. |
 | `sortable` | Override the type-derived default in the `order_by` allowlist (scalar, date, timestamp, and numeric columns sort by default). Presence matters, as with `filterable`. |
 | `search` | Include the column in bareword free-text search — a filter term with no field (e.g. `beach resort`) matches it with a case-insensitive contains. Off by default. |
+| `json_keys` | On a `Struct`/map field: declare hot paths with a type (`{path: "view.sea", type: JSON_KEY_TYPE_BOOL}`). Any path is filterable undeclared; a declared one validates and compares as its type and is indexed typed on OpenSearch. Setting it (or the field being in a projection) plans a GIN index on the column. |
+
+### `(store.v1.projection)` — message level
+
+Makes a non-resource message a [projection](#projections-and-search).
+
+| Field | Description |
+| --- | --- |
+| `table` / `schema` | Table name (default: snake_case plural) and schema (default: the first source's). |
+| `sources` | Resource types whose writes run the projection. |
+| `key` | Fields identifying a row (required); a unique index and the `id` key derive from them. |
+| `range_field` | A `google.type.Interval` field (repeated: `TSTZMULTIRANGE`, single: `TSTZRANGE`), GiST-indexed, matched by `SearchInput.Range`. |
+| `indexes` | Extra indexes: `fields` or `expression`, `method` (`INDEX_METHOD_BTREE`/`GIN`/`GIST`), `unique`, `index` name. |
+| `maintain` | `PROJECTION_MAINTENANCE_SAME_TRANSACTION` (default) or `PROJECTION_MAINTENANCE_MANUAL` (no write projects it; use `Apply`/`Rebuild`). |
+| `search_index` | OpenSearch alias (default `<schema>_<table>`). |
 
 ### `(store.v1.reference)` — field level
 
@@ -1154,7 +1363,7 @@ Passed via `opt:` in `buf.gen.yaml`.
 
 | Option | Description |
 | --- | --- |
-| `target` | What to emit: `prisma` \| `gorm` \| `sql` \| `graphql`. Required. (`graphql` reads its endpoint from `store.yaml`'s [`graphql`](#top-level-keys) block — see [GraphQL client SDK](#graphql-client-sdk).) |
+| `target` | What to emit: `prisma` \| `gorm` \| `sql` \| `repository` \| `opensearch` \| `graphql`. Required. (`graphql` reads its endpoint from `store.yaml`'s [`graphql`](#top-level-keys) block — see [GraphQL client SDK](#graphql-client-sdk).) |
 | `go_module` | **gorm only.** Go import path of the output directory (e.g. `github.com/me/gen`). Enables the `migrate.go` factory registry, whose package imports each per-schema models package. Omit it and the per-schema model packages still generate, just without the aggregator. |
 | `stores` | **gorm only.** Also emit a typed CRUD store per resource — one `<model>_store.go` file each (see [GORM stores](#gorm-stores-and-tracing)). Off by default; turning it on adds a `gorm.io/gorm` dependency to each models package. |
 | `filters` | **gorm only.** Emit AIP-160 filter / AIP-132 order_by specs per schema (`filters.go`) plus the shared `filterx` engine package serving both **SQL (GORM)** and **Hasura DDN GraphQL** (see [filters and list engines](#aip-160-filters-and-list-engines-sql--hasura)). Off by default; requires `go_module`. The Hasura engine adds a `github.com/the-protobuf-project/runtime-go` dependency. With `telemetry`, also emits a [telemetry](https://github.com/the-protobuf-project/telemetry) `Observer` adapter (`filterx.TelemetryObserver`) for the list engines' spans and debug events. |
@@ -1163,6 +1372,8 @@ Passed via `opt:` in `buf.gen.yaml`.
 | `strict` | Per-rule severity for schema problems. `""` (default) warns on everything; `true` makes every rule a hard error; a spec like `ref:error,collision:warn,index:error,lint:warn` sets severity per rule. Rules: **ref** (unresolved/dropped references), **collision** (global name qualification), **index** (index names an unknown column), **lint** (validate-on-generate advisories). |
 | `config` | Path to a [`store.yaml`](#configuration--ormyaml) layout config. |
 | `license_header` | Copyright/licence lines to place above the banner of every generated file — `\n`-separated, e.g. `license_header=Copyright 2026 Me.\nSPDX-License-Identifier: Apache-2.0`. Write them **without** comment markers: each target applies its own (`//` for Go, Prisma and TypeScript, `--` for SQL), so one value covers the whole output tree. Unset (the default) stamps nothing, because generated code belongs to whoever ran the generator, not to this plugin. |
+| `gorm_module` / `graphql_module` | **repository** (and `gorm_module` for **opensearch**): import paths of the generated gorm output and GraphQL client. |
+| `repository_module` | **opensearch only.** Import path of the generated repository output whose projections the indices copy. |
 | `references` | Comma-separated descriptor images for reference discovery, added to `store.yaml`'s [`references`](#top-level-keys). |
 | `M<proto>=<import>` | Go import-path mapping for a proto file, required when protos omit `option go_package`. |
 

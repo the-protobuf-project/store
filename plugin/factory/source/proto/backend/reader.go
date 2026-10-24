@@ -54,6 +54,8 @@ type Reader struct {
 	// repositories (the open-source posture).
 	gormModule    string
 	graphqlModule string
+	// repositoryModule is the opensearch target's repository_module opt.
+	repositoryModule string
 }
 
 // Compile-time proof that Reader satisfies all three halves of the seam.
@@ -77,6 +79,13 @@ func (r Reader) WithRepositoryModules(gormModule, graphqlModule string) Reader {
 	return r
 }
 
+// WithSearchModules returns a copy of r carrying the opensearch target's
+// repository module path (the repository_module plugin opt).
+func (r Reader) WithSearchModules(repositoryModule string) Reader {
+	r.repositoryModule = repositoryModule
+	return r
+}
+
 // --- schema.FacetReader ---
 
 // Key namespaces this reader's facets. It names the vocabulary, not the plugin.
@@ -86,8 +95,16 @@ func (Reader) Key() string { return facets.KeyStore }
 // file into a database is neutral structure and lives in (entity.v1.datasource).
 func (Reader) ReadFile(protoreflect.FileDescriptor) (any, error) { return nil, nil }
 
-// ReadMessage attaches the message's store.v1.table options, or nothing.
+// ReadMessage attaches the message's store.v1.table options, its
+// store.v1.projection (with the descriptor, whose fields become the
+// projection's columns), or nothing.
 func (Reader) ReadMessage(d protoreflect.MessageDescriptor) (any, error) {
+	if d != nil && proto.HasExtension(d.Options(), storepbv1.E_Projection) {
+		return &facets.Projection{
+			Options: proto.GetExtension(d.Options(), storepbv1.E_Projection).(*storepbv1.ProjectionOptions),
+			Message: d,
+		}, nil
+	}
 	if !hasStoreTable(d) {
 		return nil, nil
 	}
@@ -178,6 +195,11 @@ func (r Reader) Enrich(ir *protokit.IR) error {
 	// declared index is named and ordered alongside every other one.
 	appendOutboxTables(ir, fx)
 
+	// Projection tables likewise: each target renders them as ordinary tables.
+	if err := appendProjectionTables(ir, fx); err != nil {
+		return err
+	}
+
 	// A DateTime keeps its zone in a companion column (see package dtzone),
 	// synthesized here so every target emits and migrates it like any other.
 	for _, db := range ir.Databases {
@@ -211,6 +233,7 @@ func (r Reader) Enrich(ir *protokit.IR) error {
 		db.Opts["filters"] = boolStr(r.filters)
 		db.Opts["gorm_module"] = r.gormModule
 		db.Opts["graphql_module"] = r.graphqlModule
+		db.Opts["repository_module"] = r.repositoryModule
 		if r.cfg != nil && len(r.cfg.ReferenceServices) > 0 {
 			b, err := json.Marshal(r.cfg.ReferenceServices)
 			if err != nil {

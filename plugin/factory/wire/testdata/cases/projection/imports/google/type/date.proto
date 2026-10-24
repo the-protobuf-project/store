@@ -1,0 +1,17 @@
+// Minimal stand-in for google/type/date.proto (see the imports/ convention in
+// golden.BuildRequest: compiled and importable, never in file_to_generate).
+syntax = "proto3";
+
+package google.type;
+
+option go_package = "google.golang.org/genproto/googleapis/type/date;date";
+option java_multiple_files = true;
+option java_outer_classname = "DateProto";
+option java_package = "com.google.type";
+
+// Represents a whole or partial calendar date.
+message Date {
+  int32 year = 1;
+  int32 month = 2;
+  int32 day = 3;
+}

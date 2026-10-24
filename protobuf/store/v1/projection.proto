@@ -1,0 +1,122 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package store.v1;
+
+option go_package = "github.com/the-protobuf-project/store/plugin/pb/storepbv1;storepbv1";
+option java_multiple_files = true;
+option java_outer_classname = "ProjectionProto";
+option java_package = "com.store.v1";
+
+// ProjectionOptions makes a message a projection: a table derived from other
+// resources -- its sources -- which the generated repositories keep current in
+// the same transaction as every write to a source, and which a generated
+// Search queries. The message is not a resource; its fields are the table's
+// columns.
+//
+// What a projection row holds is the application's to compute (a resource's
+// free time per day, say): the generated code hands the application the
+// source records a write changed and stores the rows it returns. The
+// transaction, the upsert by key, the delete, the indexes and the search are
+// generated.
+//
+// Applied via:
+//
+//	message ResourceDay {
+//	  option (store.v1.projection) = {
+//	    sources: ["freebusy.example.com/Resource", "calendar.example.com/Event"]
+//	    key: ["resource", "day"]
+//	    range_field: "free"
+//	  };
+//	  string resource = 1;
+//	  google.type.Date day = 2;
+//	  repeated google.type.Interval free = 3;  // TSTZMULTIRANGE, GiST-indexed
+//	  repeated string resource_types = 4;      // TEXT[], GIN-indexed
+//	  google.protobuf.Struct attributes = 5;   // JSONB, GIN-indexed
+//	}
+message ProjectionOptions {
+  // table is the table name. Defaults to the snake_case plural of the
+  // message name.
+  string table = 1;
+
+  // schema is the database schema the table lives in. Defaults to the schema
+  // of the first source that is generated in the same run.
+  string schema = 2;
+
+  // sources are the AIP resource types (google.api.resource type, e.g.
+  // "calendar.example.com/Event") whose writes change the projection. A write
+  // to any of them, through a generated repository or Batch, runs the
+  // application's projection inside that write's transaction.
+  repeated string sources = 3;
+
+  // key lists the fields that identify a row, e.g. ["resource", "day"]. The
+  // table's primary key is derived from them, so a row returned again
+  // replaces the stored one. Required.
+  repeated string key = 4;
+
+  // range_field names the field searched for containment: a
+  // google.type.Interval, or a repeated one. A repeated field is stored as
+  // TSTZMULTIRANGE and a single one as TSTZRANGE, both under a GiST index;
+  // Search's range then matches rows whose range contains it.
+  string range_field = 5;
+
+  // indexes are additional indexes on the table, beyond those generated for
+  // the key, the range, and the array and JSON columns.
+  repeated ProjectionIndex indexes = 6;
+
+  // maintain says who keeps the projection current. Defaults to
+  // PROJECTION_MAINTENANCE_SAME_TRANSACTION.
+  ProjectionMaintenance maintain = 7;
+
+  // search_index is the OpenSearch alias the opensearch target indexes the
+  // projection under. Defaults to <schema>_<table>.
+  string search_index = 8;
+}
+
+// ProjectionIndex is one additional index on a projection table.
+message ProjectionIndex {
+  // fields are the indexed fields (proto names), in order. Exclusive with
+  // expression.
+  repeated string fields = 1;
+
+  // expression is an index expression written verbatim, e.g.
+  // "((attributes->>'floor')::int)". Exclusive with fields.
+  string expression = 2;
+
+  // method is the index access method. Defaults to INDEX_METHOD_BTREE.
+  IndexMethod method = 3;
+
+  // unique makes the index unique.
+  bool unique = 4;
+
+  // index is the index name, as in (entity.v1.table).indexes. Generated from
+  // the table and columns when empty.
+  string index = 5;
+}
+
+// IndexMethod is a PostgreSQL index access method.
+enum IndexMethod {
+  // INDEX_METHOD_UNSPECIFIED is a B-tree.
+  INDEX_METHOD_UNSPECIFIED = 0;
+  // INDEX_METHOD_BTREE serves equality and ordering.
+  INDEX_METHOD_BTREE = 1;
+  // INDEX_METHOD_GIN serves containment over arrays and jsonb.
+  INDEX_METHOD_GIN = 2;
+  // INDEX_METHOD_GIST serves range containment and overlap.
+  INDEX_METHOD_GIST = 3;
+}
+
+// ProjectionMaintenance says who keeps a projection current.
+enum ProjectionMaintenance {
+  // PROJECTION_MAINTENANCE_UNSPECIFIED is PROJECTION_MAINTENANCE_SAME_TRANSACTION.
+  PROJECTION_MAINTENANCE_UNSPECIFIED = 0;
+  // PROJECTION_MAINTENANCE_SAME_TRANSACTION runs the projection inside every
+  // generated write to a source, so the table never lags its sources (on
+  // GORM; see the README for GraphQL).
+  PROJECTION_MAINTENANCE_SAME_TRANSACTION = 1;
+  // PROJECTION_MAINTENANCE_MANUAL leaves the writes alone: the application
+  // keeps the table current itself, with the generated Apply and Rebuild.
+  PROJECTION_MAINTENANCE_MANUAL = 2;
+}

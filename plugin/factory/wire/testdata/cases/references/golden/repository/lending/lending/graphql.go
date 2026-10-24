@@ -488,6 +488,14 @@ func (r *GraphQLLoanRepository) remove(ctx context.Context, id string) error {
 	return nil
 }
 
+// ListByKeys reads every record whose filter field field is one of keys; see
+// repox.ListByKeys.
+func (r *GraphQLLoanRepository) ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*refdemov1.Loan, error) {
+	return repox.ListByKeys(ctx, field, keys, in, func(ctx context.Context, in repox.ListInput) ([]*refdemov1.Loan, string, error) {
+		return r.List(ctx, in)
+	})
+}
+
 // Compile-time proof the adapter satisfies the interface.
 var _ LoanRepository = (*GraphQLLoanRepository)(nil)
 
@@ -516,7 +524,7 @@ func (b *graphQLBatch) CreateLoan(in *refdemov1.Loan) (string, error) {
 		ops.Add(b.svc.Mutation.Lending.Loans.CreateOp(ci, new(loansql.InsertLendingLoansResponse)))
 		return nil, nil
 	})
-	b.u.Touch(named.GetName())
+	b.u.Record(repox.Change{Type: "lending.example.com/Loan", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
 }
 
@@ -533,7 +541,7 @@ func (b *graphQLBatch) UpdateLoan(in *refdemov1.Loan, paths []string) {
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, nil)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "lending.example.com/Loan", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getLoan)})
 }
 
 // UpdateLoanWithOutputOnly queues UpdateWithOutputOnly; in.Etag, when
@@ -549,7 +557,7 @@ func (b *graphQLBatch) UpdateLoanWithOutputOnly(in *refdemov1.Loan, paths, outpu
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, outputPaths)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "lending.example.com/Loan", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getLoan)})
 }
 
 // UpdateLoanOutputOnly queues UpdateOutputOnly; in.Etag, when set, guards
@@ -567,7 +575,7 @@ func (b *graphQLBatch) UpdateLoanOutputOnly(in *refdemov1.Loan, paths []string) 
 	id := ids[len(ids)-1]
 	patch := loanToOutputPatch(in, paths)
 	patch.Etag = graphql.Value(repox.NewULID())
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "lending.example.com/Loan", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getLoan)})
 	if etag := in.GetEtag(); etag != "" {
 		b.u.QueueGraphQLAhead(func(ctx context.Context) error {
 			_, err := b.svc.Mutation.Lending.Loans.UpdateIfMatch(ctx, id, patch, loansql.Etag.Eq(etag))
@@ -595,7 +603,7 @@ func (b *graphQLBatch) DeleteLoan(name string) {
 		ops.Add(b.svc.Mutation.Lending.Loans.UpdateOp(ids[len(ids)-1], r.deletePatch(), new(loansql.UpdateLendingLoansByIdResponse), loansql.Update().PreCheck(loansql.DeleteTime.IsNull(true))))
 		return nil, nil
 	})
-	b.u.Touch(name)
+	b.u.Record(repox.Change{Type: "lending.example.com/Loan", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getLoan)})
 }
 
 // PurgeLoan queues the record's removal for good. A record already
@@ -619,5 +627,5 @@ func (b *graphQLBatch) PurgeLoan(name string) {
 		ops.Add(b.svc.Mutation.Lending.Loans.DeleteOp(id, new(loansql.DeleteLendingLoansByIdResponse)))
 		return nil, nil
 	})
-	b.u.Touch(name)
+	b.u.Record(repox.Change{Type: "lending.example.com/Loan", Name: name, Op: repox.ChangePurge, LoadPrior: repox.PriorOf(name, getLoan)})
 }

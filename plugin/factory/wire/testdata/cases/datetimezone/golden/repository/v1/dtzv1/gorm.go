@@ -319,6 +319,14 @@ func (r *GormSessionRepository) Delete(ctx context.Context, name string) error {
 	return repox.MapGormErr(dtzv1gorm.NewSessionStore(r.DB).DeleteByID(ctx, id))
 }
 
+// ListByKeys reads every record whose filter field field is one of keys; see
+// repox.ListByKeys.
+func (r *GormSessionRepository) ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*dtzv1.Session, error) {
+	return repox.ListByKeys(ctx, field, keys, in, func(ctx context.Context, in repox.ListInput) ([]*dtzv1.Session, string, error) {
+		return r.List(ctx, in)
+	})
+}
+
 // Compile-time proof the adapter satisfies the interface.
 var _ SessionRepository = (*GormSessionRepository)(nil)
 
@@ -347,7 +355,7 @@ func (b *gormBatch) CreateSession(in *dtzv1.Session) (string, error) {
 	b.u.QueueGorm(locks, func(ctx context.Context, tx *gorm.DB) error {
 		return dtzv1gorm.NewSessionStore(tx).Create(ctx, m)
 	})
-	b.u.Touch(named.GetName())
+	b.u.Record(repox.Change{Type: "dtz.v1/Session", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
 }
 
@@ -364,7 +372,7 @@ func (b *gormBatch) UpdateSession(in *dtzv1.Session, paths []string) {
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, nil)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "dtz.v1/Session", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getSession)})
 }
 
 // UpdateSessionWithOutputOnly queues UpdateWithOutputOnly; in.Etag, when
@@ -380,7 +388,7 @@ func (b *gormBatch) UpdateSessionWithOutputOnly(in *dtzv1.Session, paths, output
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, outputPaths)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "dtz.v1/Session", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getSession)})
 }
 
 // UpdateSessionOutputOnly queues UpdateOutputOnly; in.Etag, when set, guards it.
@@ -389,7 +397,7 @@ func (b *gormBatch) UpdateSessionOutputOnly(in *dtzv1.Session, paths []string) {
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.updateOutputOnlyTx(ctx, tx, in, paths)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "dtz.v1/Session", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getSession)})
 }
 
 // DeleteSession queues the record's removal for good. A record already
@@ -406,5 +414,5 @@ func (b *gormBatch) DeleteSession(name string) {
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return tx.WithContext(ctx).Delete(&dtzv1gorm.Session{}, "id = ?", id).Error
 	})
-	b.u.Touch(name)
+	b.u.Record(repox.Change{Type: "dtz.v1/Session", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getSession)})
 }

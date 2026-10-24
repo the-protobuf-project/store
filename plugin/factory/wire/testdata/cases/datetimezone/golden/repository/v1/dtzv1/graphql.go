@@ -364,6 +364,14 @@ func (r *GraphQLSessionRepository) remove(ctx context.Context, id string) error 
 	return nil
 }
 
+// ListByKeys reads every record whose filter field field is one of keys; see
+// repox.ListByKeys.
+func (r *GraphQLSessionRepository) ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*dtzv1.Session, error) {
+	return repox.ListByKeys(ctx, field, keys, in, func(ctx context.Context, in repox.ListInput) ([]*dtzv1.Session, string, error) {
+		return r.List(ctx, in)
+	})
+}
+
 // Compile-time proof the adapter satisfies the interface.
 var _ SessionRepository = (*GraphQLSessionRepository)(nil)
 
@@ -391,7 +399,7 @@ func (b *graphQLBatch) CreateSession(in *dtzv1.Session) (string, error) {
 		ops.Add(b.svc.Mutation.DtzV1.Sessions.CreateOp(ci, new(sessionsql.InsertDtzV1SessionsResponse)))
 		return nil, nil
 	})
-	b.u.Touch(named.GetName())
+	b.u.Record(repox.Change{Type: "dtz.v1/Session", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
 }
 
@@ -408,7 +416,7 @@ func (b *graphQLBatch) UpdateSession(in *dtzv1.Session, paths []string) {
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, nil)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "dtz.v1/Session", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getSession)})
 }
 
 // UpdateSessionWithOutputOnly queues UpdateWithOutputOnly; in.Etag, when
@@ -424,7 +432,7 @@ func (b *graphQLBatch) UpdateSessionWithOutputOnly(in *dtzv1.Session, paths, out
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, outputPaths)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "dtz.v1/Session", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getSession)})
 }
 
 // UpdateSessionOutputOnly queues UpdateOutputOnly; in.Etag, when set, guards
@@ -442,7 +450,7 @@ func (b *graphQLBatch) UpdateSessionOutputOnly(in *dtzv1.Session, paths []string
 	id := ids[len(ids)-1]
 	patch := sessionToOutputPatch(in, paths)
 	patch.Etag = graphql.Value(repox.NewULID())
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: "dtz.v1/Session", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getSession)})
 	if etag := in.GetEtag(); etag != "" {
 		b.u.QueueGraphQLAhead(func(ctx context.Context) error {
 			_, err := b.svc.Mutation.DtzV1.Sessions.UpdateIfMatch(ctx, id, patch, sessionsql.Etag.Eq(etag))
@@ -470,5 +478,5 @@ func (b *graphQLBatch) DeleteSession(name string) {
 		ops.Add(b.svc.Mutation.DtzV1.Sessions.DeleteOp(id, new(sessionsql.DeleteDtzV1SessionsByIdResponse)))
 		return nil, nil
 	})
-	b.u.Touch(name)
+	b.u.Record(repox.Change{Type: "dtz.v1/Session", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getSession)})
 }

@@ -661,6 +661,14 @@ func (r *Gorm{{.Model}}Repository) PurgeExpired(ctx context.Context, now time.Ti
 {{- end}}
 {{- end}}
 
+// ListByKeys reads every record whose filter field field is one of keys; see
+// repox.ListByKeys.
+func (r *Gorm{{.Model}}Repository) ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*{{.PB}}, error) {
+	return repox.ListByKeys(ctx, field, keys, in, func(ctx context.Context, in repox.ListInput) ([]*{{.PB}}, string, error) {
+		return r.List(ctx, {{if .Parented}}{{printf "%q" .WildcardParent}}, {{end}}in)
+	})
+}
+
 // Compile-time proof the adapter satisfies the interface.
 var _ {{.Model}}Repository = (*Gorm{{.Model}}Repository)(nil)
 {{- end}}
@@ -699,7 +707,7 @@ func (b *gormBatch) Create{{.Model}}({{if .Parented}}parent string, {{end}}in *{
 		return {{$.GormPkg}}.{{.Store}}(tx).Create(ctx, m)
 		{{- end}}
 	})
-	b.u.Touch(named.GetName())
+	b.u.Record(repox.Change{Type: {{printf "%q" .Type}}, Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
 }
 
@@ -716,7 +724,7 @@ func (b *gormBatch) Update{{.Model}}(in *{{.PB}}, paths []string) {
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, nil)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: {{printf "%q" .Type}}, Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), get{{.Model}})})
 }
 {{- if .OutputOnly}}
 
@@ -733,7 +741,7 @@ func (b *gormBatch) Update{{.Model}}WithOutputOnly(in *{{.PB}}, paths, outputPat
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, outputPaths)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: {{printf "%q" .Type}}, Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), get{{.Model}})})
 }
 {{- end}}
 {{- if .OutputOnly}}
@@ -744,7 +752,7 @@ func (b *gormBatch) Update{{.Model}}OutputOnly(in *{{.PB}}, paths []string) {
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.updateOutputOnlyTx(ctx, tx, in, paths)
 	})
-	b.u.Touch(in.GetName())
+	b.u.Record(repox.Change{Type: {{printf "%q" .Type}}, Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), get{{.Model}})})
 }
 {{- end}}
 {{- if .SoftDelete}}
@@ -762,7 +770,7 @@ func (b *gormBatch) Delete{{.Model}}(name string) {
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.markDeleted(ctx, tx, ids[len(ids)-1]).Error
 	})
-	b.u.Touch(name)
+	b.u.Record(repox.Change{Type: {{printf "%q" .Type}}, Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, get{{.Model}})})
 }
 {{- end}}
 
@@ -804,7 +812,7 @@ func (b *gormBatch) {{if .SoftDelete}}Purge{{else}}Delete{{end}}{{.Model}}(name 
 		return tx.WithContext(ctx).Delete(&{{$.GormPkg}}.{{.Model}}{}, "id = ?", id).Error
 	})
 	{{- end}}
-	b.u.Touch(name)
+	b.u.Record(repox.Change{Type: {{printf "%q" .Type}}, Name: name, Op: {{if .SoftDelete}}repox.ChangePurge{{else}}repox.ChangeDelete{{end}}, LoadPrior: repox.PriorOf(name, get{{.Model}})})
 }
 {{- end}}
 {{- end}}
