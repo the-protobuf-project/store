@@ -35,6 +35,9 @@ model Shelf {
   /// Back-relation: Book records that reference this model via shelf_id.
   books Book[]
 
+  /// Back-relation: Page records that reference this model via shelf_id.
+  pages Page[]
+
   /// Index on [delete_time].
   @@index([deleteTime])
   /// Maps the model to the "shelves" table in the database.
@@ -69,12 +72,48 @@ model Book {
   /// Relation to Shelf via shelf_id.
   shelf Shelf @relation(fields: [shelfID], references: [id], onDelete: Cascade)
 
+  /// Back-relation: Page records that reference this model via book_id.
+  pages Page[]
+
   /// Index on [delete_time].
   @@index([deleteTime])
   /// Composite index on [shelf_id, id].
   @@index([shelfID, id])
   /// Maps the model to the "books" table in the database.
   @@map("books")
+  /// Maps the model to the "catalog" schema in the database.
+  @@schema("catalog")
+}
+
+/// A page of a book: nested two deep, so the row it hangs off is a nested resource's, found by its name.
+model Page {
+  /// Unique identifier for the record.
+  id String @id @default(ulid()) @map("id")
+
+  /// The page's resource name.
+  name String @unique @map("name")
+
+  /// What is printed on it.
+  text String? @map("text")
+
+  /// Parent reference to Shelf (from the AIP resource pattern).
+  shelfID String @map("shelf_id")
+
+  /// Relation to Shelf via shelf_id.
+  shelf Shelf @relation(fields: [shelfID], references: [id], onDelete: Cascade)
+
+  /// Parent reference to Book (from the AIP resource pattern).
+  bookID String @map("book_id")
+
+  /// Relation to Book via book_id.
+  book Book @relation(fields: [bookID], references: [id], onDelete: Cascade)
+
+  /// Composite index on [book_id, id].
+  @@index([bookID, id])
+  /// Index on [shelf_id].
+  @@index([shelfID])
+  /// Maps the model to the "pages" table in the database.
+  @@map("pages")
   /// Maps the model to the "catalog" schema in the database.
   @@schema("catalog")
 }

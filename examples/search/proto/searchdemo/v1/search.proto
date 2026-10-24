@@ -79,6 +79,11 @@ message Booking {
 
   // When it ends.
   google.protobuf.Timestamp end_time = 4 [(google.api.field_behavior) = REQUIRED];
+
+  // When the room is set up for it, which may start before and end after the
+  // booking. A plain Interval column, stored as "start/end" text, unlike the
+  // projection's range column.
+  google.type.Interval setup_window = 5;
 }
 
 // RoomDay is one room's free time on one day: the projection a search by

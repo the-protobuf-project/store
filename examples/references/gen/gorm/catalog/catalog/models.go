@@ -34,6 +34,8 @@ type Shelf struct {
 	ExpireTime *time.Time `gorm:"column:expire_time;type:timestamptz" json:"expire_time,omitempty"`
 	// Back-relation: Book records that reference this via shelf_id.
 	Books []Book `gorm:"foreignKey:ShelfID" json:"books,omitempty"`
+	// Back-relation: Page records that reference this via shelf_id.
+	Pages []Page `gorm:"foreignKey:ShelfID" json:"pages,omitempty"`
 }
 
 func (*Shelf) TableName() string { return "catalog.shelves" }
@@ -55,6 +57,26 @@ type Book struct {
 	// Parent reference to Shelf (from the AIP resource pattern).
 	ShelfID string `gorm:"column:shelf_id;not null;index:idx_books_shelf_id_id,priority:1" json:"shelf_id" validate:"required"`
 	Shelf   *Shelf `gorm:"foreignKey:ShelfID;constraint:OnDelete:CASCADE" json:"shelf,omitempty"`
+	// Back-relation: Page records that reference this via book_id.
+	Pages []Page `gorm:"foreignKey:BookID" json:"pages,omitempty"`
 }
 
 func (*Book) TableName() string { return "catalog.books" }
+
+// A page of a book: nested two deep, so the row it hangs off is a nested resource's, found by its name.
+type Page struct {
+	// Unique identifier for the record.
+	ID string `gorm:"column:id;primaryKey;not null;index:idx_pages_book_id_id,priority:2" json:"id"`
+	// The page's resource name.
+	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
+	// What is printed on it.
+	Text *string `gorm:"column:text" json:"text,omitempty"`
+	// Parent reference to Shelf (from the AIP resource pattern).
+	ShelfID string `gorm:"column:shelf_id;not null;index:idx_pages_shelf_id" json:"shelf_id" validate:"required"`
+	Shelf   *Shelf `gorm:"foreignKey:ShelfID;constraint:OnDelete:CASCADE" json:"shelf,omitempty"`
+	// Parent reference to Book (from the AIP resource pattern).
+	BookID string `gorm:"column:book_id;not null;index:idx_pages_book_id_id,priority:1" json:"book_id" validate:"required"`
+	Book   *Book  `gorm:"foreignKey:BookID;constraint:OnDelete:CASCADE" json:"book,omitempty"`
+}
+
+func (*Page) TableName() string { return "catalog.pages" }

@@ -52,6 +52,7 @@ A booking of a room for a time.
 | `room` | `CHAR(26)` | not null |
 | `start_time` | `TIMESTAMPTZ` | not null |
 | `end_time` | `TIMESTAMPTZ` | not null |
+| `setup_window` | `TEXT` | nullable |
 
 ### `RoomDay` → `room_days`
 

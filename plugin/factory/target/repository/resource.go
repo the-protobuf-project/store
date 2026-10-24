@@ -11,6 +11,7 @@ package repository
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"google.golang.org/genproto/googleapis/api/annotations"
@@ -100,6 +101,12 @@ type patternSegment struct {
 type ancestorFK struct {
 	Column string // "property_id"
 	Index  int    // position in the split parent name
+	// Nested is the ancestor's resource when the ancestor is itself nested
+	// (Index > 0) and generated in this database. Its row is keyed by a
+	// surrogate of its own rather than by its id (see nameKeyed), so the
+	// column is filled by looking the ancestor up by name; nil when the bare
+	// id is the key.
+	Nested *resource
 }
 
 // columnPlan buckets a resource's columns by the role each plays in the
@@ -107,7 +114,11 @@ type ancestorFK struct {
 type columnPlan struct {
 	PK   *schema.Column // synthesized ULID id
 	Name *schema.Column // the AIP name column (IDENTIFIER)
-	Etag *schema.Column // optimistic-concurrency column, when present
+	// NameKey is the unique column holding the full resource name ("name"),
+	// which finds a nested resource's row (see nameKeyed); nil when there is
+	// none.
+	NameKey *schema.Column
+	Etag    *schema.Column // optimistic-concurrency column, when present
 	// DeleteTime is the AIP-164 soft-delete column: an OUTPUT_ONLY
 	// google.protobuf.Timestamp named delete_time. When present, Delete marks
 	// the row instead of removing it, Undelete clears the mark, and Purge
@@ -174,7 +185,11 @@ func planResources(pb *pbIndex, db *schema.Database) (map[*schema.Table]*resourc
 		}
 		for i, seg := range r.Segments[:len(r.Segments)-1] {
 			if columnByName(r.Table, seg.Var+"_id") != nil {
-				r.AncestorFKs = append(r.AncestorFKs, ancestorFK{Column: seg.Var + "_id", Index: i})
+				a := ancestorFK{Column: seg.Var + "_id", Index: i}
+				if anc := byLeaf[seg.Var]; i > 0 && anc != nil && anc.nameKeyed() && slices.Equal(anc.Segments, r.Segments[:i+1]) {
+					a.Nested = anc
+				}
+				r.AncestorFKs = append(r.AncestorFKs, a)
 			}
 		}
 	}
@@ -324,9 +339,24 @@ func parsePattern(pattern string) ([]patternSegment, error) {
 	return segs, nil
 }
 
+// nameKeyed reports whether r's rows are found by their resource name rather
+// than by their id. A nested resource's id is unique only under its parent --
+// two calendars can each hold an event "hours.ics" -- so its row cannot be
+// keyed by the id: the name, which is unique, finds it, and a row created with
+// a caller-chosen id gets a surrogate key of its own. Rows stored before this
+// keyed by the bare id stay readable, since their name finds them too.
+func (r *resource) nameKeyed() bool {
+	return len(r.Segments) > 1 && r.Cols.NameKey != nil
+}
+
 // planColumns classifies t's columns for the generated CRUD bodies.
 func planColumns(t *schema.Table) columnPlan {
 	p := bucketColumns(t)
+	for _, c := range t.Columns {
+		if c.Name == "name" && c.Source != nil && !c.List && (c.Unique || c.PrimaryKey) {
+			p.NameKey = c
+		}
+	}
 	if p.DeleteTime != nil {
 		for _, c := range t.Columns {
 			if c.Name == "expire_time" && isTimestamp(c) && outputOnly(c) {

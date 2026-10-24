@@ -22,8 +22,10 @@ import (
 	"example.com/test/genql/projdemov1ql/bookingsql"
 	"example.com/test/genql/projdemov1ql/roomsql"
 	"github.com/the-protobuf-project/runtime-go/network/graphql"
+	"google.golang.org/genproto/googleapis/type/interval"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"strings"
 	"time"
 )
 
@@ -70,6 +72,36 @@ func jsonToStruct(r *json.RawMessage) *structpb.Struct {
 	return s
 }
 
+// intervalToStr / strToInterval cross a google.type.Interval as text: both
+// ends RFC 3339 in UTC joined by "/", as the gorm converter stores it.
+func intervalToStr(iv *interval.Interval) string {
+	if iv == nil {
+		return ""
+	}
+	end := func(ts *timestamppb.Timestamp) string {
+		if ts == nil {
+			return ""
+		}
+		return ts.AsTime().UTC().Format(time.RFC3339Nano)
+	}
+	return end(iv.GetStartTime()) + "/" + end(iv.GetEndTime())
+}
+
+func strToInterval(s string) *interval.Interval {
+	a, b, ok := strings.Cut(s, "/")
+	if !ok {
+		return nil
+	}
+	end := func(v string) *timestamppb.Timestamp {
+		t, err := time.Parse(time.RFC3339Nano, v)
+		if v == "" || err != nil {
+			return nil
+		}
+		return timestamppb.New(t)
+	}
+	return &interval.Interval{StartTime: end(a), EndTime: end(b)}
+}
+
 // strPtrsToSlice / strSliceToPtrs cross the text[] boundary: the client
 // represents array elements as nullable (*string).
 func strPtrsToSlice(in []*string) []string {
@@ -107,6 +139,9 @@ func bookingToCreateInput(in *projdemov1.Booking) bookingsql.CreateInput {
 	}
 	ci.StartTime = tsToStr(in.GetStartTime())
 	ci.EndTime = tsToStr(in.GetEndTime())
+	if v := intervalToStr(in.GetSetupWindow()); v != "" {
+		ci.SetupWindow = v
+	}
 	return ci
 }
 
@@ -119,6 +154,11 @@ func bookingToUpdatePatch(merged *projdemov1.Booking) bookingsql.UpdateInput {
 	patch.Room = graphql.Value(repox.LastSegment(merged.GetRoom()))
 	patch.StartTime = graphql.Value(tsToStr(merged.GetStartTime()))
 	patch.EndTime = graphql.Value(tsToStr(merged.GetEndTime()))
+	if v := intervalToStr(merged.GetSetupWindow()); v != "" {
+		patch.SetupWindow = graphql.Value(v)
+	} else {
+		patch.SetupWindow = graphql.Null[string]()
+	}
 	return patch
 }
 
@@ -135,6 +175,7 @@ func bookingFromRow(row *bookingsql.ProjdemoV1Bookings) *projdemov1.Booking {
 	}
 	out.StartTime = strToTs(row.StartTime)
 	out.EndTime = strToTs(row.EndTime)
+	out.SetupWindow = strToInterval(repox.Deref(row.SetupWindow))
 	return out
 }
 

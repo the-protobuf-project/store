@@ -65,6 +65,9 @@ model Booking {
   /// When it ends.
   endTime DateTime @v1.Timestamptz(6) @map("end_time")
 
+  /// When the room is set up for it, which may start before and end after the booking. A plain Interval column, stored as "start/end" text, unlike the projection's range column.
+  setupWindow String? @map("setup_window")
+
   /// Index on [room].
   @@index([roomID])
   /// Maps the model to the "bookings" table in the database.
@@ -107,8 +110,8 @@ model RoomDay {
 
   /// Unique constraint on [room, day].
   @@unique([room, day])
-  /// Composite index on [floor, day].
-  @@index([floor, day])
+  /// Composite index on [floor, day, id].
+  @@index([floor, day, id])
   /// GIN index: tag containment (@>) cannot use a B-tree.
   @@index([kinds], type: Gin)
   /// GIN index: jsonb containment (@>) on attribute paths cannot use a B-tree.

@@ -16,10 +16,12 @@ package search
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/lib/pq"
 	"github.com/the-protobuf-project/store/examples/search/gen/pb/searchdemov1"
+	"google.golang.org/genproto/googleapis/type/interval"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -66,6 +68,9 @@ func BookingToProto(m *Booking) *searchdemov1.Booking {
 	out.Name = m.Name
 	out.StartTime = goValToTs(m.StartTime)
 	out.EndTime = goValToTs(m.EndTime)
+	if m.SetupWindow != nil {
+		out.SetupWindow = goToInterval(*m.SetupWindow)
+	}
 	return out
 }
 
@@ -81,6 +86,9 @@ func BookingFromProto(pb *searchdemov1.Booking) *Booking {
 	m.Name = pb.GetName()
 	m.StartTime = tsToGoVal(pb.GetStartTime())
 	m.EndTime = tsToGoVal(pb.GetEndTime())
+	if v := intervalToGo(pb.GetSetupWindow()); v != "" {
+		m.SetupWindow = &v
+	}
 	return m
 }
 
@@ -134,6 +142,37 @@ func goValToTs(t time.Time) *timestamppb.Timestamp {
 		return nil
 	}
 	return timestamppb.New(t)
+}
+
+// intervalToGo writes a google.type.Interval as text: both ends in RFC 3339,
+// UTC, joined by "/", ISO 8601's interval form. An unbounded end is empty.
+func intervalToGo(iv *interval.Interval) string {
+	if iv == nil {
+		return ""
+	}
+	end := func(ts *timestamppb.Timestamp) string {
+		if ts == nil {
+			return ""
+		}
+		return ts.AsTime().UTC().Format(time.RFC3339Nano)
+	}
+	return end(iv.GetStartTime()) + "/" + end(iv.GetEndTime())
+}
+
+// goToInterval reads intervalToGo's text back; anything else is nil.
+func goToInterval(s string) *interval.Interval {
+	a, b, ok := strings.Cut(s, "/")
+	if !ok {
+		return nil
+	}
+	end := func(v string) *timestamppb.Timestamp {
+		t, err := time.Parse(time.RFC3339Nano, v)
+		if v == "" || err != nil {
+			return nil
+		}
+		return timestamppb.New(t)
+	}
+	return &interval.Interval{StartTime: end(a), EndTime: end(b)}
 }
 
 // structToJSON maps a proto struct onto a nullable JSONB value.

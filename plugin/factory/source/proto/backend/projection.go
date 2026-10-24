@@ -18,6 +18,7 @@ package backend
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/the-protobuf-project/protokit/naming"
@@ -152,6 +153,13 @@ func appendProjection(ir *schema.IR, p *facets.Projection) error {
 		}
 		if len(cols) == 0 {
 			return fmt.Errorf("an index needs fields or an expression")
+		}
+		if !idx.GetUnique() && !slices.Contains(cols, ProjectionKeyColumn) {
+			// A page index: the key ends it, so a search with equality on
+			// its leading columns pages in the order of the rest (and then
+			// the key, every order's tiebreak) straight from the index,
+			// without sorting the matches.
+			cols = append(cols, ProjectionKeyColumn)
 		}
 		t.Indexes = append(t.Indexes, &schema.Index{Name: idx.GetIndex(), Columns: cols, Unique: idx.GetUnique()})
 	}

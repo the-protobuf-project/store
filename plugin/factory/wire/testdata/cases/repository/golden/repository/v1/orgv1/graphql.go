@@ -85,6 +85,7 @@ func (r *GraphQLMemberRepository) Create(ctx context.Context, parent string, in 
 		return nil, err
 	}
 	id := repox.NewULID()
+	rowID := id
 	if in.GetName() != "" {
 		ids, err := repox.SplitName(in.GetName(), "organisations", "members")
 		if err != nil {
@@ -99,6 +100,9 @@ func (r *GraphQLMemberRepository) Create(ctx context.Context, parent string, in 
 	}
 	in = proto.Clone(in).(*orgv1.Member)
 	in.Name = FormatMemberName(parentIDs[0], id)
+	// The id is unique only under the parent, so the row is keyed by a
+	// surrogate of its own: the id itself only when it was minted here.
+	id = rowID
 	if h := r.Hooks.BeforeCreate; h != nil {
 		if err := h(ctx, in); err != nil {
 			return nil, err
@@ -137,11 +141,37 @@ func (r *GraphQLMemberRepository) Create(ctx context.Context, parent string, in 
 
 // Get returns the record addressed by its resource name.
 func (r *GraphQLMemberRepository) Get(ctx context.Context, name string) (*orgv1.Member, error) {
-	ids, err := repox.SplitName(name, "organisations", "members")
+	row, err := r.find(ctx, name)
 	if err != nil {
 		return nil, err
 	}
-	return r.get(ctx, ids[len(ids)-1])
+	return r.toProto(ctx, row, nil)
+}
+
+// rowID returns the surrogate key of the row named name, looked up by name:
+// the id is unique only under the parent, so it is not the key.
+// repox.ErrNotFound when there is no such row.
+func (r *GraphQLMemberRepository) rowID(ctx context.Context, name string) (string, error) {
+	row, err := r.find(ctx, name)
+	if err != nil {
+		return "", err
+	}
+	return row.Id, nil
+}
+
+// find reads the row named name; repox.ErrNotFound when there is none.
+func (r *GraphQLMemberRepository) find(ctx context.Context, name string) (*membersql.OrgV1Members, error) {
+	if _, err := repox.SplitName(name, "organisations", "members"); err != nil {
+		return nil, err
+	}
+	row, err := r.Svc.Query.OrgV1.Members.Find(ctx, membersql.List().Where(membersql.Name.Eq(name)))
+	if err != nil {
+		return nil, mapGraphQLErr(err)
+	}
+	if row == nil {
+		return nil, repox.ErrNotFound
+	}
+	return row, nil
 }
 
 // get loads by surrogate key — the private read every generated method
@@ -265,18 +295,11 @@ func (r *GraphQLMemberRepository) Update(ctx context.Context, in *orgv1.Member, 
 // update is Update's write, with the server-owned fields outputPaths names
 // (UpdateWithOutputOnly) merged into its patch.
 func (r *GraphQLMemberRepository) update(ctx context.Context, in *orgv1.Member, paths, outputPaths []string) (*orgv1.Member, error) {
-	ids, err := repox.SplitName(in.GetName(), "organisations", "members")
+	row, err := r.find(ctx, in.GetName())
 	if err != nil {
 		return nil, err
 	}
-	id := ids[len(ids)-1]
-	row, err := r.Svc.Query.OrgV1.Members.Get(ctx, id)
-	if err != nil {
-		return nil, mapGraphQLErr(err)
-	}
-	if row == nil {
-		return nil, repox.ErrNotFound
-	}
+	id := row.Id
 	var staleWindow string
 	var staleDateRange string
 	existingPB := memberFromRow(row)
@@ -359,6 +382,7 @@ func (r *GraphQLMemberRepository) newInput(parent string, in *orgv1.Member) (mem
 		return ci, nil, err
 	}
 	id := repox.NewULID()
+	rowID := id
 	if in.GetName() != "" {
 		ids, err := repox.SplitName(in.GetName(), "organisations", "members")
 		if err != nil {
@@ -373,6 +397,7 @@ func (r *GraphQLMemberRepository) newInput(parent string, in *orgv1.Member) (mem
 	}
 	in = proto.Clone(in).(*orgv1.Member)
 	in.Name = FormatMemberName(parentIDs[0], id)
+	id = rowID // keyed as Create keys it
 	ci = memberToCreateInput(in)
 	ci.Id = id
 	ci.OrganisationId = parentIDs[0]
@@ -512,8 +537,7 @@ func (r *GraphQLMemberRepository) purgeOps(ctx context.Context, dtx *repox.Ops, 
 
 // Delete removes the record addressed by its resource name.
 func (r *GraphQLMemberRepository) Delete(ctx context.Context, name string) error {
-	ids, err := repox.SplitName(name, "organisations", "members")
-	if err != nil {
+	if _, err := repox.SplitName(name, "organisations", "members"); err != nil {
 		return err
 	}
 	if h := r.Hooks.BeforeDelete; h != nil {
@@ -521,7 +545,10 @@ func (r *GraphQLMemberRepository) Delete(ctx context.Context, name string) error
 			return err
 		}
 	}
-	id := ids[len(ids)-1]
+	id, err := r.rowID(ctx, name)
+	if err != nil {
+		return err
+	}
 	return r.remove(ctx, id)
 }
 
@@ -624,6 +651,15 @@ func (r *GraphQLOrganisationRepository) Get(ctx context.Context, name string) (*
 		return nil, err
 	}
 	return r.get(ctx, ids[len(ids)-1])
+}
+
+// rowID returns the surrogate key of the row named name: its bare id.
+func (r *GraphQLOrganisationRepository) rowID(_ context.Context, name string) (string, error) {
+	ids, err := repox.SplitName(name, "organisations")
+	if err != nil {
+		return "", err
+	}
+	return ids[len(ids)-1], nil
 }
 
 // get loads by surrogate key — the private read every generated method
@@ -927,11 +963,10 @@ func (r *GraphQLOrganisationRepository) UpdateOutputOnly(ctx context.Context, in
 	if len(paths) == 0 {
 		return nil, fmt.Errorf("%w: UpdateOutputOnly needs the fields to write", repox.ErrInvalidArgument)
 	}
-	ids, err := repox.SplitName(in.GetName(), "organisations")
+	id, err := r.rowID(ctx, in.GetName())
 	if err != nil {
 		return nil, err
 	}
-	id := ids[len(ids)-1]
 	patch := organisationToOutputPatch(in, paths)
 	patch.Etag = graphql.Value(repox.NewULID())
 	patch.UpdateTime = graphql.Value(tsToStr(timestamppb.New(time.Now().UTC())))
@@ -953,8 +988,7 @@ func (r *GraphQLOrganisationRepository) UpdateOutputOnly(ctx context.Context, in
 
 // Delete removes the record addressed by its resource name.
 func (r *GraphQLOrganisationRepository) Delete(ctx context.Context, name string) error {
-	ids, err := repox.SplitName(name, "organisations")
-	if err != nil {
+	if _, err := repox.SplitName(name, "organisations"); err != nil {
 		return err
 	}
 	if h := r.Hooks.BeforeDelete; h != nil {
@@ -962,7 +996,10 @@ func (r *GraphQLOrganisationRepository) Delete(ctx context.Context, name string)
 			return err
 		}
 	}
-	id := ids[len(ids)-1]
+	id, err := r.rowID(ctx, name)
+	if err != nil {
+		return err
+	}
 	return r.remove(ctx, id)
 }
 
@@ -1050,6 +1087,15 @@ func (r *GraphQLUserRepository) Get(ctx context.Context, name string) (*orgv1.Us
 		return nil, err
 	}
 	return r.get(ctx, ids[len(ids)-1])
+}
+
+// rowID returns the surrogate key of the row named name: its bare id.
+func (r *GraphQLUserRepository) rowID(_ context.Context, name string) (string, error) {
+	ids, err := repox.SplitName(name, "users")
+	if err != nil {
+		return "", err
+	}
+	return ids[len(ids)-1], nil
 }
 
 // get loads by surrogate key — the private read every generated method
@@ -1247,8 +1293,7 @@ func (r *GraphQLUserRepository) updateOps(ctx context.Context, ops *repox.Ops, i
 
 // Delete removes the record addressed by its resource name.
 func (r *GraphQLUserRepository) Delete(ctx context.Context, name string) error {
-	ids, err := repox.SplitName(name, "users")
-	if err != nil {
+	if _, err := repox.SplitName(name, "users"); err != nil {
 		return err
 	}
 	if h := r.Hooks.BeforeDelete; h != nil {
@@ -1256,7 +1301,10 @@ func (r *GraphQLUserRepository) Delete(ctx context.Context, name string) error {
 			return err
 		}
 	}
-	id := ids[len(ids)-1]
+	id, err := r.rowID(ctx, name)
+	if err != nil {
+		return err
+	}
 	return r.remove(ctx, id)
 }
 
@@ -1290,10 +1338,23 @@ var _ UserRepository = (*GraphQLUserRepository)(nil)
 type graphQLBatch struct {
 	u   *repox.Unit
 	svc *genql.Service
+	// keys holds the row key of every record this batch creates, by name: a
+	// later write in the batch finds its row here, since it is not stored
+	// until the batch's request runs.
+	keys map[string]string
 }
 
 // Commit applies the Unit's writes; see repox.Unit.Commit.
 func (b *graphQLBatch) Commit(ctx context.Context) error { return b.u.Commit(ctx) }
+
+// rowID returns the row key of the record named name: one this batch creates,
+// else what resolve (a repository's rowID) finds.
+func (b *graphQLBatch) rowID(ctx context.Context, name string, resolve func(context.Context, string) (string, error)) (string, error) {
+	if id, ok := b.keys[name]; ok {
+		return id, nil
+	}
+	return resolve(ctx, name)
+}
 
 // CreateMember queues a create and returns the name the record will have.
 func (b *graphQLBatch) CreateMember(parent string, in *orgv1.Member) (string, error) {
@@ -1302,6 +1363,10 @@ func (b *graphQLBatch) CreateMember(parent string, in *orgv1.Member) (string, er
 	if err != nil {
 		return "", err
 	}
+	if b.keys == nil {
+		b.keys = map[string]string{}
+	}
+	b.keys[named.GetName()] = ci.Id
 	queueMemberReferences(b.u, named, nil)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		return r.insertOps(ctx, ops, named, ci)
@@ -1313,15 +1378,18 @@ func (b *graphQLBatch) CreateMember(parent string, in *orgv1.Member) (string, er
 // UpdateMember queues Update; in.Etag, when set, guards it inside the
 // batch's request (see updateOps).
 func (b *graphQLBatch) UpdateMember(in *orgv1.Member, paths []string) {
-	ids, err := repox.SplitName(in.GetName(), "organisations", "members")
-	if err != nil {
+	if _, err := repox.SplitName(in.GetName(), "organisations", "members"); err != nil {
 		b.u.Fail(err)
 		return
 	}
 	r := &GraphQLMemberRepository{Svc: b.svc}
 	queueMemberReferences(b.u, in, paths)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
-		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, nil)
+		id, err := b.rowID(ctx, in.GetName(), r.rowID)
+		if err != nil {
+			return nil, err
+		}
+		return r.updateOps(ctx, ops, id, in, paths, nil)
 	})
 	b.u.Record(repox.Change{Type: "org.v1/Member", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getMember)})
 }
@@ -1329,15 +1397,20 @@ func (b *graphQLBatch) UpdateMember(in *orgv1.Member, paths []string) {
 // DeleteMember queues the record's removal for good. A record already
 // gone is not an error.
 func (b *graphQLBatch) DeleteMember(name string) {
-	ids, err := repox.SplitName(name, "organisations", "members")
-	if err != nil {
+	if _, err := repox.SplitName(name, "organisations", "members"); err != nil {
 		b.u.Fail(err)
 		return
 	}
-	id := ids[len(ids)-1]
-	queueMemberDelete(b.u, name, true)
 	r := &GraphQLMemberRepository{Svc: b.svc}
+	queueMemberDelete(b.u, name, true)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		id, err := b.rowID(ctx, name, r.rowID)
+		if errors.Is(err, repox.ErrNotFound) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
 		return r.purgeOps(ctx, ops, id)
 	})
 	b.u.Record(repox.Change{Type: "org.v1/Member", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getMember)})
@@ -1350,6 +1423,10 @@ func (b *graphQLBatch) CreateOrganisation(in *orgv1.Organisation) (string, error
 	if err != nil {
 		return "", err
 	}
+	if b.keys == nil {
+		b.keys = map[string]string{}
+	}
+	b.keys[named.GetName()] = ci.Id
 	queueOrganisationReferences(b.u, named, nil)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		return r.insertOps(ctx, ops, named, ci)
@@ -1361,15 +1438,18 @@ func (b *graphQLBatch) CreateOrganisation(in *orgv1.Organisation) (string, error
 // UpdateOrganisation queues Update; in.Etag, when set, guards it inside the
 // batch's request (see updateOps).
 func (b *graphQLBatch) UpdateOrganisation(in *orgv1.Organisation, paths []string) {
-	ids, err := repox.SplitName(in.GetName(), "organisations")
-	if err != nil {
+	if _, err := repox.SplitName(in.GetName(), "organisations"); err != nil {
 		b.u.Fail(err)
 		return
 	}
 	r := &GraphQLOrganisationRepository{Svc: b.svc}
 	queueOrganisationReferences(b.u, in, paths)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
-		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, nil)
+		id, err := b.rowID(ctx, in.GetName(), r.rowID)
+		if err != nil {
+			return nil, err
+		}
+		return r.updateOps(ctx, ops, id, in, paths, nil)
 	})
 	b.u.Record(repox.Change{Type: "org.v1/Organisation", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getOrganisation)})
 }
@@ -1377,15 +1457,18 @@ func (b *graphQLBatch) UpdateOrganisation(in *orgv1.Organisation, paths []string
 // UpdateOrganisationWithOutputOnly queues UpdateWithOutputOnly; in.Etag, when
 // set, guards it inside the batch's request, as UpdateOrganisation's does.
 func (b *graphQLBatch) UpdateOrganisationWithOutputOnly(in *orgv1.Organisation, paths, outputPaths []string) {
-	ids, err := repox.SplitName(in.GetName(), "organisations")
-	if err != nil {
+	if _, err := repox.SplitName(in.GetName(), "organisations"); err != nil {
 		b.u.Fail(err)
 		return
 	}
 	r := &GraphQLOrganisationRepository{Svc: b.svc}
 	queueOrganisationReferences(b.u, in, paths)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
-		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, outputPaths)
+		id, err := b.rowID(ctx, in.GetName(), r.rowID)
+		if err != nil {
+			return nil, err
+		}
+		return r.updateOps(ctx, ops, id, in, paths, outputPaths)
 	})
 	b.u.Record(repox.Change{Type: "org.v1/Organisation", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getOrganisation)})
 }
@@ -1397,24 +1480,31 @@ func (b *graphQLBatch) UpdateOrganisationOutputOnly(in *orgv1.Organisation, path
 		b.u.Fail(fmt.Errorf("%w: UpdateOutputOnly needs the fields to write", repox.ErrInvalidArgument))
 		return
 	}
-	ids, err := repox.SplitName(in.GetName(), "organisations")
-	if err != nil {
+	if _, err := repox.SplitName(in.GetName(), "organisations"); err != nil {
 		b.u.Fail(err)
 		return
 	}
-	id := ids[len(ids)-1]
+	r := &GraphQLOrganisationRepository{Svc: b.svc}
 	patch := organisationToOutputPatch(in, paths)
 	patch.Etag = graphql.Value(repox.NewULID())
 	patch.UpdateTime = graphql.Value(tsToStr(timestamppb.New(time.Now().UTC())))
 	b.u.Record(repox.Change{Type: "org.v1/Organisation", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getOrganisation)})
 	if etag := in.GetEtag(); etag != "" {
 		b.u.QueueGraphQLAhead(func(ctx context.Context) error {
-			_, err := b.svc.Mutation.OrgV1.Organisations.UpdateIfMatch(ctx, id, patch, organisationsql.Etag.Eq(etag))
+			id, err := b.rowID(ctx, in.GetName(), r.rowID)
+			if err != nil {
+				return err
+			}
+			_, err = b.svc.Mutation.OrgV1.Organisations.UpdateIfMatch(ctx, id, patch, organisationsql.Etag.Eq(etag))
 			return mapGraphQLErr(err)
 		})
 		return
 	}
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		id, err := b.rowID(ctx, in.GetName(), r.rowID)
+		if err != nil {
+			return nil, err
+		}
 		ops.Add(b.svc.Mutation.OrgV1.Organisations.UpdateOp(id, patch, new(organisationsql.UpdateOrgV1OrganisationsByIdResponse)))
 		return nil, nil
 	})
@@ -1423,15 +1513,20 @@ func (b *graphQLBatch) UpdateOrganisationOutputOnly(in *orgv1.Organisation, path
 // DeleteOrganisation queues the record's removal for good. A record already
 // gone is not an error.
 func (b *graphQLBatch) DeleteOrganisation(name string) {
-	ids, err := repox.SplitName(name, "organisations")
-	if err != nil {
+	if _, err := repox.SplitName(name, "organisations"); err != nil {
 		b.u.Fail(err)
 		return
 	}
-	id := ids[len(ids)-1]
-	queueOrganisationDelete(b.u, name, true)
 	r := &GraphQLOrganisationRepository{Svc: b.svc}
+	queueOrganisationDelete(b.u, name, true)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		id, err := b.rowID(ctx, name, r.rowID)
+		if errors.Is(err, repox.ErrNotFound) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
 		return r.purgeOps(ctx, ops, id)
 	})
 	b.u.Record(repox.Change{Type: "org.v1/Organisation", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getOrganisation)})
@@ -1444,6 +1539,10 @@ func (b *graphQLBatch) CreateUser(in *orgv1.User) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if b.keys == nil {
+		b.keys = map[string]string{}
+	}
+	b.keys[named.GetName()] = ci.Id
 	queueUserReferences(b.u, named, nil)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		ops.Add(b.svc.Mutation.OrgV1.Users.CreateOp(ci, new(usersql.InsertOrgV1UsersResponse)))
@@ -1456,15 +1555,18 @@ func (b *graphQLBatch) CreateUser(in *orgv1.User) (string, error) {
 // UpdateUser queues Update; in.Etag, when set, guards it inside the
 // batch's request (see updateOps).
 func (b *graphQLBatch) UpdateUser(in *orgv1.User, paths []string) {
-	ids, err := repox.SplitName(in.GetName(), "users")
-	if err != nil {
+	if _, err := repox.SplitName(in.GetName(), "users"); err != nil {
 		b.u.Fail(err)
 		return
 	}
 	r := &GraphQLUserRepository{Svc: b.svc}
 	queueUserReferences(b.u, in, paths)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
-		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, nil)
+		id, err := b.rowID(ctx, in.GetName(), r.rowID)
+		if err != nil {
+			return nil, err
+		}
+		return r.updateOps(ctx, ops, id, in, paths, nil)
 	})
 	b.u.Record(repox.Change{Type: "org.v1/User", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getUser)})
 }
@@ -1472,14 +1574,20 @@ func (b *graphQLBatch) UpdateUser(in *orgv1.User, paths []string) {
 // DeleteUser queues the record's removal for good. A record already
 // gone is not an error.
 func (b *graphQLBatch) DeleteUser(name string) {
-	ids, err := repox.SplitName(name, "users")
-	if err != nil {
+	if _, err := repox.SplitName(name, "users"); err != nil {
 		b.u.Fail(err)
 		return
 	}
-	id := ids[len(ids)-1]
+	r := &GraphQLUserRepository{Svc: b.svc}
 	queueUserDelete(b.u, name, true)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		id, err := b.rowID(ctx, name, r.rowID)
+		if errors.Is(err, repox.ErrNotFound) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
 		ops.Add(b.svc.Mutation.OrgV1.Users.DeleteOp(id, new(usersql.DeleteOrgV1UsersByIdResponse)))
 		return nil, nil
 	})

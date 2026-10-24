@@ -81,7 +81,9 @@ func (e *OpenSearchEngine) Query(conds []Condition) (map[string]any, error) {
 
 // Sort resolves an order_by string into an OpenSearch sort and the order
 // terms it came from (the primary key appended, as for every engine). Missing
-// values sort as PostgreSQL places NULLs: last ascending, first descending.
+// values sort as PostgreSQL places NULLs: last ascending, first descending. A
+// declared JSON attribute path sorts by its typed copy
+// (<column>_typed.<path>).
 func (e *OpenSearchEngine) Sort(orderBy string) ([]any, []OrderTerm, error) {
 	terms, err := OrderTerms(e.spec, orderBy)
 	if err != nil {
@@ -93,7 +95,11 @@ func (e *OpenSearchEngine) Sort(orderBy string) ([]any, []OrderTerm, error) {
 		if t.Desc {
 			order, missing = "desc", "_first"
 		}
-		out = append(out, map[string]any{t.Column: map[string]any{"order": order, "missing": missing}})
+		field := t.Column
+		if len(t.Path) > 0 {
+			field = t.Column + OpenSearchTypedSuffix + "." + strings.Join(t.Path, ".")
+		}
+		out = append(out, map[string]any{field: map[string]any{"order": order, "missing": missing}})
 	}
 	return out, terms, nil
 }

@@ -83,6 +83,31 @@ func BookFromProto(pb *catalogv1.Book) *Book {
 	return m
 }
 
+// PageToProto converts the stored row (with its belongs-to associations,
+// when preloaded) to its proto message. Nil in, nil out.
+func PageToProto(m *Page) *catalogv1.Page {
+	if m == nil {
+		return nil
+	}
+	out := &catalogv1.Page{}
+	out.Name = m.Name
+	out.Text = fromPtr(m.Text)
+	return out
+}
+
+// PageFromProto maps the proto message's data fields onto a fresh row.
+// It never invents keys or relations: primary keys, resource references, and
+// sub-row graph wiring stay with the caller. Nil in, nil out.
+func PageFromProto(pb *catalogv1.Page) *Page {
+	if pb == nil {
+		return nil
+	}
+	m := &Page{}
+	m.Name = pb.GetName()
+	m.Text = toPtr(pb.GetText())
+	return m
+}
+
 // toPtr returns a pointer to v, or nil for the zero value — a nullable column
 // stores absence, not the proto zero.
 func toPtr[T comparable](v T) *T {

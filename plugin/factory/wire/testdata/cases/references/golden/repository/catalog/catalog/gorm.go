@@ -61,6 +61,7 @@ func (r *GormBookRepository) Create(ctx context.Context, parent string, in *refd
 		return nil, err
 	}
 	id := repox.NewULID()
+	rowID := id
 	if in.GetName() != "" {
 		ids, err := repox.SplitName(in.GetName(), "shelves", "books")
 		if err != nil {
@@ -75,6 +76,9 @@ func (r *GormBookRepository) Create(ctx context.Context, parent string, in *refd
 	}
 	in = proto.Clone(in).(*refdemov1.Book)
 	in.Name = FormatBookName(parentIDs[0], id)
+	// The id is unique only under the parent, so the row is keyed by a
+	// surrogate of its own: the id itself only when it was minted here.
+	id = rowID
 	if h := r.Hooks.BeforeCreate; h != nil {
 		if err := h(ctx, in); err != nil {
 			return nil, err
@@ -88,23 +92,32 @@ func (r *GormBookRepository) Create(ctx context.Context, parent string, in *refd
 	if err := catalog.NewBookStore(r.DB).Create(ctx, m); err != nil {
 		return nil, repox.MapGormErr(err)
 	}
-	return r.get(ctx, id)
+	return r.get(ctx, m.Name)
 }
 
 // Get returns the record addressed by its resource name.
 func (r *GormBookRepository) Get(ctx context.Context, name string) (*refdemov1.Book, error) {
-	ids, err := repox.SplitName(name, "shelves", "books")
+	key, err := r.rowKey(name)
 	if err != nil {
 		return nil, err
 	}
-	return r.get(ctx, ids[len(ids)-1])
+	return r.get(ctx, key)
 }
 
-// get loads by surrogate key — the private read every generated method re-reads
-// through, so Tier-2 overrides of Get never re-enter generated writes.
-func (r *GormBookRepository) get(ctx context.Context, id string) (*refdemov1.Book, error) {
+// rowKey validates name and returns what its row is found by: the name
+// itself, because the id is unique only under the parent.
+func (r *GormBookRepository) rowKey(name string) (string, error) {
+	if _, err := repox.SplitName(name, "shelves", "books"); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+// get loads by row key (rowKey) — the private read every generated method
+// re-reads through, so Tier-2 overrides of Get never re-enter generated writes.
+func (r *GormBookRepository) get(ctx context.Context, key string) (*refdemov1.Book, error) {
 	var m catalog.Book
-	if err := r.DB.WithContext(ctx).First(&m, "id = ?", id).Error; err != nil {
+	if err := r.DB.WithContext(ctx).First(&m, "name = ?", key).Error; err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	return r.toProto(ctx, &m)
@@ -199,31 +212,29 @@ var bookColumns = map[string][]string{
 // Update persists the masked fields of in; an empty mask replaces every
 // mutable field. The write happens in one transaction guarded by in.Etag.
 func (r *GormBookRepository) Update(ctx context.Context, in *refdemov1.Book, paths []string) (*refdemov1.Book, error) {
-	ids, err := repox.SplitName(in.GetName(), "shelves", "books")
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		return nil, err
 	}
-	id := ids[len(ids)-1]
-	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, id, in, paths, nil) })
+	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, key, in, paths, nil) })
 	if err != nil {
 		return nil, repox.MapGormErr(err)
 	}
-	return r.get(ctx, id)
+	return r.get(ctx, key)
 }
 
 // UpdateWithOutputOnly is Update plus the server-owned fields outputPaths
 // names, in Update's transaction and under its etag guard.
 func (r *GormBookRepository) UpdateWithOutputOnly(ctx context.Context, in *refdemov1.Book, paths, outputPaths []string) (*refdemov1.Book, error) {
-	ids, err := repox.SplitName(in.GetName(), "shelves", "books")
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		return nil, err
 	}
-	id := ids[len(ids)-1]
-	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, id, in, paths, outputPaths) })
+	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, key, in, paths, outputPaths) })
 	if err != nil {
 		return nil, repox.MapGormErr(err)
 	}
-	return r.get(ctx, id)
+	return r.get(ctx, key)
 }
 
 // updateTx is Update's write inside tx, which a Batch shares with other
@@ -231,11 +242,13 @@ func (r *GormBookRepository) UpdateWithOutputOnly(ctx context.Context, in *refde
 // waits for this transaction and then sees the etag it wrote, so two writers
 // holding the same etag cannot both pass the guard. outputPaths names the
 // server-owned fields written alongside (UpdateWithOutputOnly); nil for Update.
-func (r *GormBookRepository) updateTx(ctx context.Context, tx *gorm.DB, id string, in *refdemov1.Book, paths, outputPaths []string) error {
+func (r *GormBookRepository) updateTx(ctx context.Context, tx *gorm.DB, key string, in *refdemov1.Book, paths, outputPaths []string) error {
 	var existing catalog.Book
-	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "id = ?", id).Error; err != nil {
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "name = ?", key).Error; err != nil {
 		return err
 	}
+	id := existing.ID
+	_ = id
 	if in.GetEtag() != "" && existing.Etag != nil && *existing.Etag != in.GetEtag() {
 		return repox.ErrConflict
 	}
@@ -265,7 +278,7 @@ func (r *GormBookRepository) updateTx(ctx context.Context, tx *gorm.DB, id strin
 // UpdateOutputOnly persists the server-owned fields of in that paths names, in
 // one transaction guarded by in.Etag.
 func (r *GormBookRepository) UpdateOutputOnly(ctx context.Context, in *refdemov1.Book, paths []string) (*refdemov1.Book, error) {
-	ids, err := repox.SplitName(in.GetName(), "shelves", "books")
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		return nil, err
 	}
@@ -273,7 +286,7 @@ func (r *GormBookRepository) UpdateOutputOnly(ctx context.Context, in *refdemov1
 	if err != nil {
 		return nil, repox.MapGormErr(err)
 	}
-	return r.get(ctx, ids[len(ids)-1])
+	return r.get(ctx, key)
 }
 
 // updateOutputOnlyTx is UpdateOutputOnly's write inside tx, which a Batch
@@ -282,16 +295,15 @@ func (r *GormBookRepository) updateOutputOnlyTx(ctx context.Context, tx *gorm.DB
 	if len(paths) == 0 {
 		return fmt.Errorf("%w: UpdateOutputOnly needs the fields to write", repox.ErrInvalidArgument)
 	}
-	ids, err := repox.SplitName(in.GetName(), "shelves", "books")
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		return err
 	}
-	id := ids[len(ids)-1]
 	{
 		var existing catalog.Book
 		// FOR UPDATE, as in updateTx: concurrent writers holding one etag
 		// take turns, and only the first passes the guard.
-		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "id = ?", id).Error; err != nil {
+		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "name = ?", key).Error; err != nil {
 			return err
 		}
 		if in.GetEtag() != "" && existing.Etag != nil && *existing.Etag != in.GetEtag() {
@@ -314,6 +326,7 @@ func (r *GormBookRepository) newRow(parent string, in *refdemov1.Book) (*catalog
 		return nil, nil, err
 	}
 	id := repox.NewULID()
+	rowID := id
 	if in.GetName() != "" {
 		ids, err := repox.SplitName(in.GetName(), "shelves", "books")
 		if err != nil {
@@ -328,6 +341,7 @@ func (r *GormBookRepository) newRow(parent string, in *refdemov1.Book) (*catalog
 	}
 	in = proto.Clone(in).(*refdemov1.Book)
 	in.Name = FormatBookName(parentIDs[0], id)
+	id = rowID // keyed as Create keys it
 	m := catalog.BookFromProto(in)
 	m.ID = id
 	m.Name = in.GetName()
@@ -339,7 +353,7 @@ func (r *GormBookRepository) newRow(parent string, in *refdemov1.Book) (*catalog
 // Delete soft-deletes the record addressed by its resource name: delete_time
 // is set, the row stays.
 func (r *GormBookRepository) Delete(ctx context.Context, name string) error {
-	ids, err := repox.SplitName(name, "shelves", "books")
+	key, err := r.rowKey(name)
 	if err != nil {
 		return err
 	}
@@ -348,7 +362,7 @@ func (r *GormBookRepository) Delete(ctx context.Context, name string) error {
 			return err
 		}
 	}
-	res := r.markDeleted(ctx, r.DB, ids[len(ids)-1])
+	res := r.markDeleted(ctx, r.DB, key)
 	if res.Error != nil {
 		return repox.MapGormErr(res.Error)
 	}
@@ -358,40 +372,40 @@ func (r *GormBookRepository) Delete(ctx context.Context, name string) error {
 	return nil
 }
 
-// markDeleted sets the soft-delete mark on the live row id through db: Delete's
-// write, which a Batch runs inside its transaction.
-func (r *GormBookRepository) markDeleted(ctx context.Context, db *gorm.DB, id string) *gorm.DB {
+// markDeleted sets the soft-delete mark on the live row found by key
+// (rowKey) through db: Delete's write, which a Batch runs inside its
+// transaction.
+func (r *GormBookRepository) markDeleted(ctx context.Context, db *gorm.DB, key string) *gorm.DB {
 	now := time.Now()
 	return db.WithContext(ctx).Model(&catalog.Book{}).
-		Where("id = ? AND delete_time IS NULL", id).
+		Where("name = ? AND delete_time IS NULL", key).
 		Updates(map[string]any{"delete_time": now, "etag": repox.NewULID(), "expire_time": repox.ExpireAt(now, r.Retention)})
 }
 
 // Undelete clears the soft-delete mark and returns the restored record.
 func (r *GormBookRepository) Undelete(ctx context.Context, name string) (*refdemov1.Book, error) {
-	ids, err := repox.SplitName(name, "shelves", "books")
+	key, err := r.rowKey(name)
 	if err != nil {
 		return nil, err
 	}
-	id := ids[len(ids)-1]
 	res := r.DB.WithContext(ctx).Model(&catalog.Book{}).
-		Where("id = ? AND delete_time IS NOT NULL", id).
+		Where("name = ? AND delete_time IS NOT NULL", key).
 		Updates(map[string]any{"delete_time": nil, "etag": repox.NewULID(), "expire_time": nil})
 	if res.Error != nil {
 		return nil, repox.MapGormErr(res.Error)
 	}
 	if res.RowsAffected == 0 {
-		if _, err := r.get(ctx, id); err != nil {
+		if _, err := r.get(ctx, key); err != nil {
 			return nil, err
 		}
 		return nil, fmt.Errorf("%w: %s is not deleted", repox.ErrAlreadyExists, name)
 	}
-	return r.get(ctx, id)
+	return r.get(ctx, key)
 }
 
 // Purge removes the record addressed by its resource name for good.
 func (r *GormBookRepository) Purge(ctx context.Context, name string) error {
-	ids, err := repox.SplitName(name, "shelves", "books")
+	key, err := r.rowKey(name)
 	if err != nil {
 		return err
 	}
@@ -400,20 +414,20 @@ func (r *GormBookRepository) Purge(ctx context.Context, name string) error {
 			return err
 		}
 	}
-	id := ids[len(ids)-1]
-	_, err = r.purge(ctx, r.DB, id, name, true)
+	_, err = r.purge(ctx, r.DB, key, name, true)
 	return repox.MapGormErr(err)
 }
 
-// purge removes row id, named name, for good through db -- unless something
+// purge removes the row found by key (rowKey), named name, for good through
+// db -- unless something
 // still refers to it, when it keeps the row and reports kept: a row of this
 // database holding a foreign key to it (asked first, then caught again from
 // the constraint itself), or, when askReferrers, a referrer in another
 // database or service (r.Refs). A purge never fails, and never cascades,
 // because of a referrer. gorm.ErrRecordNotFound when there is no such row.
-func (r *GormBookRepository) purge(ctx context.Context, db *gorm.DB, id, name string, askReferrers bool) (kept bool, err error) {
+func (r *GormBookRepository) purge(ctx context.Context, db *gorm.DB, key, name string, askReferrers bool) (kept bool, err error) {
 	var referenced bool
-	if err := db.WithContext(ctx).Raw(bookReferencedSQL, id).Scan(&referenced).Error; err != nil {
+	if err := db.WithContext(ctx).Raw(bookReferencedSQL, key).Scan(&referenced).Error; err != nil {
 		return false, err
 	}
 	if referenced {
@@ -428,10 +442,10 @@ func (r *GormBookRepository) purge(ctx context.Context, db *gorm.DB, id, name st
 	// this purge.
 	err = db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var existing catalog.Book
-		if err := tx.First(&existing, "id = ?", id).Error; err != nil {
+		if err := tx.First(&existing, "name = ?", key).Error; err != nil {
 			return err
 		}
-		return catalog.NewBookStore(tx).DeleteByID(ctx, id)
+		return catalog.NewBookStore(tx).DeleteByID(ctx, existing.ID)
 	})
 	if repox.IsForeignKeyViolation(err) {
 		r.Refs.Kept(ctx, name, "foreign key")
@@ -441,8 +455,8 @@ func (r *GormBookRepository) purge(ctx context.Context, db *gorm.DB, id, name st
 }
 
 // bookReferencedSQL asks whether any row, deleted or not, still
-// holds a foreign key to the Book row with the given id.
-const bookReferencedSQL = `SELECT EXISTS (SELECT 1 FROM "lending"."loans" r0 WHERE r0."book" = t."name") FROM "catalog"."books" t WHERE t."id" = ?`
+// holds a foreign key to the Book row with the given key (rowKey).
+const bookReferencedSQL = `SELECT EXISTS (SELECT 1 FROM "catalog"."pages" r0 WHERE r0."book_id" = t."id") OR EXISTS (SELECT 1 FROM "lending"."loans" r1 WHERE r1."book" = t."name") FROM "catalog"."books" t WHERE t."name" = ?`
 
 // PurgeExpired removes for good every deleted record whose expire_time is at
 // or before now, keeping the ones something still refers to (see purge).
@@ -464,11 +478,11 @@ func (r *GormBookRepository) PurgeExpired(ctx context.Context, now time.Time) (r
 			return res, err
 		}
 		for _, m := range page {
-			ids, err := repox.SplitName(m.GetName(), "shelves", "books")
+			key, err := r.rowKey(m.GetName())
 			if err != nil {
 				return res, err
 			}
-			kept, err := r.purge(ctx, r.DB, ids[len(ids)-1], m.GetName(), true)
+			kept, err := r.purge(ctx, r.DB, key, m.GetName(), true)
 			switch {
 			case errors.Is(err, gorm.ErrRecordNotFound):
 			case err != nil:
@@ -496,6 +510,298 @@ func (r *GormBookRepository) ListByKeys(ctx context.Context, field string, keys 
 
 // Compile-time proof the adapter satisfies the interface.
 var _ BookRepository = (*GormBookRepository)(nil)
+
+// GormPageRepository is the GORM adapter of PageRepository: flat
+// CRUD over the generated model, store, converters, and filterx spec. Exported
+// fields and helpers are the Tier-2 seam — embed it and override whole methods
+// for behavior the schema cannot express; generated methods only call private
+// helpers, never the public interface, so overrides never re-enter generated
+// code.
+type GormPageRepository struct {
+	DB    *gorm.DB
+	Hooks PageHooks
+	// Refs, when set, is asked before a purge whether anything in another
+	// database or service still refers to the record (see Purge).
+	Refs *repox.References
+	// ListOverrides substitute the generated dispatch for single filter fields
+	// (e.g. a derived state computed via subqueries).
+	ListOverrides map[string]filterx.SQLHandler
+}
+
+// NewGormPageRepository returns the GORM adapter bound to db.
+func NewGormPageRepository(db *gorm.DB) *GormPageRepository {
+	return &GormPageRepository{DB: db}
+}
+
+// Create persists in under parent and returns the stored record.
+func (r *GormPageRepository) Create(ctx context.Context, parent string, in *refdemov1.Page) (*refdemov1.Page, error) {
+	parentIDs, err := repox.SplitName(parent, "shelves", "books")
+	if err != nil {
+		return nil, err
+	}
+	id := repox.NewULID()
+	rowID := id
+	if in.GetName() != "" {
+		ids, err := repox.SplitName(in.GetName(), "shelves", "books", "pages")
+		if err != nil {
+			return nil, err
+		}
+		for i := range parentIDs {
+			if ids[i] != parentIDs[i] {
+				return nil, fmt.Errorf("%w: name %q is not under parent %q", repox.ErrInvalidArgument, in.GetName(), parent)
+			}
+		}
+		id = ids[len(ids)-1]
+	}
+	in = proto.Clone(in).(*refdemov1.Page)
+	in.Name = FormatPageName(parentIDs[0], parentIDs[1], id)
+	// The id is unique only under the parent, so the row is keyed by a
+	// surrogate of its own: the id itself only when it was minted here.
+	id = rowID
+	if h := r.Hooks.BeforeCreate; h != nil {
+		if err := h(ctx, in); err != nil {
+			return nil, err
+		}
+	}
+	m := catalog.PageFromProto(in)
+	m.ID = id
+	m.Name = in.GetName()
+	m.ShelfID = parentIDs[0]
+	m.BookID = parentIDs[1]
+	if err := r.linkParents(ctx, r.DB, m); err != nil {
+		return nil, repox.MapGormErr(err)
+	}
+	if err := catalog.NewPageStore(r.DB).Create(ctx, m); err != nil {
+		return nil, repox.MapGormErr(err)
+	}
+	return r.get(ctx, m.Name)
+}
+
+// linkParents points m's columns for its nested ancestors at their rows. A
+// nested resource's row is keyed by a surrogate of its own, not by its id, so
+// the column is filled by looking the ancestor up by name.
+func (r *GormPageRepository) linkParents(ctx context.Context, db *gorm.DB, m *catalog.Page) error {
+	ids, err := repox.SplitName(m.Name, "shelves", "books", "pages")
+	if err != nil {
+		return err
+	}
+	if m.BookID, err = repox.RowKey(ctx, db, `"catalog"."books"`, "shelves/"+ids[0]+"/books/"+ids[1], ids[1]); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Get returns the record addressed by its resource name.
+func (r *GormPageRepository) Get(ctx context.Context, name string) (*refdemov1.Page, error) {
+	key, err := r.rowKey(name)
+	if err != nil {
+		return nil, err
+	}
+	return r.get(ctx, key)
+}
+
+// rowKey validates name and returns what its row is found by: the name
+// itself, because the id is unique only under the parent.
+func (r *GormPageRepository) rowKey(name string) (string, error) {
+	if _, err := repox.SplitName(name, "shelves", "books", "pages"); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+// get loads by row key (rowKey) — the private read every generated method
+// re-reads through, so Tier-2 overrides of Get never re-enter generated writes.
+func (r *GormPageRepository) get(ctx context.Context, key string) (*refdemov1.Page, error) {
+	var m catalog.Page
+	if err := r.DB.WithContext(ctx).First(&m, "name = ?", key).Error; err != nil {
+		return nil, repox.MapGormErr(err)
+	}
+	return r.toProto(ctx, &m)
+}
+
+// toProto converts a loaded row, decorating reference names and running the
+// AfterRead hook.
+func (r *GormPageRepository) toProto(ctx context.Context, m *catalog.Page) (*refdemov1.Page, error) {
+	out := catalog.PageToProto(m)
+	if h := r.Hooks.AfterRead; h != nil {
+		if err := h(ctx, out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// List returns one page of records under parent.
+func (r *GormPageRepository) List(ctx context.Context, parent string, in repox.ListInput) ([]*refdemov1.Page, string, error) {
+	parentIDs, err := repox.SplitName(parent, "shelves", "books")
+	if err != nil {
+		return nil, "", err
+	}
+	// AIP-159: "-" for the parent reads across every parent; narrow with a
+	// Where on the parent field instead.
+	if parentIDs[len(parentIDs)-1] == "-" {
+		return r.list(ctx, r.DB, in)
+	}
+	// The parent is nested, so its row is found by name.
+	op, arg := repox.NameMatch(parent)
+	scope := r.DB.Where(`"book_id" IN (SELECT "id" FROM "catalog"."books" WHERE "name" `+op+")", arg)
+	return r.list(ctx, scope, in)
+}
+
+func (r *GormPageRepository) list(ctx context.Context, scope *gorm.DB, in repox.ListInput) ([]*refdemov1.Page, string, error) {
+	conds, err := filterx.Parse(in.Filter)
+	if err != nil {
+		return nil, "", repox.MapFilterxErr(err)
+	}
+	conds = append(conds, in.Where...)
+	eng := filterx.Gorm[catalog.Page](catalog.PageFilterSpec)
+	for f, h := range r.ListOverrides {
+		eng.Override(f, h)
+	}
+	if err := repox.CheckReadMask((*refdemov1.Page)(nil), in.ReadMask); err != nil {
+		return nil, "", err
+	}
+	rows, next, err := eng.List(ctx, r.reads(scope, in), filterx.ListInput{
+		PageSize:  in.PageSize,
+		PageToken: in.PageToken,
+		OrderBy:   in.OrderBy,
+		Filter:    conds,
+	})
+	if err != nil {
+		return nil, "", repox.MapFilterxErr(err)
+	}
+	items := make([]*refdemov1.Page, 0, len(rows))
+	for i := range rows {
+		out, err := r.toProto(ctx, &rows[i])
+		if err != nil {
+			return nil, "", err
+		}
+		repox.Narrow(out, in.ReadMask)
+		items = append(items, out)
+	}
+	return items, next, nil
+}
+
+// reads is the query a List reads rows through: every column and value object
+// without a read mask; with one, only the columns and value objects of the
+// fields it names, and the columns the page is sorted by.
+func (r *GormPageRepository) reads(db *gorm.DB, in repox.ListInput) *gorm.DB {
+	if len(in.ReadMask) == 0 {
+		return db
+	}
+	if omit := repox.Unread(pageColumns, in.ReadMask, repox.OrderColumns(catalog.PageFilterSpec, in.OrderBy)...); len(omit) > 0 {
+		db = db.Omit(omit...)
+	}
+	return db
+}
+
+// pageColumns are the row's columns by the field each stores, for
+// a read mask to leave out.
+var pageColumns = map[string][]string{
+	"text": {"text"},
+}
+
+// Update persists the masked fields of in; an empty mask replaces every
+// mutable field. The write happens in one transaction guarded by in.Etag.
+func (r *GormPageRepository) Update(ctx context.Context, in *refdemov1.Page, paths []string) (*refdemov1.Page, error) {
+	key, err := r.rowKey(in.GetName())
+	if err != nil {
+		return nil, err
+	}
+	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, key, in, paths, nil) })
+	if err != nil {
+		return nil, repox.MapGormErr(err)
+	}
+	return r.get(ctx, key)
+}
+
+// updateTx is Update's write inside tx, which a Batch shares with other
+// writes. The row is read FOR UPDATE: a concurrent update of the same record
+// waits for this transaction and then sees the etag it wrote, so two writers
+// holding the same etag cannot both pass the guard. outputPaths names the
+// server-owned fields written alongside (UpdateWithOutputOnly); nil for Update.
+func (r *GormPageRepository) updateTx(ctx context.Context, tx *gorm.DB, key string, in *refdemov1.Page, paths, outputPaths []string) error {
+	var existing catalog.Page
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "name = ?", key).Error; err != nil {
+		return err
+	}
+	id := existing.ID
+	_ = id
+	existingPB := catalog.PageToProto(&existing)
+	merged := proto.Clone(existingPB).(*refdemov1.Page)
+	applyPageMask(merged, in, paths)
+	if h := r.Hooks.BeforeUpdate; h != nil {
+		if err := h(ctx, existingPB, merged, paths); err != nil {
+			return err
+		}
+	}
+	next := catalog.PageFromProto(merged)
+	_ = next
+	existing.Name = next.Name
+	existing.Text = next.Text
+	return catalog.NewPageStore(tx).Update(ctx, &existing)
+}
+
+// newRow builds the row a Batch inserts for in under parent, and the
+// record it stands for, named: the same resolution Create applies.
+func (r *GormPageRepository) newRow(parent string, in *refdemov1.Page) (*catalog.Page, *refdemov1.Page, error) {
+	parentIDs, err := repox.SplitName(parent, "shelves", "books")
+	if err != nil {
+		return nil, nil, err
+	}
+	id := repox.NewULID()
+	rowID := id
+	if in.GetName() != "" {
+		ids, err := repox.SplitName(in.GetName(), "shelves", "books", "pages")
+		if err != nil {
+			return nil, nil, err
+		}
+		for i := range parentIDs {
+			if ids[i] != parentIDs[i] {
+				return nil, nil, fmt.Errorf("%w: name %q is not under parent %q", repox.ErrInvalidArgument, in.GetName(), parent)
+			}
+		}
+		id = ids[len(ids)-1]
+	}
+	in = proto.Clone(in).(*refdemov1.Page)
+	in.Name = FormatPageName(parentIDs[0], parentIDs[1], id)
+	id = rowID // keyed as Create keys it
+	m := catalog.PageFromProto(in)
+	m.ID = id
+	m.Name = in.GetName()
+	m.ShelfID = parentIDs[0]
+	m.BookID = parentIDs[1]
+	return m, in, nil
+}
+
+// Delete removes the record addressed by its resource name.
+func (r *GormPageRepository) Delete(ctx context.Context, name string) error {
+	key, err := r.rowKey(name)
+	if err != nil {
+		return err
+	}
+	if h := r.Hooks.BeforeDelete; h != nil {
+		if err := h(ctx, name); err != nil {
+			return err
+		}
+	}
+	var existing catalog.Page
+	if err := r.DB.WithContext(ctx).First(&existing, "name = ?", key).Error; err != nil {
+		return repox.MapGormErr(err)
+	}
+	return repox.MapGormErr(catalog.NewPageStore(r.DB).DeleteByID(ctx, existing.ID))
+}
+
+// ListByKeys reads every record whose filter field field is one of keys; see
+// repox.ListByKeys.
+func (r *GormPageRepository) ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*refdemov1.Page, error) {
+	return repox.ListByKeys(ctx, field, keys, in, func(ctx context.Context, in repox.ListInput) ([]*refdemov1.Page, string, error) {
+		return r.List(ctx, "shelves/-/books/-", in)
+	})
+}
+
+// Compile-time proof the adapter satisfies the interface.
+var _ PageRepository = (*GormPageRepository)(nil)
 
 // GormShelfRepository is the GORM adapter of ShelfRepository: flat
 // CRUD over the generated model, store, converters, and filterx spec. Exported
@@ -551,18 +857,27 @@ func (r *GormShelfRepository) Create(ctx context.Context, in *refdemov1.Shelf) (
 
 // Get returns the record addressed by its resource name.
 func (r *GormShelfRepository) Get(ctx context.Context, name string) (*refdemov1.Shelf, error) {
-	ids, err := repox.SplitName(name, "shelves")
+	key, err := r.rowKey(name)
 	if err != nil {
 		return nil, err
 	}
-	return r.get(ctx, ids[len(ids)-1])
+	return r.get(ctx, key)
 }
 
-// get loads by surrogate key — the private read every generated method re-reads
-// through, so Tier-2 overrides of Get never re-enter generated writes.
-func (r *GormShelfRepository) get(ctx context.Context, id string) (*refdemov1.Shelf, error) {
+// rowKey validates name and returns what its row is found by: the bare id.
+func (r *GormShelfRepository) rowKey(name string) (string, error) {
+	ids, err := repox.SplitName(name, "shelves")
+	if err != nil {
+		return "", err
+	}
+	return ids[len(ids)-1], nil
+}
+
+// get loads by row key (rowKey) — the private read every generated method
+// re-reads through, so Tier-2 overrides of Get never re-enter generated writes.
+func (r *GormShelfRepository) get(ctx context.Context, key string) (*refdemov1.Shelf, error) {
 	var m catalog.Shelf
-	if err := r.DB.WithContext(ctx).First(&m, "id = ?", id).Error; err != nil {
+	if err := r.DB.WithContext(ctx).First(&m, "id = ?", key).Error; err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	return r.toProto(ctx, &m)
@@ -647,31 +962,29 @@ var shelfColumns = map[string][]string{
 // Update persists the masked fields of in; an empty mask replaces every
 // mutable field. The write happens in one transaction guarded by in.Etag.
 func (r *GormShelfRepository) Update(ctx context.Context, in *refdemov1.Shelf, paths []string) (*refdemov1.Shelf, error) {
-	ids, err := repox.SplitName(in.GetName(), "shelves")
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		return nil, err
 	}
-	id := ids[len(ids)-1]
-	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, id, in, paths, nil) })
+	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, key, in, paths, nil) })
 	if err != nil {
 		return nil, repox.MapGormErr(err)
 	}
-	return r.get(ctx, id)
+	return r.get(ctx, key)
 }
 
 // UpdateWithOutputOnly is Update plus the server-owned fields outputPaths
 // names, in Update's transaction and under its etag guard.
 func (r *GormShelfRepository) UpdateWithOutputOnly(ctx context.Context, in *refdemov1.Shelf, paths, outputPaths []string) (*refdemov1.Shelf, error) {
-	ids, err := repox.SplitName(in.GetName(), "shelves")
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		return nil, err
 	}
-	id := ids[len(ids)-1]
-	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, id, in, paths, outputPaths) })
+	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, key, in, paths, outputPaths) })
 	if err != nil {
 		return nil, repox.MapGormErr(err)
 	}
-	return r.get(ctx, id)
+	return r.get(ctx, key)
 }
 
 // updateTx is Update's write inside tx, which a Batch shares with other
@@ -679,11 +992,13 @@ func (r *GormShelfRepository) UpdateWithOutputOnly(ctx context.Context, in *refd
 // waits for this transaction and then sees the etag it wrote, so two writers
 // holding the same etag cannot both pass the guard. outputPaths names the
 // server-owned fields written alongside (UpdateWithOutputOnly); nil for Update.
-func (r *GormShelfRepository) updateTx(ctx context.Context, tx *gorm.DB, id string, in *refdemov1.Shelf, paths, outputPaths []string) error {
+func (r *GormShelfRepository) updateTx(ctx context.Context, tx *gorm.DB, key string, in *refdemov1.Shelf, paths, outputPaths []string) error {
 	var existing catalog.Shelf
-	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "id = ?", id).Error; err != nil {
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "id = ?", key).Error; err != nil {
 		return err
 	}
+	id := existing.ID
+	_ = id
 	if in.GetEtag() != "" && existing.Etag != nil && *existing.Etag != in.GetEtag() {
 		return repox.ErrConflict
 	}
@@ -713,7 +1028,7 @@ func (r *GormShelfRepository) updateTx(ctx context.Context, tx *gorm.DB, id stri
 // UpdateOutputOnly persists the server-owned fields of in that paths names, in
 // one transaction guarded by in.Etag.
 func (r *GormShelfRepository) UpdateOutputOnly(ctx context.Context, in *refdemov1.Shelf, paths []string) (*refdemov1.Shelf, error) {
-	ids, err := repox.SplitName(in.GetName(), "shelves")
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		return nil, err
 	}
@@ -721,7 +1036,7 @@ func (r *GormShelfRepository) UpdateOutputOnly(ctx context.Context, in *refdemov
 	if err != nil {
 		return nil, repox.MapGormErr(err)
 	}
-	return r.get(ctx, ids[len(ids)-1])
+	return r.get(ctx, key)
 }
 
 // updateOutputOnlyTx is UpdateOutputOnly's write inside tx, which a Batch
@@ -730,16 +1045,15 @@ func (r *GormShelfRepository) updateOutputOnlyTx(ctx context.Context, tx *gorm.D
 	if len(paths) == 0 {
 		return fmt.Errorf("%w: UpdateOutputOnly needs the fields to write", repox.ErrInvalidArgument)
 	}
-	ids, err := repox.SplitName(in.GetName(), "shelves")
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		return err
 	}
-	id := ids[len(ids)-1]
 	{
 		var existing catalog.Shelf
 		// FOR UPDATE, as in updateTx: concurrent writers holding one etag
 		// take turns, and only the first passes the guard.
-		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "id = ?", id).Error; err != nil {
+		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "id = ?", key).Error; err != nil {
 			return err
 		}
 		if in.GetEtag() != "" && existing.Etag != nil && *existing.Etag != in.GetEtag() {
@@ -777,7 +1091,7 @@ func (r *GormShelfRepository) newRow(in *refdemov1.Shelf) (*catalog.Shelf, *refd
 // Delete soft-deletes the record addressed by its resource name: delete_time
 // is set, the row stays.
 func (r *GormShelfRepository) Delete(ctx context.Context, name string) error {
-	ids, err := repox.SplitName(name, "shelves")
+	key, err := r.rowKey(name)
 	if err != nil {
 		return err
 	}
@@ -786,7 +1100,7 @@ func (r *GormShelfRepository) Delete(ctx context.Context, name string) error {
 			return err
 		}
 	}
-	res := r.markDeleted(ctx, r.DB, ids[len(ids)-1])
+	res := r.markDeleted(ctx, r.DB, key)
 	if res.Error != nil {
 		return repox.MapGormErr(res.Error)
 	}
@@ -796,40 +1110,40 @@ func (r *GormShelfRepository) Delete(ctx context.Context, name string) error {
 	return nil
 }
 
-// markDeleted sets the soft-delete mark on the live row id through db: Delete's
-// write, which a Batch runs inside its transaction.
-func (r *GormShelfRepository) markDeleted(ctx context.Context, db *gorm.DB, id string) *gorm.DB {
+// markDeleted sets the soft-delete mark on the live row found by key
+// (rowKey) through db: Delete's write, which a Batch runs inside its
+// transaction.
+func (r *GormShelfRepository) markDeleted(ctx context.Context, db *gorm.DB, key string) *gorm.DB {
 	now := time.Now()
 	return db.WithContext(ctx).Model(&catalog.Shelf{}).
-		Where("id = ? AND delete_time IS NULL", id).
+		Where("id = ? AND delete_time IS NULL", key).
 		Updates(map[string]any{"delete_time": now, "etag": repox.NewULID(), "expire_time": repox.ExpireAt(now, r.Retention)})
 }
 
 // Undelete clears the soft-delete mark and returns the restored record.
 func (r *GormShelfRepository) Undelete(ctx context.Context, name string) (*refdemov1.Shelf, error) {
-	ids, err := repox.SplitName(name, "shelves")
+	key, err := r.rowKey(name)
 	if err != nil {
 		return nil, err
 	}
-	id := ids[len(ids)-1]
 	res := r.DB.WithContext(ctx).Model(&catalog.Shelf{}).
-		Where("id = ? AND delete_time IS NOT NULL", id).
+		Where("id = ? AND delete_time IS NOT NULL", key).
 		Updates(map[string]any{"delete_time": nil, "etag": repox.NewULID(), "expire_time": nil})
 	if res.Error != nil {
 		return nil, repox.MapGormErr(res.Error)
 	}
 	if res.RowsAffected == 0 {
-		if _, err := r.get(ctx, id); err != nil {
+		if _, err := r.get(ctx, key); err != nil {
 			return nil, err
 		}
 		return nil, fmt.Errorf("%w: %s is not deleted", repox.ErrAlreadyExists, name)
 	}
-	return r.get(ctx, id)
+	return r.get(ctx, key)
 }
 
 // Purge removes the record addressed by its resource name for good.
 func (r *GormShelfRepository) Purge(ctx context.Context, name string) error {
-	ids, err := repox.SplitName(name, "shelves")
+	key, err := r.rowKey(name)
 	if err != nil {
 		return err
 	}
@@ -838,20 +1152,20 @@ func (r *GormShelfRepository) Purge(ctx context.Context, name string) error {
 			return err
 		}
 	}
-	id := ids[len(ids)-1]
-	_, err = r.purge(ctx, r.DB, id, name, true)
+	_, err = r.purge(ctx, r.DB, key, name, true)
 	return repox.MapGormErr(err)
 }
 
-// purge removes row id, named name, for good through db -- unless something
+// purge removes the row found by key (rowKey), named name, for good through
+// db -- unless something
 // still refers to it, when it keeps the row and reports kept: a row of this
 // database holding a foreign key to it (asked first, then caught again from
 // the constraint itself), or, when askReferrers, a referrer in another
 // database or service (r.Refs). A purge never fails, and never cascades,
 // because of a referrer. gorm.ErrRecordNotFound when there is no such row.
-func (r *GormShelfRepository) purge(ctx context.Context, db *gorm.DB, id, name string, askReferrers bool) (kept bool, err error) {
+func (r *GormShelfRepository) purge(ctx context.Context, db *gorm.DB, key, name string, askReferrers bool) (kept bool, err error) {
 	var referenced bool
-	if err := db.WithContext(ctx).Raw(shelfReferencedSQL, id).Scan(&referenced).Error; err != nil {
+	if err := db.WithContext(ctx).Raw(shelfReferencedSQL, key).Scan(&referenced).Error; err != nil {
 		return false, err
 	}
 	if referenced {
@@ -866,10 +1180,10 @@ func (r *GormShelfRepository) purge(ctx context.Context, db *gorm.DB, id, name s
 	// this purge.
 	err = db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var existing catalog.Shelf
-		if err := tx.First(&existing, "id = ?", id).Error; err != nil {
+		if err := tx.First(&existing, "id = ?", key).Error; err != nil {
 			return err
 		}
-		return catalog.NewShelfStore(tx).DeleteByID(ctx, id)
+		return catalog.NewShelfStore(tx).DeleteByID(ctx, existing.ID)
 	})
 	if repox.IsForeignKeyViolation(err) {
 		r.Refs.Kept(ctx, name, "foreign key")
@@ -879,8 +1193,8 @@ func (r *GormShelfRepository) purge(ctx context.Context, db *gorm.DB, id, name s
 }
 
 // shelfReferencedSQL asks whether any row, deleted or not, still
-// holds a foreign key to the Shelf row with the given id.
-const shelfReferencedSQL = `SELECT EXISTS (SELECT 1 FROM "catalog"."books" r0 WHERE r0."shelf_id" = t."id") FROM "catalog"."shelves" t WHERE t."id" = ?`
+// holds a foreign key to the Shelf row with the given key (rowKey).
+const shelfReferencedSQL = `SELECT EXISTS (SELECT 1 FROM "catalog"."books" r0 WHERE r0."shelf_id" = t."id") OR EXISTS (SELECT 1 FROM "catalog"."pages" r1 WHERE r1."shelf_id" = t."id") FROM "catalog"."shelves" t WHERE t."id" = ?`
 
 // PurgeExpired removes for good every deleted record whose expire_time is at
 // or before now, keeping the ones something still refers to (see purge).
@@ -902,11 +1216,11 @@ func (r *GormShelfRepository) PurgeExpired(ctx context.Context, now time.Time) (
 			return res, err
 		}
 		for _, m := range page {
-			ids, err := repox.SplitName(m.GetName(), "shelves")
+			key, err := r.rowKey(m.GetName())
 			if err != nil {
 				return res, err
 			}
-			kept, err := r.purge(ctx, r.DB, ids[len(ids)-1], m.GetName(), true)
+			kept, err := r.purge(ctx, r.DB, key, m.GetName(), true)
 			switch {
 			case errors.Is(err, gorm.ErrRecordNotFound):
 			case err != nil:
@@ -968,15 +1282,15 @@ func (b *gormBatch) CreateBook(parent string, in *refdemov1.Book) (string, error
 // UpdateBook queues Update; in.Etag, when set, guards it, and a guard
 // that fails rolls the whole batch back.
 func (b *gormBatch) UpdateBook(in *refdemov1.Book, paths []string) {
-	ids, err := repox.SplitName(in.GetName(), "shelves", "books")
+	r := &GormBookRepository{DB: b.db}
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
 		return
 	}
-	r := &GormBookRepository{DB: b.db}
 	queueBookReferences(b.u, in, paths)
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
-		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, nil)
+		return r.updateTx(ctx, tx, key, in, paths, nil)
 	})
 	b.u.Record(repox.Change{Type: "catalog.example.com/Book", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getBook)})
 }
@@ -984,15 +1298,15 @@ func (b *gormBatch) UpdateBook(in *refdemov1.Book, paths []string) {
 // UpdateBookWithOutputOnly queues UpdateWithOutputOnly; in.Etag, when
 // set, guards it, and a guard that fails rolls the whole batch back.
 func (b *gormBatch) UpdateBookWithOutputOnly(in *refdemov1.Book, paths, outputPaths []string) {
-	ids, err := repox.SplitName(in.GetName(), "shelves", "books")
+	r := &GormBookRepository{DB: b.db}
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
 		return
 	}
-	r := &GormBookRepository{DB: b.db}
 	queueBookReferences(b.u, in, paths)
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
-		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, outputPaths)
+		return r.updateTx(ctx, tx, key, in, paths, outputPaths)
 	})
 	b.u.Record(repox.Change{Type: "catalog.example.com/Book", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getBook)})
 }
@@ -1009,15 +1323,15 @@ func (b *gormBatch) UpdateBookOutputOnly(in *refdemov1.Book, paths []string) {
 // DeleteBook queues a soft delete. A record already deleted or gone is
 // not an error: two batches deleting the same record must not fail each other.
 func (b *gormBatch) DeleteBook(name string) {
-	ids, err := repox.SplitName(name, "shelves", "books")
+	r := &GormBookRepository{DB: b.db, Retention: b.retention}
+	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)
 		return
 	}
-	r := &GormBookRepository{DB: b.db, Retention: b.retention}
 	queueBookDelete(b.u, name, false)
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
-		return r.markDeleted(ctx, tx, ids[len(ids)-1]).Error
+		return r.markDeleted(ctx, tx, key).Error
 	})
 	b.u.Record(repox.Change{Type: "catalog.example.com/Book", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getBook)})
 }
@@ -1026,25 +1340,79 @@ func (b *gormBatch) DeleteBook(name string) {
 // gone is not an error: two batches clearing the same row must not fail each
 // other.
 func (b *gormBatch) PurgeBook(name string) {
-	ids, err := repox.SplitName(name, "shelves", "books")
+	// A record something still refers to is kept, as Purge keeps it.
+	r := &GormBookRepository{DB: b.db, Refs: b.u.Conn().References}
+	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)
 		return
 	}
-	id := ids[len(ids)-1]
-	// A record something still refers to is kept, as Purge keeps it.
-	r := &GormBookRepository{DB: b.db, Refs: b.u.Conn().References}
 	keep := queueBookPurge(b.u, name)
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		if *keep {
 			return nil
 		}
-		if _, err := r.purge(ctx, tx, id, name, false); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		if _, err := r.purge(ctx, tx, key, name, false); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
 		return nil
 	})
 	b.u.Record(repox.Change{Type: "catalog.example.com/Book", Name: name, Op: repox.ChangePurge, LoadPrior: repox.PriorOf(name, getBook)})
+}
+
+// CreatePage queues a create and returns the name the record will have.
+func (b *gormBatch) CreatePage(parent string, in *refdemov1.Page) (string, error) {
+	r := &GormPageRepository{DB: b.db}
+	m, named, err := r.newRow(parent, in)
+	if err != nil {
+		return "", err
+	}
+	var locks []string
+	if k, ok := any(m).(interface{ NoOverlapKeys() []string }); ok {
+		locks = k.NoOverlapKeys()
+	}
+	queuePageReferences(b.u, named, nil)
+	b.u.QueueGorm(locks, func(ctx context.Context, tx *gorm.DB) error {
+		if err := r.linkParents(ctx, tx, m); err != nil {
+			return err
+		}
+		return catalog.NewPageStore(tx).Create(ctx, m)
+	})
+	b.u.Record(repox.Change{Type: "catalog.example.com/Page", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
+	return named.GetName(), nil
+}
+
+// UpdatePage queues Update; in.Etag, when set, guards it, and a guard
+// that fails rolls the whole batch back.
+func (b *gormBatch) UpdatePage(in *refdemov1.Page, paths []string) {
+	r := &GormPageRepository{DB: b.db}
+	key, err := r.rowKey(in.GetName())
+	if err != nil {
+		b.u.Fail(err)
+		return
+	}
+	queuePageReferences(b.u, in, paths)
+	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
+		return r.updateTx(ctx, tx, key, in, paths, nil)
+	})
+	b.u.Record(repox.Change{Type: "catalog.example.com/Page", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getPage)})
+}
+
+// DeletePage queues the record's removal for good. A record already
+// gone is not an error: two batches clearing the same row must not fail each
+// other.
+func (b *gormBatch) DeletePage(name string) {
+	r := &GormPageRepository{DB: b.db}
+	key, err := r.rowKey(name)
+	if err != nil {
+		b.u.Fail(err)
+		return
+	}
+	queuePageDelete(b.u, name, true)
+	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
+		return tx.WithContext(ctx).Delete(&catalog.Page{}, "name = ?", key).Error
+	})
+	b.u.Record(repox.Change{Type: "catalog.example.com/Page", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getPage)})
 }
 
 // CreateShelf queues a create and returns the name the record will have.
@@ -1069,15 +1437,15 @@ func (b *gormBatch) CreateShelf(in *refdemov1.Shelf) (string, error) {
 // UpdateShelf queues Update; in.Etag, when set, guards it, and a guard
 // that fails rolls the whole batch back.
 func (b *gormBatch) UpdateShelf(in *refdemov1.Shelf, paths []string) {
-	ids, err := repox.SplitName(in.GetName(), "shelves")
+	r := &GormShelfRepository{DB: b.db}
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
 		return
 	}
-	r := &GormShelfRepository{DB: b.db}
 	queueShelfReferences(b.u, in, paths)
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
-		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, nil)
+		return r.updateTx(ctx, tx, key, in, paths, nil)
 	})
 	b.u.Record(repox.Change{Type: "catalog.example.com/Shelf", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getShelf)})
 }
@@ -1085,15 +1453,15 @@ func (b *gormBatch) UpdateShelf(in *refdemov1.Shelf, paths []string) {
 // UpdateShelfWithOutputOnly queues UpdateWithOutputOnly; in.Etag, when
 // set, guards it, and a guard that fails rolls the whole batch back.
 func (b *gormBatch) UpdateShelfWithOutputOnly(in *refdemov1.Shelf, paths, outputPaths []string) {
-	ids, err := repox.SplitName(in.GetName(), "shelves")
+	r := &GormShelfRepository{DB: b.db}
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
 		return
 	}
-	r := &GormShelfRepository{DB: b.db}
 	queueShelfReferences(b.u, in, paths)
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
-		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, outputPaths)
+		return r.updateTx(ctx, tx, key, in, paths, outputPaths)
 	})
 	b.u.Record(repox.Change{Type: "catalog.example.com/Shelf", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getShelf)})
 }
@@ -1110,15 +1478,15 @@ func (b *gormBatch) UpdateShelfOutputOnly(in *refdemov1.Shelf, paths []string) {
 // DeleteShelf queues a soft delete. A record already deleted or gone is
 // not an error: two batches deleting the same record must not fail each other.
 func (b *gormBatch) DeleteShelf(name string) {
-	ids, err := repox.SplitName(name, "shelves")
+	r := &GormShelfRepository{DB: b.db, Retention: b.retention}
+	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)
 		return
 	}
-	r := &GormShelfRepository{DB: b.db, Retention: b.retention}
 	queueShelfDelete(b.u, name, false)
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
-		return r.markDeleted(ctx, tx, ids[len(ids)-1]).Error
+		return r.markDeleted(ctx, tx, key).Error
 	})
 	b.u.Record(repox.Change{Type: "catalog.example.com/Shelf", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getShelf)})
 }
@@ -1127,20 +1495,19 @@ func (b *gormBatch) DeleteShelf(name string) {
 // gone is not an error: two batches clearing the same row must not fail each
 // other.
 func (b *gormBatch) PurgeShelf(name string) {
-	ids, err := repox.SplitName(name, "shelves")
+	// A record something still refers to is kept, as Purge keeps it.
+	r := &GormShelfRepository{DB: b.db, Refs: b.u.Conn().References}
+	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)
 		return
 	}
-	id := ids[len(ids)-1]
-	// A record something still refers to is kept, as Purge keeps it.
-	r := &GormShelfRepository{DB: b.db, Refs: b.u.Conn().References}
 	keep := queueShelfPurge(b.u, name)
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		if *keep {
 			return nil
 		}
-		if _, err := r.purge(ctx, tx, id, name, false); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		if _, err := r.purge(ctx, tx, key, name, false); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
 		return nil

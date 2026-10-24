@@ -80,18 +80,27 @@ func (r *GormAgendaRepository) Create(ctx context.Context, in *deepv1.Agenda) (*
 
 // Get returns the record addressed by its resource name.
 func (r *GormAgendaRepository) Get(ctx context.Context, name string) (*deepv1.Agenda, error) {
-	ids, err := repox.SplitName(name, "agendas")
+	key, err := r.rowKey(name)
 	if err != nil {
 		return nil, err
 	}
-	return r.get(ctx, ids[len(ids)-1])
+	return r.get(ctx, key)
 }
 
-// get loads by surrogate key — the private read every generated method re-reads
-// through, so Tier-2 overrides of Get never re-enter generated writes.
-func (r *GormAgendaRepository) get(ctx context.Context, id string) (*deepv1.Agenda, error) {
+// rowKey validates name and returns what its row is found by: the bare id.
+func (r *GormAgendaRepository) rowKey(name string) (string, error) {
+	ids, err := repox.SplitName(name, "agendas")
+	if err != nil {
+		return "", err
+	}
+	return ids[len(ids)-1], nil
+}
+
+// get loads by row key (rowKey) — the private read every generated method
+// re-reads through, so Tier-2 overrides of Get never re-enter generated writes.
+func (r *GormAgendaRepository) get(ctx context.Context, key string) (*deepv1.Agenda, error) {
 	var m deepv1gorm.Agenda
-	if err := r.DB.WithContext(ctx).Preload("Zone").Preload("Slots", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).Preload("Slots.Start").Preload("Slots.End").Preload("Notes", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).First(&m, "id = ?", id).Error; err != nil {
+	if err := r.DB.WithContext(ctx).Preload("Zone").Preload("Slots", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).Preload("Slots.Start").Preload("Slots.End").Preload("Notes", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).First(&m, "id = ?", key).Error; err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	return r.toProto(ctx, &m)
@@ -183,16 +192,15 @@ var agendaColumns = map[string][]string{
 // Update persists the masked fields of in; an empty mask replaces every
 // mutable field. The write happens in one transaction guarded by in.Etag.
 func (r *GormAgendaRepository) Update(ctx context.Context, in *deepv1.Agenda, paths []string) (*deepv1.Agenda, error) {
-	ids, err := repox.SplitName(in.GetName(), "agendas")
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		return nil, err
 	}
-	id := ids[len(ids)-1]
-	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, id, in, paths, nil) })
+	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, key, in, paths, nil) })
 	if err != nil {
 		return nil, repox.MapGormErr(err)
 	}
-	return r.get(ctx, id)
+	return r.get(ctx, key)
 }
 
 // updateTx is Update's write inside tx, which a Batch shares with other
@@ -200,11 +208,13 @@ func (r *GormAgendaRepository) Update(ctx context.Context, in *deepv1.Agenda, pa
 // waits for this transaction and then sees the etag it wrote, so two writers
 // holding the same etag cannot both pass the guard. outputPaths names the
 // server-owned fields written alongside (UpdateWithOutputOnly); nil for Update.
-func (r *GormAgendaRepository) updateTx(ctx context.Context, tx *gorm.DB, id string, in *deepv1.Agenda, paths, outputPaths []string) error {
+func (r *GormAgendaRepository) updateTx(ctx context.Context, tx *gorm.DB, key string, in *deepv1.Agenda, paths, outputPaths []string) error {
 	var existing deepv1gorm.Agenda
-	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Zone").Preload("Slots", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).Preload("Slots.Start").Preload("Slots.End").Preload("Notes", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).First(&existing, "id = ?", id).Error; err != nil {
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Zone").Preload("Slots", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).Preload("Slots.Start").Preload("Slots.End").Preload("Notes", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).First(&existing, "id = ?", key).Error; err != nil {
 		return err
 	}
+	id := existing.ID
+	_ = id
 	var staleZone *deepv1gorm.Zone
 	var staleSlots []deepv1gorm.Slot
 	var staleNotes []deepv1gorm.Note
@@ -385,7 +395,7 @@ func (r *GormAgendaRepository) insertTx(ctx context.Context, tx *gorm.DB, in *de
 // Delete soft-deletes the record addressed by its resource name: delete_time
 // is set, the row stays.
 func (r *GormAgendaRepository) Delete(ctx context.Context, name string) error {
-	ids, err := repox.SplitName(name, "agendas")
+	key, err := r.rowKey(name)
 	if err != nil {
 		return err
 	}
@@ -394,7 +404,7 @@ func (r *GormAgendaRepository) Delete(ctx context.Context, name string) error {
 			return err
 		}
 	}
-	res := r.markDeleted(ctx, r.DB, ids[len(ids)-1])
+	res := r.markDeleted(ctx, r.DB, key)
 	if res.Error != nil {
 		return repox.MapGormErr(res.Error)
 	}
@@ -404,40 +414,40 @@ func (r *GormAgendaRepository) Delete(ctx context.Context, name string) error {
 	return nil
 }
 
-// markDeleted sets the soft-delete mark on the live row id through db: Delete's
-// write, which a Batch runs inside its transaction.
-func (r *GormAgendaRepository) markDeleted(ctx context.Context, db *gorm.DB, id string) *gorm.DB {
+// markDeleted sets the soft-delete mark on the live row found by key
+// (rowKey) through db: Delete's write, which a Batch runs inside its
+// transaction.
+func (r *GormAgendaRepository) markDeleted(ctx context.Context, db *gorm.DB, key string) *gorm.DB {
 	now := time.Now()
 	return db.WithContext(ctx).Model(&deepv1gorm.Agenda{}).
-		Where("id = ? AND delete_time IS NULL", id).
+		Where("id = ? AND delete_time IS NULL", key).
 		Updates(map[string]any{"delete_time": now, "etag": repox.NewULID()})
 }
 
 // Undelete clears the soft-delete mark and returns the restored record.
 func (r *GormAgendaRepository) Undelete(ctx context.Context, name string) (*deepv1.Agenda, error) {
-	ids, err := repox.SplitName(name, "agendas")
+	key, err := r.rowKey(name)
 	if err != nil {
 		return nil, err
 	}
-	id := ids[len(ids)-1]
 	res := r.DB.WithContext(ctx).Model(&deepv1gorm.Agenda{}).
-		Where("id = ? AND delete_time IS NOT NULL", id).
+		Where("id = ? AND delete_time IS NOT NULL", key).
 		Updates(map[string]any{"delete_time": nil, "etag": repox.NewULID()})
 	if res.Error != nil {
 		return nil, repox.MapGormErr(res.Error)
 	}
 	if res.RowsAffected == 0 {
-		if _, err := r.get(ctx, id); err != nil {
+		if _, err := r.get(ctx, key); err != nil {
 			return nil, err
 		}
 		return nil, fmt.Errorf("%w: %s is not deleted", repox.ErrAlreadyExists, name)
 	}
-	return r.get(ctx, id)
+	return r.get(ctx, key)
 }
 
 // Purge removes the record addressed by its resource name for good.
 func (r *GormAgendaRepository) Purge(ctx context.Context, name string) error {
-	ids, err := repox.SplitName(name, "agendas")
+	key, err := r.rowKey(name)
 	if err != nil {
 		return err
 	}
@@ -446,19 +456,18 @@ func (r *GormAgendaRepository) Purge(ctx context.Context, name string) error {
 			return err
 		}
 	}
-	id := ids[len(ids)-1]
-	_, err = r.purge(ctx, r.DB, id, name, true)
+	_, err = r.purge(ctx, r.DB, key, name, true)
 	return repox.MapGormErr(err)
 }
 
-// purgeTx removes row id inside tx, with the value-object rows it owns;
-// gorm.ErrRecordNotFound when there is no such row.
-func (r *GormAgendaRepository) purgeTx(ctx context.Context, tx *gorm.DB, id string) error {
+// purgeTx removes the row found by key (rowKey) inside tx, with the
+// value-object rows it owns; gorm.ErrRecordNotFound when there is no such row.
+func (r *GormAgendaRepository) purgeTx(ctx context.Context, tx *gorm.DB, key string) error {
 	var existing deepv1gorm.Agenda
-	if err := tx.WithContext(ctx).Preload("Zone").Preload("Slots", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).Preload("Slots.Start").Preload("Slots.End").Preload("Notes", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).First(&existing, "id = ?", id).Error; err != nil {
+	if err := tx.WithContext(ctx).Preload("Zone").Preload("Slots", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).Preload("Slots.Start").Preload("Slots.End").Preload("Notes", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).First(&existing, "id = ?", key).Error; err != nil {
 		return err
 	}
-	if err := deepv1gorm.NewAgendaStore(tx).DeleteByID(ctx, id); err != nil {
+	if err := deepv1gorm.NewAgendaStore(tx).DeleteByID(ctx, existing.ID); err != nil {
 		return err
 	}
 	if d3 := existing.Zone; d3 != nil {
@@ -489,15 +498,16 @@ func (r *GormAgendaRepository) purgeTx(ctx context.Context, tx *gorm.DB, id stri
 	return nil
 }
 
-// purge removes row id, named name, for good through db -- unless something
+// purge removes the row found by key (rowKey), named name, for good through
+// db -- unless something
 // still refers to it, when it keeps the row and reports kept: a row of this
 // database holding a foreign key to it (asked first, then caught again from
 // the constraint itself), or, when askReferrers, a referrer in another
 // database or service (r.Refs). A purge never fails, and never cascades,
 // because of a referrer. gorm.ErrRecordNotFound when there is no such row.
-func (r *GormAgendaRepository) purge(ctx context.Context, db *gorm.DB, id, name string, askReferrers bool) (kept bool, err error) {
+func (r *GormAgendaRepository) purge(ctx context.Context, db *gorm.DB, key, name string, askReferrers bool) (kept bool, err error) {
 	var referenced bool
-	if err := db.WithContext(ctx).Raw(agendaReferencedSQL, id).Scan(&referenced).Error; err != nil {
+	if err := db.WithContext(ctx).Raw(agendaReferencedSQL, key).Scan(&referenced).Error; err != nil {
 		return false, err
 	}
 	if referenced {
@@ -511,7 +521,7 @@ func (r *GormAgendaRepository) purge(ctx context.Context, db *gorm.DB, id, name 
 	// above does not know (one from another generator run) rolls back only
 	// this purge.
 	err = db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		return r.purgeTx(ctx, tx, id)
+		return r.purgeTx(ctx, tx, key)
 	})
 	if repox.IsForeignKeyViolation(err) {
 		r.Refs.Kept(ctx, name, "foreign key")
@@ -521,7 +531,7 @@ func (r *GormAgendaRepository) purge(ctx context.Context, db *gorm.DB, id, name 
 }
 
 // agendaReferencedSQL asks whether any row, deleted or not, still
-// holds a foreign key to the Agenda row with the given id.
+// holds a foreign key to the Agenda row with the given key (rowKey).
 const agendaReferencedSQL = `SELECT EXISTS (SELECT 1 FROM "deep_v1"."meetings" r0 WHERE r0."agenda_id" = t."id") FROM "deep_v1"."agendas" t WHERE t."id" = ?`
 
 // ListByKeys reads every record whose filter field field is one of keys; see
@@ -564,6 +574,7 @@ func (r *GormMeetingRepository) Create(ctx context.Context, parent string, in *d
 		return nil, err
 	}
 	id := repox.NewULID()
+	rowID := id
 	if in.GetName() != "" {
 		ids, err := repox.SplitName(in.GetName(), "agendas", "meetings")
 		if err != nil {
@@ -578,6 +589,9 @@ func (r *GormMeetingRepository) Create(ctx context.Context, parent string, in *d
 	}
 	in = proto.Clone(in).(*deepv1.Meeting)
 	in.Name = FormatMeetingName(parentIDs[0], id)
+	// The id is unique only under the parent, so the row is keyed by a
+	// surrogate of its own: the id itself only when it was minted here.
+	id = rowID
 	if h := r.Hooks.BeforeCreate; h != nil {
 		if err := h(ctx, in); err != nil {
 			return nil, err
@@ -591,23 +605,32 @@ func (r *GormMeetingRepository) Create(ctx context.Context, parent string, in *d
 	if err := r.DB.Transaction(func(tx *gorm.DB) error { return r.insertTx(ctx, tx, in, m) }); err != nil {
 		return nil, repox.MapGormErr(err)
 	}
-	return r.get(ctx, id)
+	return r.get(ctx, m.Name)
 }
 
 // Get returns the record addressed by its resource name.
 func (r *GormMeetingRepository) Get(ctx context.Context, name string) (*deepv1.Meeting, error) {
-	ids, err := repox.SplitName(name, "agendas", "meetings")
+	key, err := r.rowKey(name)
 	if err != nil {
 		return nil, err
 	}
-	return r.get(ctx, ids[len(ids)-1])
+	return r.get(ctx, key)
 }
 
-// get loads by surrogate key — the private read every generated method re-reads
-// through, so Tier-2 overrides of Get never re-enter generated writes.
-func (r *GormMeetingRepository) get(ctx context.Context, id string) (*deepv1.Meeting, error) {
+// rowKey validates name and returns what its row is found by: the name
+// itself, because the id is unique only under the parent.
+func (r *GormMeetingRepository) rowKey(name string) (string, error) {
+	if _, err := repox.SplitName(name, "agendas", "meetings"); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+// get loads by row key (rowKey) — the private read every generated method
+// re-reads through, so Tier-2 overrides of Get never re-enter generated writes.
+func (r *GormMeetingRepository) get(ctx context.Context, key string) (*deepv1.Meeting, error) {
 	var m deepv1gorm.Meeting
-	if err := r.DB.WithContext(ctx).Preload("Start").Preload("End").Preload("Rule").Preload("Rule.Until").Preload("Rule.Days", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).First(&m, "id = ?", id).Error; err != nil {
+	if err := r.DB.WithContext(ctx).Preload("Start").Preload("End").Preload("Rule").Preload("Rule.Until").Preload("Rule.Days", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).First(&m, "name = ?", key).Error; err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	return r.toProto(ctx, &m)
@@ -706,16 +729,15 @@ var meetingColumns = map[string][]string{
 // Update persists the masked fields of in; an empty mask replaces every
 // mutable field. The write happens in one transaction guarded by in.Etag.
 func (r *GormMeetingRepository) Update(ctx context.Context, in *deepv1.Meeting, paths []string) (*deepv1.Meeting, error) {
-	ids, err := repox.SplitName(in.GetName(), "agendas", "meetings")
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		return nil, err
 	}
-	id := ids[len(ids)-1]
-	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, id, in, paths, nil) })
+	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, key, in, paths, nil) })
 	if err != nil {
 		return nil, repox.MapGormErr(err)
 	}
-	return r.get(ctx, id)
+	return r.get(ctx, key)
 }
 
 // updateTx is Update's write inside tx, which a Batch shares with other
@@ -723,11 +745,13 @@ func (r *GormMeetingRepository) Update(ctx context.Context, in *deepv1.Meeting, 
 // waits for this transaction and then sees the etag it wrote, so two writers
 // holding the same etag cannot both pass the guard. outputPaths names the
 // server-owned fields written alongside (UpdateWithOutputOnly); nil for Update.
-func (r *GormMeetingRepository) updateTx(ctx context.Context, tx *gorm.DB, id string, in *deepv1.Meeting, paths, outputPaths []string) error {
+func (r *GormMeetingRepository) updateTx(ctx context.Context, tx *gorm.DB, key string, in *deepv1.Meeting, paths, outputPaths []string) error {
 	var existing deepv1gorm.Meeting
-	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Start").Preload("End").Preload("Rule").Preload("Rule.Until").Preload("Rule.Days", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).First(&existing, "id = ?", id).Error; err != nil {
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Start").Preload("End").Preload("Rule").Preload("Rule.Until").Preload("Rule.Days", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).First(&existing, "name = ?", key).Error; err != nil {
 		return err
 	}
+	id := existing.ID
+	_ = id
 	var staleStart string
 	var staleEnd string
 	var staleRule *deepv1gorm.Rule
@@ -846,6 +870,7 @@ func (r *GormMeetingRepository) newRow(parent string, in *deepv1.Meeting) (*deep
 		return nil, nil, err
 	}
 	id := repox.NewULID()
+	rowID := id
 	if in.GetName() != "" {
 		ids, err := repox.SplitName(in.GetName(), "agendas", "meetings")
 		if err != nil {
@@ -860,6 +885,7 @@ func (r *GormMeetingRepository) newRow(parent string, in *deepv1.Meeting) (*deep
 	}
 	in = proto.Clone(in).(*deepv1.Meeting)
 	in.Name = FormatMeetingName(parentIDs[0], id)
+	id = rowID // keyed as Create keys it
 	m := deepv1gorm.MeetingFromProto(in)
 	m.ID = id
 	m.Name = in.GetName()
@@ -925,7 +951,7 @@ func (r *GormMeetingRepository) insertTx(ctx context.Context, tx *gorm.DB, in *d
 
 // Delete removes the record addressed by its resource name.
 func (r *GormMeetingRepository) Delete(ctx context.Context, name string) error {
-	ids, err := repox.SplitName(name, "agendas", "meetings")
+	key, err := r.rowKey(name)
 	if err != nil {
 		return err
 	}
@@ -934,18 +960,17 @@ func (r *GormMeetingRepository) Delete(ctx context.Context, name string) error {
 			return err
 		}
 	}
-	id := ids[len(ids)-1]
-	return repox.MapGormErr(r.DB.Transaction(func(tx *gorm.DB) error { return r.purgeTx(ctx, tx, id) }))
+	return repox.MapGormErr(r.DB.Transaction(func(tx *gorm.DB) error { return r.purgeTx(ctx, tx, key) }))
 }
 
-// purgeTx removes row id inside tx, with the value-object rows it owns;
-// gorm.ErrRecordNotFound when there is no such row.
-func (r *GormMeetingRepository) purgeTx(ctx context.Context, tx *gorm.DB, id string) error {
+// purgeTx removes the row found by key (rowKey) inside tx, with the
+// value-object rows it owns; gorm.ErrRecordNotFound when there is no such row.
+func (r *GormMeetingRepository) purgeTx(ctx context.Context, tx *gorm.DB, key string) error {
 	var existing deepv1gorm.Meeting
-	if err := tx.WithContext(ctx).Preload("Start").Preload("End").Preload("Rule").Preload("Rule.Until").Preload("Rule.Days", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).First(&existing, "id = ?", id).Error; err != nil {
+	if err := tx.WithContext(ctx).Preload("Start").Preload("End").Preload("Rule").Preload("Rule.Until").Preload("Rule.Days", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).First(&existing, "name = ?", key).Error; err != nil {
 		return err
 	}
-	if err := deepv1gorm.NewMeetingStore(tx).DeleteByID(ctx, id); err != nil {
+	if err := deepv1gorm.NewMeetingStore(tx).DeleteByID(ctx, existing.ID); err != nil {
 		return err
 	}
 	if existing.StartID != "" {
@@ -1020,15 +1045,15 @@ func (b *gormBatch) CreateAgenda(in *deepv1.Agenda) (string, error) {
 // UpdateAgenda queues Update; in.Etag, when set, guards it, and a guard
 // that fails rolls the whole batch back.
 func (b *gormBatch) UpdateAgenda(in *deepv1.Agenda, paths []string) {
-	ids, err := repox.SplitName(in.GetName(), "agendas")
+	r := &GormAgendaRepository{DB: b.db}
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
 		return
 	}
-	r := &GormAgendaRepository{DB: b.db}
 	queueAgendaReferences(b.u, in, paths)
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
-		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, nil)
+		return r.updateTx(ctx, tx, key, in, paths, nil)
 	})
 	b.u.Record(repox.Change{Type: "deep.v1/Agenda", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getAgenda)})
 }
@@ -1036,15 +1061,15 @@ func (b *gormBatch) UpdateAgenda(in *deepv1.Agenda, paths []string) {
 // DeleteAgenda queues a soft delete. A record already deleted or gone is
 // not an error: two batches deleting the same record must not fail each other.
 func (b *gormBatch) DeleteAgenda(name string) {
-	ids, err := repox.SplitName(name, "agendas")
+	r := &GormAgendaRepository{DB: b.db}
+	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)
 		return
 	}
-	r := &GormAgendaRepository{DB: b.db}
 	queueAgendaDelete(b.u, name, false)
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
-		return r.markDeleted(ctx, tx, ids[len(ids)-1]).Error
+		return r.markDeleted(ctx, tx, key).Error
 	})
 	b.u.Record(repox.Change{Type: "deep.v1/Agenda", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getAgenda)})
 }
@@ -1053,20 +1078,19 @@ func (b *gormBatch) DeleteAgenda(name string) {
 // gone is not an error: two batches clearing the same row must not fail each
 // other.
 func (b *gormBatch) PurgeAgenda(name string) {
-	ids, err := repox.SplitName(name, "agendas")
+	// A record something still refers to is kept, as Purge keeps it.
+	r := &GormAgendaRepository{DB: b.db, Refs: b.u.Conn().References}
+	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)
 		return
 	}
-	id := ids[len(ids)-1]
-	// A record something still refers to is kept, as Purge keeps it.
-	r := &GormAgendaRepository{DB: b.db, Refs: b.u.Conn().References}
 	keep := queueAgendaPurge(b.u, name)
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		if *keep {
 			return nil
 		}
-		if _, err := r.purge(ctx, tx, id, name, false); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		if _, err := r.purge(ctx, tx, key, name, false); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
 		return nil
@@ -1096,15 +1120,15 @@ func (b *gormBatch) CreateMeeting(parent string, in *deepv1.Meeting) (string, er
 // UpdateMeeting queues Update; in.Etag, when set, guards it, and a guard
 // that fails rolls the whole batch back.
 func (b *gormBatch) UpdateMeeting(in *deepv1.Meeting, paths []string) {
-	ids, err := repox.SplitName(in.GetName(), "agendas", "meetings")
+	r := &GormMeetingRepository{DB: b.db}
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
 		return
 	}
-	r := &GormMeetingRepository{DB: b.db}
 	queueMeetingReferences(b.u, in, paths)
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
-		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, nil)
+		return r.updateTx(ctx, tx, key, in, paths, nil)
 	})
 	b.u.Record(repox.Change{Type: "deep.v1/Meeting", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getMeeting)})
 }
@@ -1113,16 +1137,15 @@ func (b *gormBatch) UpdateMeeting(in *deepv1.Meeting, paths []string) {
 // gone is not an error: two batches clearing the same row must not fail each
 // other.
 func (b *gormBatch) DeleteMeeting(name string) {
-	ids, err := repox.SplitName(name, "agendas", "meetings")
+	r := &GormMeetingRepository{DB: b.db}
+	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)
 		return
 	}
-	id := ids[len(ids)-1]
 	queueMeetingDelete(b.u, name, true)
-	r := &GormMeetingRepository{DB: b.db}
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
-		if err := r.purgeTx(ctx, tx, id); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		if err := r.purgeTx(ctx, tx, key); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
 		return nil

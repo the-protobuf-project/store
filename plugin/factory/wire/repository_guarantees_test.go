@@ -153,3 +153,53 @@ func TestReferenceIntegrityOnEveryPath(t *testing.T) {
 		t.Error("graphql.go does not map foreign key violations")
 	}
 }
+
+// A nested resource's id is unique only under its parent, so no generated
+// path may find its row by the last name segment: on GORM every read and
+// write is keyed by the name column, on GraphQL the row is found by name
+// first (find/rowID), and a Batch resolves it the same way.
+func TestNestedResourcesAreKeyedByName(t *testing.T) {
+	const dir = "testdata/cases/references/golden/repository/catalog/catalog"
+	byLast := "ids[len(ids)-1]"
+	gormSrc := readGolden(t, dir, "gorm.go")
+	gqlSrc := readGolden(t, dir, "graphql.go")
+	for _, model := range []string{"Book", "Page"} {
+		for _, m := range []string{"Get", "rowKey", "Update", "UpdateWithOutputOnly", "UpdateOutputOnly", "updateOutputOnlyTx", "Delete", "Undelete", "Purge", "PurgeExpired"} {
+			body, ok := funcBody(gormSrc, "func (r *Gorm"+model+"Repository) "+m+"(")
+			if ok && strings.Contains(body, byLast) {
+				t.Errorf("Gorm%sRepository.%s keys by the last name segment", model, m)
+			}
+		}
+		for _, m := range []string{"get", "updateTx", "markDeleted", "purge"} {
+			body, ok := funcBody(gormSrc, "func (r *Gorm"+model+"Repository) "+m+"(")
+			if ok && strings.Contains(body, `"id = ?`) {
+				t.Errorf("Gorm%sRepository.%s finds its row by id", model, m)
+			}
+		}
+		for _, m := range []string{"Get", "rowID", "update", "UpdateOutputOnly", "Delete", "Undelete", "Purge", "PurgeExpired"} {
+			body, ok := funcBody(gqlSrc, "func (r *GraphQL"+model+"Repository) "+m+"(")
+			if ok && strings.Contains(body, byLast) {
+				t.Errorf("GraphQL%sRepository.%s keys by the last name segment", model, m)
+			}
+		}
+		for _, m := range []string{"Update" + model + "(", "Delete" + model + "(", "Purge" + model + "("} {
+			for _, src := range []string{gormSrc, gqlSrc} {
+				for _, recv := range []string{"func (b *gormBatch) ", "func (b *graphQLBatch) "} {
+					if body, ok := funcBody(src, recv+m); ok && strings.Contains(body, byLast) {
+						t.Errorf("%s%s keys by the last name segment", recv, m)
+					}
+				}
+			}
+		}
+	}
+	// A page's book column and List scope go through the book's name.
+	if body, _ := funcBody(gormSrc, "func (r *GormPageRepository) linkParents("); !strings.Contains(body, "repox.RowKey(") {
+		t.Error("GormPageRepository does not resolve its book by name")
+	}
+	if body, _ := funcBody(gqlSrc, "func (r *GraphQLPageRepository) linkParents("); !strings.Contains(body, "booksql.Name.Eq(n)") {
+		t.Error("GraphQLPageRepository does not resolve its book by name")
+	}
+	if body, _ := funcBody(gqlSrc, "func (r *GraphQLPageRepository) List("); !strings.Contains(body, "pagesql.BookId.In(") {
+		t.Error("GraphQLPageRepository.List does not scope by the book rows found by name")
+	}
+}

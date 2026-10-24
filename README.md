@@ -716,12 +716,22 @@ GORM and a GraphQL adapter behind one interface. Besides `Create`, `Get`, `List`
   (`"calendars/-"`) reads across every parent. Each parent is exposed as a
   filter field named after it (`calendar`), so the read can be narrowed with
   `filterx.In("calendar", ...)`.
+- **Nested resources are keyed by name.** A nested resource's id is unique
+  only under its parent (two calendars can each hold `events/hours.ics`), so
+  both adapters find its row by the unique `name` column, never by the last
+  segment. A row created with a caller-chosen id gets a ULID surrogate key of
+  its own (a minted id is still the key); rows stored before v1.6.2, keyed by
+  the bare id, are found by their name all the same, so no migration is
+  needed. A child of a nested parent points its parent column at the parent's
+  row, looked up by name, and `List` under such a parent scopes through it.
 - **References to nested resources.** These are stored as the full resource
   name, because `parents/{p}/children/{c}` can't be rebuilt from its last id,
   and they match as text in filters. A reference to a top-level resource still
   stores the bare id.
 - **Conversions:**
-  - `google.type.Interval` is stored as `start/end` RFC 3339 text;
+  - `google.type.Interval` is stored as `start/end` RFC 3339 text, in a
+    `TEXT` column on every target (only a projection's `range_field` is a
+    `TSTZRANGE`/`TSTZMULTIRANGE`);
   - each oneof's `<oneof>_case` discriminator is written from whichever arm is
     set, scalar arms included;
   - `OUTPUT_ONLY` scalars are read back on GraphQL;
@@ -859,7 +869,8 @@ backend deletes by one column), a unique index on the key, `row_version
 BIGINT` (raised by every upsert), the range column as `TSTZMULTIRANGE`
 (`TSTZRANGE` for a single Interval) under GiST, GIN on `text[]` and `jsonb`,
 trigram GIN on `search: true` text, and the declared B-tree/GIN/GiST/expression
-indexes. The repository target emits `projection_<name>.go` (a
+indexes (a declared B-tree `fields` index ends in `id`; see [page
+indexes](#page-indexes-and-the-range-test) below). The repository target emits `projection_<name>.go` (a
 `repox.Projection[*T]` value, e.g. `RoomDays`, and `<Model>Writer`/`<Model>Rows`
 aliases) and the runtime `repox/projection.go`.
 
@@ -902,6 +913,55 @@ n, err := search.RoomDays.Count(ctx, conn, in)
 buckets, err := search.RoomDays.Facet(ctx, conn, in, "kinds", 20) // also enums, numbers, attributes.<path>
 ```
 
+`OrderBy` takes the sortable fields and any JSON path declared in
+`(store.v1.query).json_keys` — `"attributes.seats desc, day"` — on a
+projection's `Search` and a resource's `List` alike. On Postgres the path
+sorts as its declared type (`("attributes" ->> 'seats')::bigint`; `double
+precision`, `boolean`, `date`, `timestamptz`, or text for a string); a value
+that does not read as that type fails the query, as the declaration says it
+cannot occur. An index on the same expression serves it. An undeclared path is
+rejected with `ErrInvalidArgument`. Pages stay keyset: the token carries the
+path's typed value (named `attributes.seats`), and the key breaks ties.
+
+A `ReadMask` decides what Postgres reads: the search selects
+`jsonb_build_object(...)` of the masked columns, the key fields and the
+columns the page token needs, instead of the whole row, so a candidate read
+(`ReadMask: []string{"room"}`) does not serialize the range, arrays and JSON
+of every match. No mask still reads every column.
+
+#### Page indexes and the range test
+
+Every declared B-tree `fields` index
+(not `unique`) ends in the key column `id`: `{fields: ["organization",
+"day"]}` is created as `(organization, day, id)`. Equality on its leading
+columns then reads matches in key order (the default page order, and every
+order's tiebreak) straight from the index; to page in another order, declare
+the equality columns followed by the order's, e.g. `{fields: ["organization",
+"day", "organizational_unit", "resource"]}` for `OrderBy:
+"organizational_unit, resource"`. And when a search with a `Range` has a
+top-level equality (`=` or `filterx.In`) on a column leading a B-tree index
+(the key's first field or a declared index's), the range test is written
+`coalesce(<range> @> r, false)` — the same rows — instead of `<range> @> r`.
+Postgres multiplies a bare range test's selectivity into the equalities' as
+if independent, so a day where nearly every row is free is expected to hold
+a handful of matches, and it bitmap-scans and sorts all of them before the
+`LIMIT`; the coalesce form gets a flat estimate and the planner reads the page
+index instead. A search without such an equality keeps the bare test, which
+the range's GiST index serves. Extended statistics on the equality columns
+and a `btree_gist` composite GiST `(organization, day, free)` were measured
+too and do not change the estimate (extended statistics do not cover range
+operators), so neither is generated.
+
+Measured on PostgreSQL 18 with 2,000 resources × 365 days in one
+organization (730k rows), `organization = ? AND day = ? AND free @> 1h`,
+ms per page of 201 (ordered by site, resource) / 1,001 (by key):
+
+| | all free | 98% busy |
+| --- | --- | --- |
+| before (bare test, `(organization, day)`): bitmap scan + sort | 4.7 / 9.3 | 1.1 / 0.65 |
+| after (coalesce, page indexes): ordered index scan, chosen unaided | 0.31 / 0.87 | 1.1 / 0.6 |
+| range only, no equality (bare test kept): GiST bitmap scan | 9.0 | 0.96 |
+
 **On Hasura/GraphQL** (`graphql_module` set, `repox.Conn{GraphQL: svc}`): a
 `Batch`/`Unit` commit sends the projection's mutations in the same request as
 the writes (one DDN transaction); a single repository write projects in a
@@ -910,7 +970,15 @@ request of its own right after it (`Projections.OnError`, or
 range operators or GROUP BY, so: an upsert is delete-and-insert, versions come
 from the client's clock, `Range` is checked on the rows read (pages may come
 back short), and a ranged `Count` or a `Facet` scans at most
-`repox.GraphQLScanLimit` rows. The table lives in the same Postgres, so the
+`repox.GraphQLScanLimit` rows. Two things fail before any request, with
+`filterx.ErrUnsupported` (which wraps `filterx.ErrInvalid`; `repox.MapFilterxErr`
+keeps it under `ErrInvalidArgument`): a `:` on a `text[]` column (tags), and an
+`OrderBy` on a JSON path. ndc-postgres (v3.1.0, the latest) declares neither
+`nested_fields.filter_by.nested_arrays` nor `exists.nested_scalar_collections`,
+so `ddn connector introspect` / `ddn model add` leave array columns out of the
+BoolExp and the engine has no array comparison to send; DDN's order_by has no
+JSON path expression either. Set `filterx.HasuraArrayContains = true` against a
+connector that does filter arrays of scalars, and tags go out as `_contains`. The table lives in the same Postgres, so the
 safest setup for search-heavy paths is to keep writes on Hasura and run
 `Search`/`Count`/`Facet` over a `repox.Conn{Gorm: db}` to that Postgres (or on
 OpenSearch).
@@ -934,7 +1002,9 @@ and `<db>/<schema>/<model>_index.go` per projection: `<Model>Index` with a
 generated mapping — `keyword` (text, enums, tags), `long`/`double`/
 `unsigned_long`/`boolean`, `date` (dates keep `YYYY-MM-DD`), `date_range` for
 the range column, `flat_object` for JSON plus typed properties under
-`<column>_typed` for declared `json_keys`.
+`<column>_typed` for declared `json_keys` (which filter, facet and sort as
+their type: `OrderBy: "attributes.seats desc"` sorts on
+`attributes_typed.seats`).
 
 ```go
 ix := search.RoomDayIndex

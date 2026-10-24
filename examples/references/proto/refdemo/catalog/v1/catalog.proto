@@ -69,3 +69,21 @@ message Book {
   // When the soft-deleted book goes for good.
   google.protobuf.Timestamp expire_time = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
+
+// A page of a book: nested two deep, so the row it hangs off is a nested
+// resource's, found by its name.
+message Page {
+  option (google.api.resource) = {
+    type: "catalog.example.com/Page"
+    pattern: "shelves/{shelf}/books/{book}/pages/{page}"
+    singular: "page"
+    plural: "pages"
+  };
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
+
+  // The page's resource name.
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  // What is printed on it.
+  string text = 2;
+}

@@ -288,7 +288,9 @@ func (x *ProjectionOptions) GetSearchIndex() string {
 type ProjectionIndex struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// fields are the indexed fields (proto names), in order. Exclusive with
-	// expression.
+	// expression. A B-tree index that is not unique ends in the key column
+	// ("id") as well, so a search with equality on its leading fields pages
+	// in the order of the rest straight from the index.
 	Fields []string `protobuf:"bytes,1,rep,name=fields,proto3" json:"fields,omitempty"`
 	// expression is an index expression written verbatim, e.g.
 	// "((attributes->>'floor')::int)". Exclusive with fields.

@@ -418,6 +418,12 @@ type ProjectionSpec struct {
 	Columns []ProjectionColumn
 	// Range is the range column Search's range is matched against, or "".
 	Range string
+	// IndexLeads are the columns leading a B-tree index of the table (the
+	// key's, and each declared B-tree index's, which ends in the key column
+	// so it serves pages in its order). A search with equality on one of
+	// them writes its range test so the planner leaves it out of the row
+	// estimate (see rangeClause).
+	IndexLeads []string
 	// Sources are the resource types the projection is derived from.
 	Sources []string
 	// Filter is the table's AIP-160/AIP-132 surface.
@@ -1433,14 +1439,42 @@ func columnNames(cs []ProjectionColumn) []string {
 }
 
 // rangeClause is the SQL keeping rows whose range contains in.Range.
-func (p *Projection[T]) rangeClause(in SearchInput) (string, []any, error) {
+//
+// Scoped by equality on a column leading a B-tree index (an organization and
+// a day, say), the test is written coalesce(range @> r, false): the same rows
+// (WHERE drops a NULL as it drops false), but an expression PostgreSQL gives
+// a flat selectivity instead of multiplying the range's into the
+// equalities'. Multiplied, a day where nearly every row is free is expected
+// to hold a handful of matches, and the planner bitmap-scans and sorts all of
+// them before the LIMIT rather than read the index that already holds them
+// in page order. Unscoped, the bare test stays, so the GiST index on the
+// range serves it.
+func (p *Projection[T]) rangeClause(in SearchInput, scoped bool) (string, []any, error) {
 	if in.Range == nil {
 		return "", nil, nil
 	}
 	if p.Spec.Range == "" {
 		return "", nil, fmt.Errorf("%w: projection %s has no range to search", ErrInvalidArgument, p.Spec.Name)
 	}
-	return p.Spec.Table + `."` + p.Spec.Range + `" @> CAST(? AS tstzrange)`, []any{FormatRange(*in.Range)}, nil
+	test := p.Spec.Table + `."` + p.Spec.Range + `" @> CAST(? AS tstzrange)`
+	if scoped {
+		test = "coalesce(" + test + ", false)"
+	}
+	return test, []any{FormatRange(*in.Range)}, nil
+}
+
+// scoped reports whether conds hold, at the top level, an equality (= or
+// any-of) on a column leading a B-tree index.
+func (p *Projection[T]) scoped(conds []filterx.Condition) bool {
+	for _, c := range conds {
+		if c.Hint || (c.Op != filterx.OpEq && c.Op != filterx.OpIn) {
+			continue
+		}
+		if f, ok := p.Spec.Filter.Fields[c.Field]; ok && f.Via == nil && slices.Contains(p.Spec.IndexLeads, f.Column) {
+			return true
+		}
+	}
+	return false
 }
 
 // whereGorm is the search's conditions as one SQL clause.
@@ -1454,7 +1488,7 @@ func (p *Projection[T]) whereGorm(in SearchInput) (string, []any, error) {
 	if err != nil {
 		return "", nil, MapFilterxErr(err)
 	}
-	rc, rargs, err := p.rangeClause(in)
+	rc, rargs, err := p.rangeClause(in, p.scoped(conds))
 	if err != nil {
 		return "", nil, err
 	}
@@ -1468,13 +1502,52 @@ func (p *Projection[T]) whereGorm(in SearchInput) (string, []any, error) {
 	return strings.Join(parts, " AND "), args, nil
 }
 
-// docColumn is the whole row as one jsonb document, which decode reads.
-func (p *Projection[T]) docColumn() string {
-	table := p.Spec.Table
-	if i := strings.LastIndex(table, "."); i >= 0 {
-		table = table[i+1:]
+// docColumn is the row as one jsonb document, which decode reads: the
+// columns mask reads (every column for an empty mask), the key fields', and
+// the values the page token needs -- each term's column, and for a JSON path
+// term its typed value keyed by the term's name. Selecting only those keeps
+// a narrow read (a candidate read asks for one column) from serializing the
+// range, arrays and JSON of every row.
+func (p *Projection[T]) docColumn(mask []string, terms []filterx.OrderTerm) string {
+	col := func(c string) string { return p.Spec.Table + `."` + c + `"` }
+	var pairs []string
+	seen := map[string]bool{}
+	add := func(key, expr string) {
+		if !seen[key] {
+			seen[key] = true
+			pairs = append(pairs, "'"+key+"', "+expr)
+		}
 	}
-	return "to_jsonb(" + table + ".*)"
+	if len(mask) > 0 {
+		for _, c := range p.Spec.Columns {
+			if slices.Contains(p.Spec.Key, c.Field) || Reads(mask, c.Field) {
+				add(c.Column, col(c.Column))
+			}
+		}
+		for _, t := range terms {
+			if len(t.Path) == 0 {
+				add(t.Column, col(t.Column))
+			}
+		}
+	}
+	for _, t := range terms {
+		if len(t.Path) > 0 {
+			add(t.Name(), filterx.SQLTermExpr(p.Spec.Filter, t))
+		}
+	}
+	// jsonb_build_object takes at most 100 arguments: 50 pairs per call.
+	var parts []string
+	if len(mask) == 0 {
+		table := p.Spec.Table
+		if i := strings.LastIndex(table, "."); i >= 0 {
+			table = table[i+1:]
+		}
+		parts = append(parts, "to_jsonb("+table+".*)")
+	}
+	for chunk := range slices.Chunk(pairs, 50) {
+		parts = append(parts, "jsonb_build_object("+strings.Join(chunk, ", ")+")")
+	}
+	return strings.Join(parts, " || ")
 }
 
 // Search returns one page of rows whose range contains in.Range and that
@@ -1545,7 +1618,7 @@ func (p *Projection[T]) rows(ctx context.Context, conn Conn, in SearchInput) ([]
 	}
 	order, _ := eng.OrderClause(in.OrderBy)
 	limit := filterx.PageLimit(filterx.ListInput{PageSize: in.PageSize})
-	q := conn.Gorm.WithContext(ctx).Table(p.Spec.Table).Select(p.docColumn() + " AS doc")
+	q := conn.Gorm.WithContext(ctx).Table(p.Spec.Table).Select(p.docColumn(in.ReadMask, terms) + " AS doc")
 	if where != "" {
 		q = q.Where(where, args...)
 	}
@@ -1579,7 +1652,7 @@ func nextPage(rows []map[string]any, limit int, terms []filterx.OrderTerm, key f
 	vals := make([]*string, len(terms))
 	last := rows[len(rows)-1]
 	for i, t := range terms {
-		vals[i] = cursorText(last[key(t.Column)])
+		vals[i] = cursorText(last[key(t.Name())])
 	}
 	next, err := filterx.EncodeCursor(terms, vals)
 	return rows, next, err
@@ -1886,7 +1959,10 @@ func (p *Projection[T]) rowsGraphQL(ctx context.Context, conn Conn, in SearchInp
 	if err != nil {
 		return nil, "", MapFilterxErr(err)
 	}
-	order, _ := eng.OrderTerms(in.OrderBy)
+	order, err := eng.OrderTerms(in.OrderBy)
+	if err != nil {
+		return nil, "", MapFilterxErr(err)
+	}
 	seek, hasSeek, err := eng.Seek(in.OrderBy, in.PageToken)
 	if err != nil {
 		return nil, "", MapFilterxErr(err)

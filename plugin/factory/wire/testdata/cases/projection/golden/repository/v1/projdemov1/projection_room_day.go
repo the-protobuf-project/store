@@ -63,9 +63,10 @@ var RoomDays = &repox.Projection[*projdemov1.RoomDay]{
 			{Field: "occupancy", Column: "occupancy", Kind: repox.ColEnum, SQLType: "varchar(255)", EnumPrefix: "OCCUPANCY_"},
 			{Field: "display_name", Column: "display_name", Kind: repox.ColText, SQLType: "text"},
 		},
-		Range:   "free",
-		Sources: []string{"projdemo.v1/Room", "projdemo.v1/Booking"},
-		Filter:  projdemov1gorm.RoomDayFilterSpec,
+		Range:      "free",
+		IndexLeads: []string{"room", "floor"},
+		Sources:    []string{"projdemo.v1/Room", "projdemo.v1/Booking"},
+		Filter:     projdemov1gorm.RoomDayFilterSpec,
 	},
 	New: func() *projdemov1.RoomDay { return new(projdemov1.RoomDay) },
 	GraphQL: &repox.ProjectionGraphQL{

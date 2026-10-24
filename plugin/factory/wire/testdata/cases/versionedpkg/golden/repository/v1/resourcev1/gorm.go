@@ -77,18 +77,27 @@ func (r *GormEventRepository) Create(ctx context.Context, in *resourcev1.Event) 
 
 // Get returns the record addressed by its resource name.
 func (r *GormEventRepository) Get(ctx context.Context, name string) (*resourcev1.Event, error) {
-	ids, err := repox.SplitName(name, "events")
+	key, err := r.rowKey(name)
 	if err != nil {
 		return nil, err
 	}
-	return r.get(ctx, ids[len(ids)-1])
+	return r.get(ctx, key)
 }
 
-// get loads by surrogate key — the private read every generated method re-reads
-// through, so Tier-2 overrides of Get never re-enter generated writes.
-func (r *GormEventRepository) get(ctx context.Context, id string) (*resourcev1.Event, error) {
+// rowKey validates name and returns what its row is found by: the bare id.
+func (r *GormEventRepository) rowKey(name string) (string, error) {
+	ids, err := repox.SplitName(name, "events")
+	if err != nil {
+		return "", err
+	}
+	return ids[len(ids)-1], nil
+}
+
+// get loads by row key (rowKey) — the private read every generated method
+// re-reads through, so Tier-2 overrides of Get never re-enter generated writes.
+func (r *GormEventRepository) get(ctx context.Context, key string) (*resourcev1.Event, error) {
 	var m resourcev1gorm.Event
-	if err := r.DB.WithContext(ctx).Preload("Window").First(&m, "id = ?", id).Error; err != nil {
+	if err := r.DB.WithContext(ctx).Preload("Window").First(&m, "id = ?", key).Error; err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	return r.toProto(ctx, &m)
@@ -172,16 +181,15 @@ var eventColumns = map[string][]string{
 // Update persists the masked fields of in; an empty mask replaces every
 // mutable field. The write happens in one transaction guarded by in.Etag.
 func (r *GormEventRepository) Update(ctx context.Context, in *resourcev1.Event, paths []string) (*resourcev1.Event, error) {
-	ids, err := repox.SplitName(in.GetName(), "events")
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		return nil, err
 	}
-	id := ids[len(ids)-1]
-	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, id, in, paths, nil) })
+	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, key, in, paths, nil) })
 	if err != nil {
 		return nil, repox.MapGormErr(err)
 	}
-	return r.get(ctx, id)
+	return r.get(ctx, key)
 }
 
 // updateTx is Update's write inside tx, which a Batch shares with other
@@ -189,11 +197,13 @@ func (r *GormEventRepository) Update(ctx context.Context, in *resourcev1.Event, 
 // waits for this transaction and then sees the etag it wrote, so two writers
 // holding the same etag cannot both pass the guard. outputPaths names the
 // server-owned fields written alongside (UpdateWithOutputOnly); nil for Update.
-func (r *GormEventRepository) updateTx(ctx context.Context, tx *gorm.DB, id string, in *resourcev1.Event, paths, outputPaths []string) error {
+func (r *GormEventRepository) updateTx(ctx context.Context, tx *gorm.DB, key string, in *resourcev1.Event, paths, outputPaths []string) error {
 	var existing resourcev1gorm.Event
-	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Window").First(&existing, "id = ?", id).Error; err != nil {
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Window").First(&existing, "id = ?", key).Error; err != nil {
 		return err
 	}
+	id := existing.ID
+	_ = id
 	var staleWindow string
 	existingPB := resourcev1gorm.EventToProto(&existing)
 	merged := proto.Clone(existingPB).(*resourcev1.Event)
@@ -273,7 +283,7 @@ func (r *GormEventRepository) insertTx(ctx context.Context, tx *gorm.DB, in *res
 
 // Delete removes the record addressed by its resource name.
 func (r *GormEventRepository) Delete(ctx context.Context, name string) error {
-	ids, err := repox.SplitName(name, "events")
+	key, err := r.rowKey(name)
 	if err != nil {
 		return err
 	}
@@ -282,18 +292,17 @@ func (r *GormEventRepository) Delete(ctx context.Context, name string) error {
 			return err
 		}
 	}
-	id := ids[len(ids)-1]
-	return repox.MapGormErr(r.DB.Transaction(func(tx *gorm.DB) error { return r.purgeTx(ctx, tx, id) }))
+	return repox.MapGormErr(r.DB.Transaction(func(tx *gorm.DB) error { return r.purgeTx(ctx, tx, key) }))
 }
 
-// purgeTx removes row id inside tx, with the value-object rows it owns;
-// gorm.ErrRecordNotFound when there is no such row.
-func (r *GormEventRepository) purgeTx(ctx context.Context, tx *gorm.DB, id string) error {
+// purgeTx removes the row found by key (rowKey) inside tx, with the
+// value-object rows it owns; gorm.ErrRecordNotFound when there is no such row.
+func (r *GormEventRepository) purgeTx(ctx context.Context, tx *gorm.DB, key string) error {
 	var existing resourcev1gorm.Event
-	if err := tx.WithContext(ctx).First(&existing, "id = ?", id).Error; err != nil {
+	if err := tx.WithContext(ctx).First(&existing, "id = ?", key).Error; err != nil {
 		return err
 	}
-	if err := resourcev1gorm.NewEventStore(tx).DeleteByID(ctx, id); err != nil {
+	if err := resourcev1gorm.NewEventStore(tx).DeleteByID(ctx, existing.ID); err != nil {
 		return err
 	}
 	if existing.WindowID != nil {
@@ -347,15 +356,15 @@ func (b *gormBatch) CreateEvent(in *resourcev1.Event) (string, error) {
 // UpdateEvent queues Update; in.Etag, when set, guards it, and a guard
 // that fails rolls the whole batch back.
 func (b *gormBatch) UpdateEvent(in *resourcev1.Event, paths []string) {
-	ids, err := repox.SplitName(in.GetName(), "events")
+	r := &GormEventRepository{DB: b.db}
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
 		return
 	}
-	r := &GormEventRepository{DB: b.db}
 	queueEventReferences(b.u, in, paths)
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
-		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, nil)
+		return r.updateTx(ctx, tx, key, in, paths, nil)
 	})
 	b.u.Record(repox.Change{Type: "resource.v1/Event", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getEvent)})
 }
@@ -364,16 +373,15 @@ func (b *gormBatch) UpdateEvent(in *resourcev1.Event, paths []string) {
 // gone is not an error: two batches clearing the same row must not fail each
 // other.
 func (b *gormBatch) DeleteEvent(name string) {
-	ids, err := repox.SplitName(name, "events")
+	r := &GormEventRepository{DB: b.db}
+	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)
 		return
 	}
-	id := ids[len(ids)-1]
 	queueEventDelete(b.u, name, true)
-	r := &GormEventRepository{DB: b.db}
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
-		if err := r.purgeTx(ctx, tx, id); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		if err := r.purgeTx(ctx, tx, key); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
 		return nil

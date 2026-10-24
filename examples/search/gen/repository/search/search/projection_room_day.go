@@ -60,9 +60,10 @@ var RoomDays = &repox.Projection[*searchdemov1.RoomDay]{
 			{Field: "occupancy", Column: "occupancy", Kind: repox.ColEnum, SQLType: "varchar(255)", EnumPrefix: "OCCUPANCY_"},
 			{Field: "display_name", Column: "display_name", Kind: repox.ColText, SQLType: "text"},
 		},
-		Range:   "free",
-		Sources: []string{"searchdemo.v1/Room", "searchdemo.v1/Booking"},
-		Filter:  search.RoomDayFilterSpec,
+		Range:      "free",
+		IndexLeads: []string{"room", "floor"},
+		Sources:    []string{"searchdemo.v1/Room", "searchdemo.v1/Booking"},
+		Filter:     search.RoomDayFilterSpec,
 	},
 	New: func() *searchdemov1.RoomDay { return new(searchdemov1.RoomDay) },
 }

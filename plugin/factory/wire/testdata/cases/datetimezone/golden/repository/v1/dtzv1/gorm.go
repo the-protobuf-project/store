@@ -78,18 +78,27 @@ func (r *GormSessionRepository) Create(ctx context.Context, in *dtzv1.Session) (
 
 // Get returns the record addressed by its resource name.
 func (r *GormSessionRepository) Get(ctx context.Context, name string) (*dtzv1.Session, error) {
-	ids, err := repox.SplitName(name, "sessions")
+	key, err := r.rowKey(name)
 	if err != nil {
 		return nil, err
 	}
-	return r.get(ctx, ids[len(ids)-1])
+	return r.get(ctx, key)
 }
 
-// get loads by surrogate key — the private read every generated method re-reads
-// through, so Tier-2 overrides of Get never re-enter generated writes.
-func (r *GormSessionRepository) get(ctx context.Context, id string) (*dtzv1.Session, error) {
+// rowKey validates name and returns what its row is found by: the bare id.
+func (r *GormSessionRepository) rowKey(name string) (string, error) {
+	ids, err := repox.SplitName(name, "sessions")
+	if err != nil {
+		return "", err
+	}
+	return ids[len(ids)-1], nil
+}
+
+// get loads by row key (rowKey) — the private read every generated method
+// re-reads through, so Tier-2 overrides of Get never re-enter generated writes.
+func (r *GormSessionRepository) get(ctx context.Context, key string) (*dtzv1.Session, error) {
 	var m dtzv1gorm.Session
-	if err := r.DB.WithContext(ctx).First(&m, "id = ?", id).Error; err != nil {
+	if err := r.DB.WithContext(ctx).First(&m, "id = ?", key).Error; err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	return r.toProto(ctx, &m)
@@ -170,31 +179,29 @@ var sessionColumns = map[string][]string{
 // Update persists the masked fields of in; an empty mask replaces every
 // mutable field. The write happens in one transaction guarded by in.Etag.
 func (r *GormSessionRepository) Update(ctx context.Context, in *dtzv1.Session, paths []string) (*dtzv1.Session, error) {
-	ids, err := repox.SplitName(in.GetName(), "sessions")
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		return nil, err
 	}
-	id := ids[len(ids)-1]
-	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, id, in, paths, nil) })
+	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, key, in, paths, nil) })
 	if err != nil {
 		return nil, repox.MapGormErr(err)
 	}
-	return r.get(ctx, id)
+	return r.get(ctx, key)
 }
 
 // UpdateWithOutputOnly is Update plus the server-owned fields outputPaths
 // names, in Update's transaction and under its etag guard.
 func (r *GormSessionRepository) UpdateWithOutputOnly(ctx context.Context, in *dtzv1.Session, paths, outputPaths []string) (*dtzv1.Session, error) {
-	ids, err := repox.SplitName(in.GetName(), "sessions")
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		return nil, err
 	}
-	id := ids[len(ids)-1]
-	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, id, in, paths, outputPaths) })
+	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, key, in, paths, outputPaths) })
 	if err != nil {
 		return nil, repox.MapGormErr(err)
 	}
-	return r.get(ctx, id)
+	return r.get(ctx, key)
 }
 
 // updateTx is Update's write inside tx, which a Batch shares with other
@@ -202,11 +209,13 @@ func (r *GormSessionRepository) UpdateWithOutputOnly(ctx context.Context, in *dt
 // waits for this transaction and then sees the etag it wrote, so two writers
 // holding the same etag cannot both pass the guard. outputPaths names the
 // server-owned fields written alongside (UpdateWithOutputOnly); nil for Update.
-func (r *GormSessionRepository) updateTx(ctx context.Context, tx *gorm.DB, id string, in *dtzv1.Session, paths, outputPaths []string) error {
+func (r *GormSessionRepository) updateTx(ctx context.Context, tx *gorm.DB, key string, in *dtzv1.Session, paths, outputPaths []string) error {
 	var existing dtzv1gorm.Session
-	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "id = ?", id).Error; err != nil {
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "id = ?", key).Error; err != nil {
 		return err
 	}
+	id := existing.ID
+	_ = id
 	if in.GetEtag() != "" && existing.Etag != nil && *existing.Etag != in.GetEtag() {
 		return repox.ErrConflict
 	}
@@ -238,7 +247,7 @@ func (r *GormSessionRepository) updateTx(ctx context.Context, tx *gorm.DB, id st
 // UpdateOutputOnly persists the server-owned fields of in that paths names, in
 // one transaction guarded by in.Etag.
 func (r *GormSessionRepository) UpdateOutputOnly(ctx context.Context, in *dtzv1.Session, paths []string) (*dtzv1.Session, error) {
-	ids, err := repox.SplitName(in.GetName(), "sessions")
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		return nil, err
 	}
@@ -246,7 +255,7 @@ func (r *GormSessionRepository) UpdateOutputOnly(ctx context.Context, in *dtzv1.
 	if err != nil {
 		return nil, repox.MapGormErr(err)
 	}
-	return r.get(ctx, ids[len(ids)-1])
+	return r.get(ctx, key)
 }
 
 // updateOutputOnlyTx is UpdateOutputOnly's write inside tx, which a Batch
@@ -255,16 +264,15 @@ func (r *GormSessionRepository) updateOutputOnlyTx(ctx context.Context, tx *gorm
 	if len(paths) == 0 {
 		return fmt.Errorf("%w: UpdateOutputOnly needs the fields to write", repox.ErrInvalidArgument)
 	}
-	ids, err := repox.SplitName(in.GetName(), "sessions")
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		return err
 	}
-	id := ids[len(ids)-1]
 	{
 		var existing dtzv1gorm.Session
 		// FOR UPDATE, as in updateTx: concurrent writers holding one etag
 		// take turns, and only the first passes the guard.
-		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "id = ?", id).Error; err != nil {
+		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "id = ?", key).Error; err != nil {
 			return err
 		}
 		if in.GetEtag() != "" && existing.Etag != nil && *existing.Etag != in.GetEtag() {
@@ -302,7 +310,7 @@ func (r *GormSessionRepository) newRow(in *dtzv1.Session) (*dtzv1gorm.Session, *
 
 // Delete removes the record addressed by its resource name.
 func (r *GormSessionRepository) Delete(ctx context.Context, name string) error {
-	ids, err := repox.SplitName(name, "sessions")
+	key, err := r.rowKey(name)
 	if err != nil {
 		return err
 	}
@@ -311,12 +319,11 @@ func (r *GormSessionRepository) Delete(ctx context.Context, name string) error {
 			return err
 		}
 	}
-	id := ids[len(ids)-1]
 	var existing dtzv1gorm.Session
-	if err := r.DB.WithContext(ctx).First(&existing, "id = ?", id).Error; err != nil {
+	if err := r.DB.WithContext(ctx).First(&existing, "id = ?", key).Error; err != nil {
 		return repox.MapGormErr(err)
 	}
-	return repox.MapGormErr(dtzv1gorm.NewSessionStore(r.DB).DeleteByID(ctx, id))
+	return repox.MapGormErr(dtzv1gorm.NewSessionStore(r.DB).DeleteByID(ctx, existing.ID))
 }
 
 // ListByKeys reads every record whose filter field field is one of keys; see
@@ -362,15 +369,15 @@ func (b *gormBatch) CreateSession(in *dtzv1.Session) (string, error) {
 // UpdateSession queues Update; in.Etag, when set, guards it, and a guard
 // that fails rolls the whole batch back.
 func (b *gormBatch) UpdateSession(in *dtzv1.Session, paths []string) {
-	ids, err := repox.SplitName(in.GetName(), "sessions")
+	r := &GormSessionRepository{DB: b.db}
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
 		return
 	}
-	r := &GormSessionRepository{DB: b.db}
 	queueSessionReferences(b.u, in, paths)
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
-		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, nil)
+		return r.updateTx(ctx, tx, key, in, paths, nil)
 	})
 	b.u.Record(repox.Change{Type: "dtz.v1/Session", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getSession)})
 }
@@ -378,15 +385,15 @@ func (b *gormBatch) UpdateSession(in *dtzv1.Session, paths []string) {
 // UpdateSessionWithOutputOnly queues UpdateWithOutputOnly; in.Etag, when
 // set, guards it, and a guard that fails rolls the whole batch back.
 func (b *gormBatch) UpdateSessionWithOutputOnly(in *dtzv1.Session, paths, outputPaths []string) {
-	ids, err := repox.SplitName(in.GetName(), "sessions")
+	r := &GormSessionRepository{DB: b.db}
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
 		return
 	}
-	r := &GormSessionRepository{DB: b.db}
 	queueSessionReferences(b.u, in, paths)
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
-		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, outputPaths)
+		return r.updateTx(ctx, tx, key, in, paths, outputPaths)
 	})
 	b.u.Record(repox.Change{Type: "dtz.v1/Session", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getSession)})
 }
@@ -404,15 +411,15 @@ func (b *gormBatch) UpdateSessionOutputOnly(in *dtzv1.Session, paths []string) {
 // gone is not an error: two batches clearing the same row must not fail each
 // other.
 func (b *gormBatch) DeleteSession(name string) {
-	ids, err := repox.SplitName(name, "sessions")
+	r := &GormSessionRepository{DB: b.db}
+	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)
 		return
 	}
-	id := ids[len(ids)-1]
 	queueSessionDelete(b.u, name, true)
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
-		return tx.WithContext(ctx).Delete(&dtzv1gorm.Session{}, "id = ?", id).Error
+		return tx.WithContext(ctx).Delete(&dtzv1gorm.Session{}, "id = ?", key).Error
 	})
 	b.u.Record(repox.Change{Type: "dtz.v1/Session", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getSession)})
 }

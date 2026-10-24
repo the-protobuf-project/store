@@ -99,4 +99,5 @@ func (*Registry) EnsureSchemas(db *gorm.DB) error {
 var Default = New().Register(
 	&catalog.Shelf{},
 	&catalog.Book{},
+	&catalog.Page{},
 )

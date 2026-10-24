@@ -11,6 +11,7 @@ package repository
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"google.golang.org/protobuf/proto"
@@ -48,6 +49,7 @@ type projectionView struct {
 	Table      string // quoted, schema-qualified table
 	Key        []string
 	Range      string
+	IndexLeads []string // columns leading a B-tree index: the key's and each declared one's
 	Sources    []string
 	FilterSpec string // qualified filterx spec of the table
 	Columns    []projectionColumnView
@@ -74,6 +76,33 @@ func projectionOptions(pb *pbIndex, t *schema.Table) (*storepbv1.ProjectionOptio
 		return nil, false
 	}
 	return proto.GetExtension(msg.Desc.Options(), storepbv1.E_Projection).(*storepbv1.ProjectionOptions), true
+}
+
+// projectionIndexLeads are the columns that lead a B-tree index of a
+// projection table: the key's unique index and each declared B-tree fields
+// index (a projection column is named by its field). A search with equality
+// on one of them is served by that index, so the runtime writes its range
+// test as a filter the planner does not estimate (see repox rangeClause).
+func projectionIndexLeads(o *storepbv1.ProjectionOptions) []string {
+	var out []string
+	add := func(c string) {
+		if c != "" && !slices.Contains(out, c) {
+			out = append(out, c)
+		}
+	}
+	if len(o.GetKey()) > 0 {
+		add(o.GetKey()[0])
+	}
+	for _, idx := range o.GetIndexes() {
+		if idx.GetExpression() != "" || len(idx.GetFields()) == 0 {
+			continue
+		}
+		switch idx.GetMethod() {
+		case storepbv1.IndexMethod_INDEX_METHOD_UNSPECIFIED, storepbv1.IndexMethod_INDEX_METHOD_BTREE:
+			add(idx.GetFields()[0])
+		}
+	}
+	return out
 }
 
 // projectionViews builds the views of s's projection tables.
@@ -107,6 +136,7 @@ func projectionViews(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg str
 			FilterSpec: gormQual + "." + t.LocalName + "FilterSpec",
 			Manual:     o.GetMaintain() == storepbv1.ProjectionMaintenance_PROJECTION_MAINTENANCE_MANUAL,
 		}
+		v.IndexLeads = projectionIndexLeads(o)
 		for _, c := range t.Columns {
 			if c.Source == nil || c.Name == projectionKeyColumn || c.Name == projectionVersionColumn {
 				continue

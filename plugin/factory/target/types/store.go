@@ -36,11 +36,16 @@ var sqlForType = map[schema.FieldType]string{
 	schema.TypeTimeOfDay: "TIME",
 	schema.TypeDecimal:   "NUMERIC",
 	schema.TypeLatLng:    "POINT",
-	schema.TypeInterval:  "TSTZRANGE",
-	schema.TypeText:      "TEXT",
-	schema.TypeJSON:      "JSONB",
-	schema.TypeULID:      "CHAR(26)",
-	schema.TypeUUID:      "UUID",
+	// A google.type.Interval is stored as the "start/end" RFC 3339 text the
+	// converters (and the GraphQL adapters) write. Only a projection's range
+	// column (store.v1.projection range_field) is a TSTZRANGE/TSTZMULTIRANGE,
+	// pinned on the column itself, because the projection writes range
+	// literals into it.
+	schema.TypeInterval: "TEXT",
+	schema.TypeText:     "TEXT",
+	schema.TypeJSON:     "JSONB",
+	schema.TypeULID:     "CHAR(26)",
+	schema.TypeUUID:     "UUID",
 }
 
 // SQL returns the canonical PostgreSQL type for a neutral FieldType, appending the

@@ -50,7 +50,9 @@ CREATE TABLE IF NOT EXISTS "projdemo_v1"."bookings" (
     -- When it starts.
     "start_time"  TIMESTAMPTZ  NOT NULL,
     -- When it ends.
-    "end_time"  TIMESTAMPTZ  NOT NULL
+    "end_time"  TIMESTAMPTZ  NOT NULL,
+    -- When the room is set up for it, which may start before and end after the booking. A plain Interval column, stored as "start/end" text, unlike the projection's range column.
+    "setup_window"  TEXT
 );
 
 -- RoomDay is one room's free time on one day: the projection a search by time window reads instead of the bookings.
@@ -88,7 +90,7 @@ CREATE INDEX IF NOT EXISTS "idx_rooms_kinds_gin" ON "projdemo_v1"."rooms" USING 
 CREATE INDEX IF NOT EXISTS "idx_rooms_attributes_gin" ON "projdemo_v1"."rooms" USING gin ("attributes");
 CREATE INDEX IF NOT EXISTS "idx_bookings_room" ON "projdemo_v1"."bookings" ("room");
 CREATE UNIQUE INDEX IF NOT EXISTS "idx_room_days_room_day" ON "projdemo_v1"."room_days" ("room", "day");
-CREATE INDEX IF NOT EXISTS "idx_room_days_floor_day" ON "projdemo_v1"."room_days" ("floor", "day");
+CREATE INDEX IF NOT EXISTS "idx_room_days_floor_day_id" ON "projdemo_v1"."room_days" ("floor", "day", "id");
 -- range containment (@>) cannot use a B-tree
 CREATE INDEX IF NOT EXISTS "idx_room_days_free_gist" ON "projdemo_v1"."room_days" USING gist ("free");
 -- tag containment (@>) cannot use a B-tree
@@ -114,6 +116,7 @@ COMMENT ON COLUMN "projdemo_v1"."bookings"."name" IS 'The booking''s resource na
 COMMENT ON COLUMN "projdemo_v1"."bookings"."room" IS 'The room booked.';
 COMMENT ON COLUMN "projdemo_v1"."bookings"."start_time" IS 'When it starts.';
 COMMENT ON COLUMN "projdemo_v1"."bookings"."end_time" IS 'When it ends.';
+COMMENT ON COLUMN "projdemo_v1"."bookings"."setup_window" IS 'When the room is set up for it, which may start before and end after the booking. A plain Interval column, stored as "start/end" text, unlike the projection''s range column.';
 COMMENT ON TABLE "projdemo_v1"."room_days" IS 'RoomDay is one room''s free time on one day: the projection a search by time window reads instead of the bookings.';
 COMMENT ON COLUMN "projdemo_v1"."room_days"."id" IS 'The row''s key: its key fields'' values as a JSON array.';
 COMMENT ON COLUMN "projdemo_v1"."room_days"."room" IS 'The room.';

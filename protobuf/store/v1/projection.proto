@@ -78,7 +78,9 @@ message ProjectionOptions {
 // ProjectionIndex is one additional index on a projection table.
 message ProjectionIndex {
   // fields are the indexed fields (proto names), in order. Exclusive with
-  // expression.
+  // expression. A B-tree index that is not unique ends in the key column
+  // ("id") as well, so a search with equality on its leading fields pages
+  // in the order of the rest straight from the index.
   repeated string fields = 1;
 
   // expression is an index expression written verbatim, e.g.

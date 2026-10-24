@@ -36,6 +36,12 @@ type gormResourceView struct {
 	ExpireTimeColumn string
 
 	PKField string // gorm model field of the surrogate key, e.g. "ID"
+	// NameKeyed reports a nested resource, whose rows are found by name and
+	// whose row created with a caller-chosen id gets a surrogate key of its
+	// own (see resource.nameKeyed). KeyColumn is the column rows are found
+	// by: the name column then, the surrogate key otherwise.
+	NameKeyed bool
+	KeyColumn string
 
 	// Name codec inputs.
 	Vars               []string // pattern variable names, e.g. organisation, member
@@ -50,6 +56,14 @@ type gormResourceView struct {
 	GQLParentAssigns   []string // the same wiring on the client CreateInput
 	FormatCallParented string   // Format call from parentIDs + id (parented only)
 	FormatCallRoot     string   // Format call from the bare id (root only)
+	// ParentLinks re-point the ancestor columns of nested ancestors at their
+	// rows, looked up by name (linkParents); empty when every ancestor is
+	// keyed by its bare id.
+	ParentLinks []string
+	// ParentScopeSQL is the List scope under a nested parent, as a Go string
+	// literal awaiting the name match's operator: the parent's row is found
+	// by name. "" when the parent is keyed by its bare id.
+	ParentScopeSQL string
 
 	// Rendered fragments.
 	RefsCreate     []string // set model ref columns from the incoming proto
@@ -79,6 +93,21 @@ type gormResourceView struct {
 	DeepDetach       []string // association clears before the row update
 	DeletePreloads   string   // .Preload chain Delete needs to walk the graph
 	NeedsClause      bool     // fragments use gorm.io/gorm/clause
+}
+
+// nameExpr renders the Go expression building the resource name of segs from
+// the split ids held in the variable ids, e.g.
+// "shelves/"+ids[0]+"/books/"+ids[1].
+func nameExpr(segs []patternSegment, ids string) string {
+	parts := make([]string, 0, len(segs))
+	for i, seg := range segs {
+		lead := "/"
+		if i == 0 {
+			lead = ""
+		}
+		parts = append(parts, fmt.Sprintf("%q+%s[%d]", lead+seg.Collection+"/", ids, i))
+	}
+	return strings.Join(parts, "+")
 }
 
 // maskFieldView is one mutable proto field in the generated mask-apply.
@@ -111,6 +140,7 @@ func gormResourceViews(pb *pbIndex, db *schema.Database, s *schema.Schema, resou
 		} else {
 			return nil, fmt.Errorf("repository: %s has no generated surrogate key (id strategy required)", r.Table.ProtoMessage)
 		}
+		v.NameKeyed, v.KeyColumn = r.nameKeyed(), keyColumn(r)
 		if r.Cols.Etag != nil {
 			v.HasEtag, v.EtagField, v.EtagPtr = true, gormField(r.Cols.Etag), r.Cols.Etag.Optional
 			v.EtagColumn = r.Cols.Etag.Name
@@ -141,6 +171,16 @@ func gormResourceViews(pb *pbIndex, db *schema.Database, s *schema.Schema, resou
 			for _, a := range r.AncestorFKs {
 				v.ParentAssigns = append(v.ParentAssigns,
 					fmt.Sprintf("m.%s = parentIDs[%d]", gormFieldName(a.Column, false), a.Index))
+				if a.Nested != nil {
+					v.ParentLinks = append(v.ParentLinks, fmt.Sprintf(
+						"if m.%s, err = repox.RowKey(ctx, db, `%s`, %s, ids[%d]); err != nil {\n\t\treturn err\n\t}",
+						gormFieldName(a.Column, false), qualifiedIdent(a.Nested.Schema.Name, a.Nested.Table.Name),
+						nameExpr(r.Segments[:a.Index+1], "ids"), a.Index))
+				}
+			}
+			if p := r.Parent; p != nil && p.nameKeyed() && r.ParentFK != "" {
+				v.ParentScopeSQL = fmt.Sprintf("`%s IN (SELECT %s FROM %s WHERE %s `",
+					quoteIdent(r.ParentFK), quoteIdent(p.Cols.PK.Name), qualifiedIdent(p.Schema.Name, p.Table.Name), quoteIdent(p.Cols.NameKey.Name))
 			}
 			args := make([]string, 0, len(r.Segments))
 			for i := range r.Segments[:len(r.Segments)-1] {

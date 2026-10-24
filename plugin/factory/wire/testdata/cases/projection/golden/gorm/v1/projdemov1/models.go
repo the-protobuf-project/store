@@ -54,6 +54,8 @@ type Booking struct {
 	StartTime time.Time `gorm:"column:start_time;type:timestamptz;not null" json:"start_time" validate:"required"`
 	// When it ends.
 	EndTime time.Time `gorm:"column:end_time;type:timestamptz;not null" json:"end_time" validate:"required"`
+	// When the room is set up for it, which may start before and end after the booking. A plain Interval column, stored as "start/end" text, unlike the projection's range column.
+	SetupWindow *string `gorm:"column:setup_window" json:"setup_window,omitempty"`
 }
 
 func (*Booking) TableName() string { return "projdemo_v1.bookings" }
@@ -61,17 +63,17 @@ func (*Booking) TableName() string { return "projdemo_v1.bookings" }
 // RoomDay is one room's free time on one day: the projection a search by time window reads instead of the bookings.
 type RoomDay struct {
 	// The row's key: its key fields' values as a JSON array.
-	ID string `gorm:"column:id;primaryKey;not null;index:idx_room_days_seats,type:btree,expression:((attributes->>'seats')::int)" json:"id"`
+	ID string `gorm:"column:id;primaryKey;not null;index:idx_room_days_floor_day_id,priority:3;index:idx_room_days_seats,type:btree,expression:((attributes->>'seats')::int)" json:"id"`
 	// The room.
 	Room string `gorm:"column:room;not null;uniqueIndex:idx_room_days_room_day,priority:1" json:"room" validate:"required"`
 	// The day, in UTC.
-	Day time.Time `gorm:"column:day;type:date;not null;uniqueIndex:idx_room_days_room_day,priority:2;index:idx_room_days_floor_day,priority:2" json:"day" validate:"required"`
+	Day time.Time `gorm:"column:day;type:date;not null;uniqueIndex:idx_room_days_room_day,priority:2;index:idx_room_days_floor_day_id,priority:2" json:"day" validate:"required"`
 	// The room's free intervals that day.
 	Free string `gorm:"column:free;type:tstzmultirange;not null;index:idx_room_days_free_gist,type:gist" json:"free" validate:"required"`
 	// The room's kinds.
 	Kinds pq.StringArray `gorm:"column:kinds;type:text[];index:idx_room_days_kinds_gin,type:gin" json:"kinds"`
 	// The room's floor.
-	Floor int32 `gorm:"column:floor;index:idx_room_days_floor_day,priority:1" json:"floor"`
+	Floor int32 `gorm:"column:floor;index:idx_room_days_floor_day_id,priority:1" json:"floor"`
 	// The room's attributes.
 	Attributes json.RawMessage `gorm:"column:attributes;type:jsonb;index:idx_room_days_attributes_gin,type:gin" json:"attributes"`
 	// How busy the day is.

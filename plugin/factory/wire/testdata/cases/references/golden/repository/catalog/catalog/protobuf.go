@@ -19,6 +19,7 @@ import (
 	refdemov1 "example.com/test/gen"
 	"example.com/test/gen/repox"
 	"example.com/test/genql/catalogql/booksql"
+	"example.com/test/genql/catalogql/pagesql"
 	"example.com/test/genql/catalogql/shelvesql"
 	"github.com/the-protobuf-project/runtime-go/network/graphql"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -98,6 +99,42 @@ func bookFromRow(row *booksql.CatalogBooks) *refdemov1.Book {
 	out.Etag = repox.Deref(row.Etag)
 	out.DeleteTime = strToTs(repox.Deref(row.DeleteTime))
 	out.ExpireTime = strToTs(repox.Deref(row.ExpireTime))
+	return out
+}
+
+// pageToCreateInput maps the proto onto the client's insert input.
+// Identity (id, name resolution), parentage, audit timestamps, and etag are
+// set by the adapter.
+func pageToCreateInput(in *refdemov1.Page) pagesql.CreateInput {
+	var ci pagesql.CreateInput
+	ci.Name = in.GetName()
+	ci.Text = in.GetText()
+	return ci
+}
+
+// pageToUpdatePatch maps the merged proto onto a replace-write
+// patch of every mutable column (mask semantics already applied to merged),
+// mirroring the gorm adapter's write-back exactly.
+func pageToUpdatePatch(merged *refdemov1.Page) pagesql.UpdateInput {
+	var patch pagesql.UpdateInput
+	patch.Name = graphql.Value(merged.GetName())
+	if v := merged.GetText(); v != "" {
+		patch.Text = graphql.Value(v)
+	} else {
+		patch.Text = graphql.Null[string]()
+	}
+	return patch
+}
+
+// pageFromRow re-hydrates the proto from a client row, decorating
+// reference names from their stored bare ids.
+func pageFromRow(row *pagesql.CatalogPages) *refdemov1.Page {
+	if row == nil {
+		return nil
+	}
+	out := &refdemov1.Page{}
+	out.Name = row.Name
+	out.Text = repox.Deref(row.Text)
 	return out
 }
 

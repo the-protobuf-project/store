@@ -65,6 +65,9 @@ func (r *GraphQL{{.Model}}Repository) Create(ctx context.Context, parent string,
 		return nil, err
 	}
 	id := repox.NewULID()
+	{{- if .NameKeyed}}
+	rowID := id
+	{{- end}}
 	if in.GetName() != "" {
 		ids, err := repox.SplitName(in.GetName(), {{.CollectionsExpr}})
 		if err != nil {
@@ -79,6 +82,11 @@ func (r *GraphQL{{.Model}}Repository) Create(ctx context.Context, parent string,
 	}
 	in = proto.Clone(in).(*{{.PB}})
 	in.Name = {{.FormatCallParented}}
+	{{- if .NameKeyed}}
+	// The id is unique only under the parent, so the row is keyed by a
+	// surrogate of its own: the id itself only when it was minted here.
+	id = rowID
+	{{- end}}
 	if h := r.Hooks.BeforeCreate; h != nil {
 		if err := h(ctx, in); err != nil {
 			return nil, err
@@ -88,6 +96,11 @@ func (r *GraphQL{{.Model}}Repository) Create(ctx context.Context, parent string,
 	ci.Id = id
 	{{- range .GQLParentAssigns}}
 	{{.}}
+	{{- end}}
+	{{- if .GQLParentLinks}}
+	if err := r.linkParents(ctx, &ci, in.GetName(), nil); err != nil {
+		return nil, err
+	}
 	{{- end}}
 	{{- if .EtagInputField}}
 	ci.{{.EtagInputField}} = repox.NewULID()
@@ -124,6 +137,23 @@ func (r *GraphQL{{.Model}}Repository) Create(ctx context.Context, parent string,
 	{{- end}}
 	return r.get(ctx, id)
 }
+{{- if .GQLParentLinks}}
+
+// linkParents points ci's columns for its nested ancestors at their rows,
+// found in known (rows a Batch is creating, by name) or else looked up by
+// name: a nested resource's row is keyed by a surrogate of its own, not by
+// its id.
+func (r *GraphQL{{.Model}}Repository) linkParents(ctx context.Context, ci *{{.ResPkg}}.CreateInput, name string, known map[string]string) error {
+	ids, err := repox.SplitName(name, {{.CollectionsExpr}})
+	if err != nil {
+		return err
+	}
+	{{- range .GQLParentLinks}}
+	{{.}}
+	{{- end}}
+	return nil
+}
+{{- end}}
 {{else}}
 // Create persists in and returns the stored record.
 func (r *GraphQL{{.Model}}Repository) Create(ctx context.Context, in *{{.PB}}) (*{{.PB}}, error) {
@@ -183,12 +213,58 @@ func (r *GraphQL{{.Model}}Repository) Create(ctx context.Context, in *{{.PB}}) (
 
 // Get returns the record addressed by its resource name.
 func (r *GraphQL{{.Model}}Repository) Get(ctx context.Context, name string) (*{{.PB}}, error) {
+	{{- if .NameKeyed}}
+	row, err := r.find(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	return r.toProto(ctx, row, nil)
+	{{- else}}
 	ids, err := repox.SplitName(name, {{.CollectionsExpr}})
 	if err != nil {
 		return nil, err
 	}
 	return r.get(ctx, ids[len(ids)-1])
+	{{- end}}
 }
+{{- if .NameKeyed}}
+
+// rowID returns the surrogate key of the row named name, looked up by name:
+// the id is unique only under the parent, so it is not the key.
+// repox.ErrNotFound when there is no such row.
+func (r *GraphQL{{.Model}}Repository) rowID(ctx context.Context, name string) (string, error) {
+	row, err := r.find(ctx, name)
+	if err != nil {
+		return "", err
+	}
+	return row.{{.PKInputField}}, nil
+}
+
+// find reads the row named name; repox.ErrNotFound when there is none.
+func (r *GraphQL{{.Model}}Repository) find(ctx context.Context, name string) (*{{.Row}}, error) {
+	if _, err := repox.SplitName(name, {{.CollectionsExpr}}); err != nil {
+		return nil, err
+	}
+	row, err := r.Svc.Query.{{.Domain}}.{{.Resource}}.Find(ctx, {{.ResPkg}}.List().Where({{.NamePred}}.Eq(name)))
+	if err != nil {
+		return nil, mapGraphQLErr(err)
+	}
+	if row == nil {
+		return nil, repox.ErrNotFound
+	}
+	return row, nil
+}
+{{- else}}
+
+// rowID returns the surrogate key of the row named name: its bare id.
+func (r *GraphQL{{.Model}}Repository) rowID(_ context.Context, name string) (string, error) {
+	ids, err := repox.SplitName(name, {{.CollectionsExpr}})
+	if err != nil {
+		return "", err
+	}
+	return ids[len(ids)-1], nil
+}
+{{- end}}
 
 // get loads by surrogate key — the private read every generated method
 // re-reads through.
@@ -230,7 +306,24 @@ func (r *GraphQL{{.Model}}Repository) List(ctx context.Context, parent string, i
 	if parentIDs[len(parentIDs)-1] == "-" {
 		return r.list(ctx, in)
 	}
+	{{- if .ParentRows}}
+	// The parent is nested, so its row is found by name.
+	match := {{.ParentRows.NamePred}}.Eq(parent)
+	if p, wild := repox.NamePattern(parent); wild {
+		match = {{.ParentRows.NamePred}}.Like(p)
+	}
+	parents, err := r.Svc.Query.{{.ParentRows.Domain}}.{{.ParentRows.Resource}}.List(ctx, {{.ParentRows.ResPkg}}.List().Where(match))
+	if err != nil {
+		return nil, "", mapGraphQLErr(err)
+	}
+	keys := make([]string, 0, len(parents))
+	for i := range parents {
+		keys = append(keys, parents[i].{{.ParentRows.KeyField}})
+	}
+	return r.list(ctx, in, {{.ParentPred}}.In(keys...))
+	{{- else}}
 	return r.list(ctx, in, {{.ParentPred}}.Eq(parentIDs[len(parentIDs)-1]))
+	{{- end}}
 }
 {{else}}
 // List returns one page of records.
@@ -306,6 +399,13 @@ func (r *GraphQL{{.Model}}Repository) UpdateWithOutputOnly(ctx context.Context, 
 // update is Update's write, with the server-owned fields outputPaths names
 // (UpdateWithOutputOnly) merged into its patch.
 func (r *GraphQL{{.Model}}Repository) update(ctx context.Context, in *{{.PB}}, paths, outputPaths []string) (*{{.PB}}, error) {
+	{{- if .NameKeyed}}
+	row, err := r.find(ctx, in.GetName())
+	if err != nil {
+		return nil, err
+	}
+	id := row.{{.PKInputField}}
+	{{- else}}
 	ids, err := repox.SplitName(in.GetName(), {{.CollectionsExpr}})
 	if err != nil {
 		return nil, err
@@ -318,6 +418,7 @@ func (r *GraphQL{{.Model}}Repository) update(ctx context.Context, in *{{.PB}}, p
 	if row == nil {
 		return nil, repox.ErrNotFound
 	}
+	{{- end}}
 	{{- range .GQLVOStaleVars}}
 	{{.}}
 	{{- end}}
@@ -409,6 +510,9 @@ func (r *GraphQL{{.Model}}Repository) newInput({{if .Parented}}parent string, {{
 	}
 	{{- end}}
 	id := repox.NewULID()
+	{{- if .NameKeyed}}
+	rowID := id
+	{{- end}}
 	if in.GetName() != "" {
 		ids, err := repox.SplitName(in.GetName(), {{.CollectionsExpr}})
 		if err != nil {
@@ -425,6 +529,9 @@ func (r *GraphQL{{.Model}}Repository) newInput({{if .Parented}}parent string, {{
 	}
 	in = proto.Clone(in).(*{{.PB}})
 	in.Name = {{if .Parented}}{{.FormatCallParented}}{{else}}Format{{.Model}}Name(id){{end}}
+	{{- if .NameKeyed}}
+	id = rowID // keyed as Create keys it
+	{{- end}}
 	ci = {{.LowerModelV}}ToCreateInput(in)
 	ci.Id = id
 	{{- range .GQLParentAssigns}}
@@ -584,11 +691,10 @@ func (r *GraphQL{{.Model}}Repository) UpdateOutputOnly(ctx context.Context, in *
 	if len(paths) == 0 {
 		return nil, fmt.Errorf("%w: UpdateOutputOnly needs the fields to write", repox.ErrInvalidArgument)
 	}
-	ids, err := repox.SplitName(in.GetName(), {{.CollectionsExpr}})
+	id, err := r.rowID(ctx, in.GetName())
 	if err != nil {
 		return nil, err
 	}
-	id := ids[len(ids)-1]
 	patch := {{.LowerModelV}}ToOutputPatch(in, paths)
 	{{- if .EtagInputField}}
 	patch.{{.EtagInputField}} = graphql.Value(repox.NewULID())
@@ -621,8 +727,7 @@ func (r *GraphQL{{.Model}}Repository) UpdateOutputOnly(ctx context.Context, in *
 // delete is the record's latest write, which a reader by update time can tell
 // from any write after it.{{end}}
 func (r *GraphQL{{.Model}}Repository) Delete(ctx context.Context, name string) error {
-	ids, err := repox.SplitName(name, {{.CollectionsExpr}})
-	if err != nil {
+	if _, err := repox.SplitName(name, {{.CollectionsExpr}}); err != nil {
 		return err
 	}
 	if h := r.Hooks.BeforeDelete; h != nil {
@@ -630,7 +735,11 @@ func (r *GraphQL{{.Model}}Repository) Delete(ctx context.Context, name string) e
 			return err
 		}
 	}
-	if _, err := r.Svc.Mutation.{{.Domain}}.{{.Resource}}.UpdateIfMatch(ctx, ids[len(ids)-1], r.deletePatch(), {{.DeleteTimePred}}.IsNull(true)); err != nil {
+	id, err := r.rowID(ctx, name)
+	if err != nil {
+		return err
+	}
+	if _, err := r.Svc.Mutation.{{.Domain}}.{{.Resource}}.UpdateIfMatch(ctx, id, r.deletePatch(), {{.DeleteTimePred}}.IsNull(true)); err != nil {
 		if errors.Is(err, graphql.ErrConflict) {
 			return repox.ErrNotFound
 		}
@@ -661,11 +770,10 @@ func (r *GraphQL{{.Model}}Repository) deletePatch() {{.ResPkg}}.UpdateInput {
 
 // Undelete clears the soft-delete mark and returns the restored record.
 func (r *GraphQL{{.Model}}Repository) Undelete(ctx context.Context, name string) (*{{.PB}}, error) {
-	ids, err := repox.SplitName(name, {{.CollectionsExpr}})
+	id, err := r.rowID(ctx, name)
 	if err != nil {
 		return nil, err
 	}
-	id := ids[len(ids)-1]
 	patch := {{.ResPkg}}.UpdateInput{ {{- .DeleteTimeInputField}}: graphql.Null[string]()}
 	{{- if .UpdateTimeField}}
 	patch.{{.UpdateTimeField}} = graphql.Value(time.Now().UTC().Format(time.RFC3339Nano))
@@ -694,8 +802,7 @@ func (r *GraphQL{{.Model}}Repository) Purge(ctx context.Context, name string) er
 // Delete removes the record addressed by its resource name.
 func (r *GraphQL{{.Model}}Repository) Delete(ctx context.Context, name string) error {
 {{- end}}
-	ids, err := repox.SplitName(name, {{.CollectionsExpr}})
-	if err != nil {
+	if _, err := repox.SplitName(name, {{.CollectionsExpr}}); err != nil {
 		return err
 	}
 	if h := r.Hooks.BeforeDelete; h != nil {
@@ -703,7 +810,10 @@ func (r *GraphQL{{.Model}}Repository) Delete(ctx context.Context, name string) e
 			return err
 		}
 	}
-	id := ids[len(ids)-1]
+	id, err := r.rowID(ctx, name)
+	if err != nil {
+		return err
+	}
 	{{- if .SoftDelete}}
 	_, err = r.purge(ctx, id, name, true)
 	return err
@@ -750,11 +860,14 @@ func (r *GraphQL{{.Model}}Repository) PurgeExpired(ctx context.Context, now time
 			return res, err
 		}
 		for _, m := range page {
-			ids, err := repox.SplitName(m.GetName(), {{.CollectionsExpr}})
+			id, err := r.rowID(ctx, m.GetName())
+			if errors.Is(err, repox.ErrNotFound) {
+				continue // gone since the page was read
+			}
 			if err != nil {
 				return res, err
 			}
-			kept, err := r.purge(ctx, ids[len(ids)-1], m.GetName(), true)
+			kept, err := r.purge(ctx, id, m.GetName(), true)
 			switch {
 			case errors.Is(err, repox.ErrNotFound):
 			case err != nil:
@@ -824,10 +937,23 @@ type graphQLBatch struct {
 {{- if .HasExpiring}}
 	retention time.Duration
 {{- end}}
+	// keys holds the row key of every record this batch creates, by name: a
+	// later write in the batch finds its row here, since it is not stored
+	// until the batch's request runs.
+	keys map[string]string
 }
 
 // Commit applies the Unit's writes; see repox.Unit.Commit.
 func (b *graphQLBatch) Commit(ctx context.Context) error { return b.u.Commit(ctx) }
+
+// rowID returns the row key of the record named name: one this batch creates,
+// else what resolve (a repository's rowID) finds.
+func (b *graphQLBatch) rowID(ctx context.Context, name string, resolve func(context.Context, string) (string, error)) (string, error) {
+	if id, ok := b.keys[name]; ok {
+		return id, nil
+	}
+	return resolve(ctx, name)
+}
 {{- range .Resources}}
 
 // Create{{.Model}} queues a create and returns the name the record will have.
@@ -837,8 +963,17 @@ func (b *graphQLBatch) Create{{.Model}}({{if .Parented}}parent string, {{end}}in
 	if err != nil {
 		return "", err
 	}
+	if b.keys == nil {
+		b.keys = map[string]string{}
+	}
+	b.keys[named.GetName()] = ci.Id
 	queue{{.Model}}References(b.u, named, nil)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		{{- if .GQLParentLinks}}
+		if err := r.linkParents(ctx, &ci, named.GetName(), b.keys); err != nil {
+			return nil, err
+		}
+		{{- end}}
 		{{- if .Flat}}
 		ops.Add(b.svc.Mutation.{{.Domain}}.{{.Resource}}.CreateOp(ci, new({{.InsertResp}})))
 		return nil, nil
@@ -853,15 +988,18 @@ func (b *graphQLBatch) Create{{.Model}}({{if .Parented}}parent string, {{end}}in
 // Update{{.Model}} queues Update; in.Etag, when set, guards it inside the
 // batch's request (see updateOps).
 func (b *graphQLBatch) Update{{.Model}}(in *{{.PB}}, paths []string) {
-	ids, err := repox.SplitName(in.GetName(), {{.CollectionsExpr}})
-	if err != nil {
+	if _, err := repox.SplitName(in.GetName(), {{.CollectionsExpr}}); err != nil {
 		b.u.Fail(err)
 		return
 	}
 	r := &GraphQL{{.Model}}Repository{Svc: b.svc}
 	queue{{.Model}}References(b.u, in, paths)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
-		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, nil)
+		id, err := b.rowID(ctx, in.GetName(), r.rowID)
+		if err != nil {
+			return nil, err
+		}
+		return r.updateOps(ctx, ops, id, in, paths, nil)
 	})
 	b.u.Record(repox.Change{Type: {{printf "%q" .Type}}, Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), get{{.Model}})})
 }
@@ -870,15 +1008,18 @@ func (b *graphQLBatch) Update{{.Model}}(in *{{.PB}}, paths []string) {
 // Update{{.Model}}WithOutputOnly queues UpdateWithOutputOnly; in.Etag, when
 // set, guards it inside the batch's request, as Update{{.Model}}'s does.
 func (b *graphQLBatch) Update{{.Model}}WithOutputOnly(in *{{.PB}}, paths, outputPaths []string) {
-	ids, err := repox.SplitName(in.GetName(), {{.CollectionsExpr}})
-	if err != nil {
+	if _, err := repox.SplitName(in.GetName(), {{.CollectionsExpr}}); err != nil {
 		b.u.Fail(err)
 		return
 	}
 	r := &GraphQL{{.Model}}Repository{Svc: b.svc}
 	queue{{.Model}}References(b.u, in, paths)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
-		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, outputPaths)
+		id, err := b.rowID(ctx, in.GetName(), r.rowID)
+		if err != nil {
+			return nil, err
+		}
+		return r.updateOps(ctx, ops, id, in, paths, outputPaths)
 	})
 	b.u.Record(repox.Change{Type: {{printf "%q" .Type}}, Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), get{{.Model}})})
 }
@@ -892,12 +1033,11 @@ func (b *graphQLBatch) Update{{.Model}}OutputOnly(in *{{.PB}}, paths []string) {
 		b.u.Fail(fmt.Errorf("%w: UpdateOutputOnly needs the fields to write", repox.ErrInvalidArgument))
 		return
 	}
-	ids, err := repox.SplitName(in.GetName(), {{.CollectionsExpr}})
-	if err != nil {
+	if _, err := repox.SplitName(in.GetName(), {{.CollectionsExpr}}); err != nil {
 		b.u.Fail(err)
 		return
 	}
-	id := ids[len(ids)-1]
+	r := &GraphQL{{.Model}}Repository{Svc: b.svc}
 	patch := {{.LowerModelV}}ToOutputPatch(in, paths)
 	{{- if .EtagInputField}}
 	patch.{{.EtagInputField}} = graphql.Value(repox.NewULID())
@@ -909,13 +1049,21 @@ func (b *graphQLBatch) Update{{.Model}}OutputOnly(in *{{.PB}}, paths []string) {
 	{{- if .HasEtag}}
 	if etag := in.GetEtag(); etag != "" {
 		b.u.QueueGraphQLAhead(func(ctx context.Context) error {
-			_, err := b.svc.Mutation.{{.Domain}}.{{.Resource}}.UpdateIfMatch(ctx, id, patch, {{.EtagPred}}.Eq(etag))
+			id, err := b.rowID(ctx, in.GetName(), r.rowID)
+			if err != nil {
+				return err
+			}
+			_, err = b.svc.Mutation.{{.Domain}}.{{.Resource}}.UpdateIfMatch(ctx, id, patch, {{.EtagPred}}.Eq(etag))
 			return mapGraphQLErr(err)
 		})
 		return
 	}
 	{{- end}}
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		id, err := b.rowID(ctx, in.GetName(), r.rowID)
+		if err != nil {
+			return nil, err
+		}
 		ops.Add(b.svc.Mutation.{{.Domain}}.{{.Resource}}.UpdateOp(id, patch, new({{.UpdateResp}})))
 		return nil, nil
 	})
@@ -926,15 +1074,21 @@ func (b *graphQLBatch) Update{{.Model}}OutputOnly(in *{{.PB}}, paths []string) {
 // Delete{{.Model}} queues a soft delete. A record already deleted or gone is
 // not an error.
 func (b *graphQLBatch) Delete{{.Model}}(name string) {
-	ids, err := repox.SplitName(name, {{.CollectionsExpr}})
-	if err != nil {
+	if _, err := repox.SplitName(name, {{.CollectionsExpr}}); err != nil {
 		b.u.Fail(err)
 		return
 	}
 	r := &GraphQL{{.Model}}Repository{Svc: b.svc{{if .Expiring}}, Retention: b.retention{{end}}}
 	queue{{.Model}}Delete(b.u, name, false)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
-		ops.Add(b.svc.Mutation.{{.Domain}}.{{.Resource}}.UpdateOp(ids[len(ids)-1], r.deletePatch(), new({{.UpdateResp}}), {{.ResPkg}}.Update().PreCheck({{.DeleteTimePred}}.IsNull(true))))
+		id, err := b.rowID(ctx, name, r.rowID)
+		if errors.Is(err, repox.ErrNotFound) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		ops.Add(b.svc.Mutation.{{.Domain}}.{{.Resource}}.UpdateOp(id, r.deletePatch(), new({{.UpdateResp}}), {{.ResPkg}}.Update().PreCheck({{.DeleteTimePred}}.IsNull(true))))
 		return nil, nil
 	})
 	b.u.Record(repox.Change{Type: {{printf "%q" .Type}}, Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, get{{.Model}})})
@@ -944,12 +1098,11 @@ func (b *graphQLBatch) Delete{{.Model}}(name string) {
 // {{if .SoftDelete}}Purge{{else}}Delete{{end}}{{.Model}} queues the record's removal for good. A record already
 // gone is not an error.
 func (b *graphQLBatch) {{if .SoftDelete}}Purge{{else}}Delete{{end}}{{.Model}}(name string) {
-	ids, err := repox.SplitName(name, {{.CollectionsExpr}})
-	if err != nil {
+	if _, err := repox.SplitName(name, {{.CollectionsExpr}}); err != nil {
 		b.u.Fail(err)
 		return
 	}
-	id := ids[len(ids)-1]
+	r := &GraphQL{{.Model}}Repository{Svc: b.svc}
 	{{- if .SoftDelete}}
 	// A record a referrer in another database or service names is kept, as
 	// Purge keeps it. One a foreign key of this database still names fails
@@ -959,27 +1112,26 @@ func (b *graphQLBatch) {{if .SoftDelete}}Purge{{else}}Delete{{end}}{{.Model}}(na
 	{{- else}}
 	queue{{.Model}}Delete(b.u, name, true)
 	{{- end}}
-	{{- if .Flat}}
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		{{- if .SoftDelete}}
 		if *keep {
 			return nil, nil
 		}
 		{{- end}}
+		id, err := b.rowID(ctx, name, r.rowID)
+		if errors.Is(err, repox.ErrNotFound) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		{{- if .Flat}}
 		ops.Add(b.svc.Mutation.{{.Domain}}.{{.Resource}}.DeleteOp(id, new({{.DeleteResp}})))
 		return nil, nil
-	})
-	{{- else}}
-	r := &GraphQL{{.Model}}Repository{Svc: b.svc}
-	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
-		{{- if .SoftDelete}}
-		if *keep {
-			return nil, nil
-		}
-		{{- end}}
+		{{- else}}
 		return r.purgeOps(ctx, ops, id)
+		{{- end}}
 	})
-	{{- end}}
 	b.u.Record(repox.Change{Type: {{printf "%q" .Type}}, Name: name, Op: {{if .SoftDelete}}repox.ChangePurge{{else}}repox.ChangeDelete{{end}}, LoadPrior: repox.PriorOf(name, get{{.Model}})})
 }
 {{- end}}

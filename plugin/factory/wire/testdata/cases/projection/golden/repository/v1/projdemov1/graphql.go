@@ -106,6 +106,15 @@ func (r *GraphQLBookingRepository) Get(ctx context.Context, name string) (*projd
 	return r.get(ctx, ids[len(ids)-1])
 }
 
+// rowID returns the surrogate key of the row named name: its bare id.
+func (r *GraphQLBookingRepository) rowID(_ context.Context, name string) (string, error) {
+	ids, err := repox.SplitName(name, "bookings")
+	if err != nil {
+		return "", err
+	}
+	return ids[len(ids)-1], nil
+}
+
 // get loads by surrogate key — the private read every generated method
 // re-reads through.
 func (r *GraphQLBookingRepository) get(ctx context.Context, id string) (*projdemov1.Booking, error) {
@@ -269,8 +278,7 @@ func (r *GraphQLBookingRepository) updateOps(ctx context.Context, ops *repox.Ops
 
 // Delete removes the record addressed by its resource name.
 func (r *GraphQLBookingRepository) Delete(ctx context.Context, name string) error {
-	ids, err := repox.SplitName(name, "bookings")
-	if err != nil {
+	if _, err := repox.SplitName(name, "bookings"); err != nil {
 		return err
 	}
 	if h := r.Hooks.BeforeDelete; h != nil {
@@ -278,7 +286,10 @@ func (r *GraphQLBookingRepository) Delete(ctx context.Context, name string) erro
 			return err
 		}
 	}
-	id := ids[len(ids)-1]
+	id, err := r.rowID(ctx, name)
+	if err != nil {
+		return err
+	}
 	return r.remove(ctx, id)
 }
 
@@ -355,6 +366,15 @@ func (r *GraphQLRoomRepository) Get(ctx context.Context, name string) (*projdemo
 		return nil, err
 	}
 	return r.get(ctx, ids[len(ids)-1])
+}
+
+// rowID returns the surrogate key of the row named name: its bare id.
+func (r *GraphQLRoomRepository) rowID(_ context.Context, name string) (string, error) {
+	ids, err := repox.SplitName(name, "rooms")
+	if err != nil {
+		return "", err
+	}
+	return ids[len(ids)-1], nil
 }
 
 // get loads by surrogate key — the private read every generated method
@@ -520,8 +540,7 @@ func (r *GraphQLRoomRepository) updateOps(ctx context.Context, ops *repox.Ops, i
 
 // Delete removes the record addressed by its resource name.
 func (r *GraphQLRoomRepository) Delete(ctx context.Context, name string) error {
-	ids, err := repox.SplitName(name, "rooms")
-	if err != nil {
+	if _, err := repox.SplitName(name, "rooms"); err != nil {
 		return err
 	}
 	if h := r.Hooks.BeforeDelete; h != nil {
@@ -529,7 +548,10 @@ func (r *GraphQLRoomRepository) Delete(ctx context.Context, name string) error {
 			return err
 		}
 	}
-	id := ids[len(ids)-1]
+	id, err := r.rowID(ctx, name)
+	if err != nil {
+		return err
+	}
 	return r.remove(ctx, id)
 }
 
@@ -563,10 +585,23 @@ var _ RoomRepository = (*GraphQLRoomRepository)(nil)
 type graphQLBatch struct {
 	u   *repox.Unit
 	svc *genql.Service
+	// keys holds the row key of every record this batch creates, by name: a
+	// later write in the batch finds its row here, since it is not stored
+	// until the batch's request runs.
+	keys map[string]string
 }
 
 // Commit applies the Unit's writes; see repox.Unit.Commit.
 func (b *graphQLBatch) Commit(ctx context.Context) error { return b.u.Commit(ctx) }
+
+// rowID returns the row key of the record named name: one this batch creates,
+// else what resolve (a repository's rowID) finds.
+func (b *graphQLBatch) rowID(ctx context.Context, name string, resolve func(context.Context, string) (string, error)) (string, error) {
+	if id, ok := b.keys[name]; ok {
+		return id, nil
+	}
+	return resolve(ctx, name)
+}
 
 // CreateBooking queues a create and returns the name the record will have.
 func (b *graphQLBatch) CreateBooking(in *projdemov1.Booking) (string, error) {
@@ -575,6 +610,10 @@ func (b *graphQLBatch) CreateBooking(in *projdemov1.Booking) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if b.keys == nil {
+		b.keys = map[string]string{}
+	}
+	b.keys[named.GetName()] = ci.Id
 	queueBookingReferences(b.u, named, nil)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		ops.Add(b.svc.Mutation.ProjdemoV1.Bookings.CreateOp(ci, new(bookingsql.InsertProjdemoV1BookingsResponse)))
@@ -587,15 +626,18 @@ func (b *graphQLBatch) CreateBooking(in *projdemov1.Booking) (string, error) {
 // UpdateBooking queues Update; in.Etag, when set, guards it inside the
 // batch's request (see updateOps).
 func (b *graphQLBatch) UpdateBooking(in *projdemov1.Booking, paths []string) {
-	ids, err := repox.SplitName(in.GetName(), "bookings")
-	if err != nil {
+	if _, err := repox.SplitName(in.GetName(), "bookings"); err != nil {
 		b.u.Fail(err)
 		return
 	}
 	r := &GraphQLBookingRepository{Svc: b.svc}
 	queueBookingReferences(b.u, in, paths)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
-		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, nil)
+		id, err := b.rowID(ctx, in.GetName(), r.rowID)
+		if err != nil {
+			return nil, err
+		}
+		return r.updateOps(ctx, ops, id, in, paths, nil)
 	})
 	b.u.Record(repox.Change{Type: "projdemo.v1/Booking", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getBooking)})
 }
@@ -603,14 +645,20 @@ func (b *graphQLBatch) UpdateBooking(in *projdemov1.Booking, paths []string) {
 // DeleteBooking queues the record's removal for good. A record already
 // gone is not an error.
 func (b *graphQLBatch) DeleteBooking(name string) {
-	ids, err := repox.SplitName(name, "bookings")
-	if err != nil {
+	if _, err := repox.SplitName(name, "bookings"); err != nil {
 		b.u.Fail(err)
 		return
 	}
-	id := ids[len(ids)-1]
+	r := &GraphQLBookingRepository{Svc: b.svc}
 	queueBookingDelete(b.u, name, true)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		id, err := b.rowID(ctx, name, r.rowID)
+		if errors.Is(err, repox.ErrNotFound) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
 		ops.Add(b.svc.Mutation.ProjdemoV1.Bookings.DeleteOp(id, new(bookingsql.DeleteProjdemoV1BookingsByIdResponse)))
 		return nil, nil
 	})
@@ -624,6 +672,10 @@ func (b *graphQLBatch) CreateRoom(in *projdemov1.Room) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if b.keys == nil {
+		b.keys = map[string]string{}
+	}
+	b.keys[named.GetName()] = ci.Id
 	queueRoomReferences(b.u, named, nil)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		ops.Add(b.svc.Mutation.ProjdemoV1.Rooms.CreateOp(ci, new(roomsql.InsertProjdemoV1RoomsResponse)))
@@ -636,15 +688,18 @@ func (b *graphQLBatch) CreateRoom(in *projdemov1.Room) (string, error) {
 // UpdateRoom queues Update; in.Etag, when set, guards it inside the
 // batch's request (see updateOps).
 func (b *graphQLBatch) UpdateRoom(in *projdemov1.Room, paths []string) {
-	ids, err := repox.SplitName(in.GetName(), "rooms")
-	if err != nil {
+	if _, err := repox.SplitName(in.GetName(), "rooms"); err != nil {
 		b.u.Fail(err)
 		return
 	}
 	r := &GraphQLRoomRepository{Svc: b.svc}
 	queueRoomReferences(b.u, in, paths)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
-		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, nil)
+		id, err := b.rowID(ctx, in.GetName(), r.rowID)
+		if err != nil {
+			return nil, err
+		}
+		return r.updateOps(ctx, ops, id, in, paths, nil)
 	})
 	b.u.Record(repox.Change{Type: "projdemo.v1/Room", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getRoom)})
 }
@@ -652,14 +707,20 @@ func (b *graphQLBatch) UpdateRoom(in *projdemov1.Room, paths []string) {
 // DeleteRoom queues the record's removal for good. A record already
 // gone is not an error.
 func (b *graphQLBatch) DeleteRoom(name string) {
-	ids, err := repox.SplitName(name, "rooms")
-	if err != nil {
+	if _, err := repox.SplitName(name, "rooms"); err != nil {
 		b.u.Fail(err)
 		return
 	}
-	id := ids[len(ids)-1]
+	r := &GraphQLRoomRepository{Svc: b.svc}
 	queueRoomDelete(b.u, name, true)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		id, err := b.rowID(ctx, name, r.rowID)
+		if errors.Is(err, repox.ErrNotFound) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
 		ops.Add(b.svc.Mutation.ProjdemoV1.Rooms.DeleteOp(id, new(roomsql.DeleteProjdemoV1RoomsByIdResponse)))
 		return nil, nil
 	})

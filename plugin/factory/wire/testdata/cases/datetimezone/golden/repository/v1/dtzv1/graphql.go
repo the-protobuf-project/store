@@ -106,6 +106,15 @@ func (r *GraphQLSessionRepository) Get(ctx context.Context, name string) (*dtzv1
 	return r.get(ctx, ids[len(ids)-1])
 }
 
+// rowID returns the surrogate key of the row named name: its bare id.
+func (r *GraphQLSessionRepository) rowID(_ context.Context, name string) (string, error) {
+	ids, err := repox.SplitName(name, "sessions")
+	if err != nil {
+		return "", err
+	}
+	return ids[len(ids)-1], nil
+}
+
 // get loads by surrogate key — the private read every generated method
 // re-reads through.
 func (r *GraphQLSessionRepository) get(ctx context.Context, id string) (*dtzv1.Session, error) {
@@ -314,11 +323,10 @@ func (r *GraphQLSessionRepository) UpdateOutputOnly(ctx context.Context, in *dtz
 	if len(paths) == 0 {
 		return nil, fmt.Errorf("%w: UpdateOutputOnly needs the fields to write", repox.ErrInvalidArgument)
 	}
-	ids, err := repox.SplitName(in.GetName(), "sessions")
+	id, err := r.rowID(ctx, in.GetName())
 	if err != nil {
 		return nil, err
 	}
-	id := ids[len(ids)-1]
 	patch := sessionToOutputPatch(in, paths)
 	patch.Etag = graphql.Value(repox.NewULID())
 	if in.GetEtag() != "" {
@@ -339,8 +347,7 @@ func (r *GraphQLSessionRepository) UpdateOutputOnly(ctx context.Context, in *dtz
 
 // Delete removes the record addressed by its resource name.
 func (r *GraphQLSessionRepository) Delete(ctx context.Context, name string) error {
-	ids, err := repox.SplitName(name, "sessions")
-	if err != nil {
+	if _, err := repox.SplitName(name, "sessions"); err != nil {
 		return err
 	}
 	if h := r.Hooks.BeforeDelete; h != nil {
@@ -348,7 +355,10 @@ func (r *GraphQLSessionRepository) Delete(ctx context.Context, name string) erro
 			return err
 		}
 	}
-	id := ids[len(ids)-1]
+	id, err := r.rowID(ctx, name)
+	if err != nil {
+		return err
+	}
 	return r.remove(ctx, id)
 }
 
@@ -382,10 +392,23 @@ var _ SessionRepository = (*GraphQLSessionRepository)(nil)
 type graphQLBatch struct {
 	u   *repox.Unit
 	svc *genql.Service
+	// keys holds the row key of every record this batch creates, by name: a
+	// later write in the batch finds its row here, since it is not stored
+	// until the batch's request runs.
+	keys map[string]string
 }
 
 // Commit applies the Unit's writes; see repox.Unit.Commit.
 func (b *graphQLBatch) Commit(ctx context.Context) error { return b.u.Commit(ctx) }
+
+// rowID returns the row key of the record named name: one this batch creates,
+// else what resolve (a repository's rowID) finds.
+func (b *graphQLBatch) rowID(ctx context.Context, name string, resolve func(context.Context, string) (string, error)) (string, error) {
+	if id, ok := b.keys[name]; ok {
+		return id, nil
+	}
+	return resolve(ctx, name)
+}
 
 // CreateSession queues a create and returns the name the record will have.
 func (b *graphQLBatch) CreateSession(in *dtzv1.Session) (string, error) {
@@ -394,6 +417,10 @@ func (b *graphQLBatch) CreateSession(in *dtzv1.Session) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if b.keys == nil {
+		b.keys = map[string]string{}
+	}
+	b.keys[named.GetName()] = ci.Id
 	queueSessionReferences(b.u, named, nil)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		ops.Add(b.svc.Mutation.DtzV1.Sessions.CreateOp(ci, new(sessionsql.InsertDtzV1SessionsResponse)))
@@ -406,15 +433,18 @@ func (b *graphQLBatch) CreateSession(in *dtzv1.Session) (string, error) {
 // UpdateSession queues Update; in.Etag, when set, guards it inside the
 // batch's request (see updateOps).
 func (b *graphQLBatch) UpdateSession(in *dtzv1.Session, paths []string) {
-	ids, err := repox.SplitName(in.GetName(), "sessions")
-	if err != nil {
+	if _, err := repox.SplitName(in.GetName(), "sessions"); err != nil {
 		b.u.Fail(err)
 		return
 	}
 	r := &GraphQLSessionRepository{Svc: b.svc}
 	queueSessionReferences(b.u, in, paths)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
-		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, nil)
+		id, err := b.rowID(ctx, in.GetName(), r.rowID)
+		if err != nil {
+			return nil, err
+		}
+		return r.updateOps(ctx, ops, id, in, paths, nil)
 	})
 	b.u.Record(repox.Change{Type: "dtz.v1/Session", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getSession)})
 }
@@ -422,15 +452,18 @@ func (b *graphQLBatch) UpdateSession(in *dtzv1.Session, paths []string) {
 // UpdateSessionWithOutputOnly queues UpdateWithOutputOnly; in.Etag, when
 // set, guards it inside the batch's request, as UpdateSession's does.
 func (b *graphQLBatch) UpdateSessionWithOutputOnly(in *dtzv1.Session, paths, outputPaths []string) {
-	ids, err := repox.SplitName(in.GetName(), "sessions")
-	if err != nil {
+	if _, err := repox.SplitName(in.GetName(), "sessions"); err != nil {
 		b.u.Fail(err)
 		return
 	}
 	r := &GraphQLSessionRepository{Svc: b.svc}
 	queueSessionReferences(b.u, in, paths)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
-		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, outputPaths)
+		id, err := b.rowID(ctx, in.GetName(), r.rowID)
+		if err != nil {
+			return nil, err
+		}
+		return r.updateOps(ctx, ops, id, in, paths, outputPaths)
 	})
 	b.u.Record(repox.Change{Type: "dtz.v1/Session", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getSession)})
 }
@@ -442,23 +475,30 @@ func (b *graphQLBatch) UpdateSessionOutputOnly(in *dtzv1.Session, paths []string
 		b.u.Fail(fmt.Errorf("%w: UpdateOutputOnly needs the fields to write", repox.ErrInvalidArgument))
 		return
 	}
-	ids, err := repox.SplitName(in.GetName(), "sessions")
-	if err != nil {
+	if _, err := repox.SplitName(in.GetName(), "sessions"); err != nil {
 		b.u.Fail(err)
 		return
 	}
-	id := ids[len(ids)-1]
+	r := &GraphQLSessionRepository{Svc: b.svc}
 	patch := sessionToOutputPatch(in, paths)
 	patch.Etag = graphql.Value(repox.NewULID())
 	b.u.Record(repox.Change{Type: "dtz.v1/Session", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getSession)})
 	if etag := in.GetEtag(); etag != "" {
 		b.u.QueueGraphQLAhead(func(ctx context.Context) error {
-			_, err := b.svc.Mutation.DtzV1.Sessions.UpdateIfMatch(ctx, id, patch, sessionsql.Etag.Eq(etag))
+			id, err := b.rowID(ctx, in.GetName(), r.rowID)
+			if err != nil {
+				return err
+			}
+			_, err = b.svc.Mutation.DtzV1.Sessions.UpdateIfMatch(ctx, id, patch, sessionsql.Etag.Eq(etag))
 			return mapGraphQLErr(err)
 		})
 		return
 	}
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		id, err := b.rowID(ctx, in.GetName(), r.rowID)
+		if err != nil {
+			return nil, err
+		}
 		ops.Add(b.svc.Mutation.DtzV1.Sessions.UpdateOp(id, patch, new(sessionsql.UpdateDtzV1SessionsByIdResponse)))
 		return nil, nil
 	})
@@ -467,14 +507,20 @@ func (b *graphQLBatch) UpdateSessionOutputOnly(in *dtzv1.Session, paths []string
 // DeleteSession queues the record's removal for good. A record already
 // gone is not an error.
 func (b *graphQLBatch) DeleteSession(name string) {
-	ids, err := repox.SplitName(name, "sessions")
-	if err != nil {
+	if _, err := repox.SplitName(name, "sessions"); err != nil {
 		b.u.Fail(err)
 		return
 	}
-	id := ids[len(ids)-1]
+	r := &GraphQLSessionRepository{Svc: b.svc}
 	queueSessionDelete(b.u, name, true)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		id, err := b.rowID(ctx, name, r.rowID)
+		if errors.Is(err, repox.ErrNotFound) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
 		ops.Add(b.svc.Mutation.DtzV1.Sessions.DeleteOp(id, new(sessionsql.DeleteDtzV1SessionsByIdResponse)))
 		return nil, nil
 	})

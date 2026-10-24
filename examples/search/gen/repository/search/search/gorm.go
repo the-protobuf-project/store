@@ -79,18 +79,27 @@ func (r *GormBookingRepository) Create(ctx context.Context, in *searchdemov1.Boo
 
 // Get returns the record addressed by its resource name.
 func (r *GormBookingRepository) Get(ctx context.Context, name string) (*searchdemov1.Booking, error) {
-	ids, err := repox.SplitName(name, "bookings")
+	key, err := r.rowKey(name)
 	if err != nil {
 		return nil, err
 	}
-	return r.get(ctx, ids[len(ids)-1])
+	return r.get(ctx, key)
 }
 
-// get loads by surrogate key — the private read every generated method re-reads
-// through, so Tier-2 overrides of Get never re-enter generated writes.
-func (r *GormBookingRepository) get(ctx context.Context, id string) (*searchdemov1.Booking, error) {
+// rowKey validates name and returns what its row is found by: the bare id.
+func (r *GormBookingRepository) rowKey(name string) (string, error) {
+	ids, err := repox.SplitName(name, "bookings")
+	if err != nil {
+		return "", err
+	}
+	return ids[len(ids)-1], nil
+}
+
+// get loads by row key (rowKey) — the private read every generated method
+// re-reads through, so Tier-2 overrides of Get never re-enter generated writes.
+func (r *GormBookingRepository) get(ctx context.Context, key string) (*searchdemov1.Booking, error) {
 	var m search.Booking
-	if err := r.DB.WithContext(ctx).First(&m, "id = ?", id).Error; err != nil {
+	if err := r.DB.WithContext(ctx).First(&m, "id = ?", key).Error; err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	return r.toProto(ctx, &m)
@@ -166,24 +175,24 @@ func (r *GormBookingRepository) reads(db *gorm.DB, in repox.ListInput) *gorm.DB 
 // bookingColumns are the row's columns by the field each stores, for
 // a read mask to leave out.
 var bookingColumns = map[string][]string{
-	"room":       {"room"},
-	"start_time": {"start_time"},
-	"end_time":   {"end_time"},
+	"room":         {"room"},
+	"start_time":   {"start_time"},
+	"end_time":     {"end_time"},
+	"setup_window": {"setup_window"},
 }
 
 // Update persists the masked fields of in; an empty mask replaces every
 // mutable field. The write happens in one transaction guarded by in.Etag.
 func (r *GormBookingRepository) Update(ctx context.Context, in *searchdemov1.Booking, paths []string) (*searchdemov1.Booking, error) {
-	ids, err := repox.SplitName(in.GetName(), "bookings")
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		return nil, err
 	}
-	id := ids[len(ids)-1]
-	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, id, in, paths, nil) })
+	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, key, in, paths, nil) })
 	if err != nil {
 		return nil, repox.MapGormErr(err)
 	}
-	return r.get(ctx, id)
+	return r.get(ctx, key)
 }
 
 // updateTx is Update's write inside tx, which a Batch shares with other
@@ -191,11 +200,13 @@ func (r *GormBookingRepository) Update(ctx context.Context, in *searchdemov1.Boo
 // waits for this transaction and then sees the etag it wrote, so two writers
 // holding the same etag cannot both pass the guard. outputPaths names the
 // server-owned fields written alongside (UpdateWithOutputOnly); nil for Update.
-func (r *GormBookingRepository) updateTx(ctx context.Context, tx *gorm.DB, id string, in *searchdemov1.Booking, paths, outputPaths []string) error {
+func (r *GormBookingRepository) updateTx(ctx context.Context, tx *gorm.DB, key string, in *searchdemov1.Booking, paths, outputPaths []string) error {
 	var existing search.Booking
-	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "id = ?", id).Error; err != nil {
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "id = ?", key).Error; err != nil {
 		return err
 	}
+	id := existing.ID
+	_ = id
 	existingPB := search.BookingToProto(&existing)
 	{
 		m, out := &existing, existingPB
@@ -216,6 +227,7 @@ func (r *GormBookingRepository) updateTx(ctx context.Context, tx *gorm.DB, id st
 	existing.RoomID = repox.LastSegment(merged.GetRoom())
 	existing.StartTime = next.StartTime
 	existing.EndTime = next.EndTime
+	existing.SetupWindow = next.SetupWindow
 	return search.NewBookingStore(tx).Update(ctx, &existing)
 }
 
@@ -243,7 +255,7 @@ func (r *GormBookingRepository) newRow(in *searchdemov1.Booking) (*search.Bookin
 
 // Delete removes the record addressed by its resource name.
 func (r *GormBookingRepository) Delete(ctx context.Context, name string) error {
-	ids, err := repox.SplitName(name, "bookings")
+	key, err := r.rowKey(name)
 	if err != nil {
 		return err
 	}
@@ -252,12 +264,11 @@ func (r *GormBookingRepository) Delete(ctx context.Context, name string) error {
 			return err
 		}
 	}
-	id := ids[len(ids)-1]
 	var existing search.Booking
-	if err := r.DB.WithContext(ctx).First(&existing, "id = ?", id).Error; err != nil {
+	if err := r.DB.WithContext(ctx).First(&existing, "id = ?", key).Error; err != nil {
 		return repox.MapGormErr(err)
 	}
-	return repox.MapGormErr(search.NewBookingStore(r.DB).DeleteByID(ctx, id))
+	return repox.MapGormErr(search.NewBookingStore(r.DB).DeleteByID(ctx, existing.ID))
 }
 
 // ListByKeys reads every record whose filter field field is one of keys; see
@@ -321,18 +332,27 @@ func (r *GormRoomRepository) Create(ctx context.Context, in *searchdemov1.Room) 
 
 // Get returns the record addressed by its resource name.
 func (r *GormRoomRepository) Get(ctx context.Context, name string) (*searchdemov1.Room, error) {
-	ids, err := repox.SplitName(name, "rooms")
+	key, err := r.rowKey(name)
 	if err != nil {
 		return nil, err
 	}
-	return r.get(ctx, ids[len(ids)-1])
+	return r.get(ctx, key)
 }
 
-// get loads by surrogate key — the private read every generated method re-reads
-// through, so Tier-2 overrides of Get never re-enter generated writes.
-func (r *GormRoomRepository) get(ctx context.Context, id string) (*searchdemov1.Room, error) {
+// rowKey validates name and returns what its row is found by: the bare id.
+func (r *GormRoomRepository) rowKey(name string) (string, error) {
+	ids, err := repox.SplitName(name, "rooms")
+	if err != nil {
+		return "", err
+	}
+	return ids[len(ids)-1], nil
+}
+
+// get loads by row key (rowKey) — the private read every generated method
+// re-reads through, so Tier-2 overrides of Get never re-enter generated writes.
+func (r *GormRoomRepository) get(ctx context.Context, key string) (*searchdemov1.Room, error) {
 	var m search.Room
-	if err := r.DB.WithContext(ctx).First(&m, "id = ?", id).Error; err != nil {
+	if err := r.DB.WithContext(ctx).First(&m, "id = ?", key).Error; err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	return r.toProto(ctx, &m)
@@ -414,16 +434,15 @@ var roomColumns = map[string][]string{
 // Update persists the masked fields of in; an empty mask replaces every
 // mutable field. The write happens in one transaction guarded by in.Etag.
 func (r *GormRoomRepository) Update(ctx context.Context, in *searchdemov1.Room, paths []string) (*searchdemov1.Room, error) {
-	ids, err := repox.SplitName(in.GetName(), "rooms")
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		return nil, err
 	}
-	id := ids[len(ids)-1]
-	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, id, in, paths, nil) })
+	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, key, in, paths, nil) })
 	if err != nil {
 		return nil, repox.MapGormErr(err)
 	}
-	return r.get(ctx, id)
+	return r.get(ctx, key)
 }
 
 // updateTx is Update's write inside tx, which a Batch shares with other
@@ -431,11 +450,13 @@ func (r *GormRoomRepository) Update(ctx context.Context, in *searchdemov1.Room, 
 // waits for this transaction and then sees the etag it wrote, so two writers
 // holding the same etag cannot both pass the guard. outputPaths names the
 // server-owned fields written alongside (UpdateWithOutputOnly); nil for Update.
-func (r *GormRoomRepository) updateTx(ctx context.Context, tx *gorm.DB, id string, in *searchdemov1.Room, paths, outputPaths []string) error {
+func (r *GormRoomRepository) updateTx(ctx context.Context, tx *gorm.DB, key string, in *searchdemov1.Room, paths, outputPaths []string) error {
 	var existing search.Room
-	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "id = ?", id).Error; err != nil {
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "id = ?", key).Error; err != nil {
 		return err
 	}
+	id := existing.ID
+	_ = id
 	existingPB := search.RoomToProto(&existing)
 	merged := proto.Clone(existingPB).(*searchdemov1.Room)
 	applyRoomMask(merged, in, paths)
@@ -475,7 +496,7 @@ func (r *GormRoomRepository) newRow(in *searchdemov1.Room) (*search.Room, *searc
 
 // Delete removes the record addressed by its resource name.
 func (r *GormRoomRepository) Delete(ctx context.Context, name string) error {
-	ids, err := repox.SplitName(name, "rooms")
+	key, err := r.rowKey(name)
 	if err != nil {
 		return err
 	}
@@ -484,12 +505,11 @@ func (r *GormRoomRepository) Delete(ctx context.Context, name string) error {
 			return err
 		}
 	}
-	id := ids[len(ids)-1]
 	var existing search.Room
-	if err := r.DB.WithContext(ctx).First(&existing, "id = ?", id).Error; err != nil {
+	if err := r.DB.WithContext(ctx).First(&existing, "id = ?", key).Error; err != nil {
 		return repox.MapGormErr(err)
 	}
-	return repox.MapGormErr(search.NewRoomStore(r.DB).DeleteByID(ctx, id))
+	return repox.MapGormErr(search.NewRoomStore(r.DB).DeleteByID(ctx, existing.ID))
 }
 
 // ListByKeys reads every record whose filter field field is one of keys; see
@@ -535,15 +555,15 @@ func (b *gormBatch) CreateBooking(in *searchdemov1.Booking) (string, error) {
 // UpdateBooking queues Update; in.Etag, when set, guards it, and a guard
 // that fails rolls the whole batch back.
 func (b *gormBatch) UpdateBooking(in *searchdemov1.Booking, paths []string) {
-	ids, err := repox.SplitName(in.GetName(), "bookings")
+	r := &GormBookingRepository{DB: b.db}
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
 		return
 	}
-	r := &GormBookingRepository{DB: b.db}
 	queueBookingReferences(b.u, in, paths)
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
-		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, nil)
+		return r.updateTx(ctx, tx, key, in, paths, nil)
 	})
 	b.u.Record(repox.Change{Type: "searchdemo.v1/Booking", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getBooking)})
 }
@@ -552,15 +572,15 @@ func (b *gormBatch) UpdateBooking(in *searchdemov1.Booking, paths []string) {
 // gone is not an error: two batches clearing the same row must not fail each
 // other.
 func (b *gormBatch) DeleteBooking(name string) {
-	ids, err := repox.SplitName(name, "bookings")
+	r := &GormBookingRepository{DB: b.db}
+	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)
 		return
 	}
-	id := ids[len(ids)-1]
 	queueBookingDelete(b.u, name, true)
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
-		return tx.WithContext(ctx).Delete(&search.Booking{}, "id = ?", id).Error
+		return tx.WithContext(ctx).Delete(&search.Booking{}, "id = ?", key).Error
 	})
 	b.u.Record(repox.Change{Type: "searchdemo.v1/Booking", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getBooking)})
 }
@@ -587,15 +607,15 @@ func (b *gormBatch) CreateRoom(in *searchdemov1.Room) (string, error) {
 // UpdateRoom queues Update; in.Etag, when set, guards it, and a guard
 // that fails rolls the whole batch back.
 func (b *gormBatch) UpdateRoom(in *searchdemov1.Room, paths []string) {
-	ids, err := repox.SplitName(in.GetName(), "rooms")
+	r := &GormRoomRepository{DB: b.db}
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
 		return
 	}
-	r := &GormRoomRepository{DB: b.db}
 	queueRoomReferences(b.u, in, paths)
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
-		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, nil)
+		return r.updateTx(ctx, tx, key, in, paths, nil)
 	})
 	b.u.Record(repox.Change{Type: "searchdemo.v1/Room", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getRoom)})
 }
@@ -604,15 +624,15 @@ func (b *gormBatch) UpdateRoom(in *searchdemov1.Room, paths []string) {
 // gone is not an error: two batches clearing the same row must not fail each
 // other.
 func (b *gormBatch) DeleteRoom(name string) {
-	ids, err := repox.SplitName(name, "rooms")
+	r := &GormRoomRepository{DB: b.db}
+	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)
 		return
 	}
-	id := ids[len(ids)-1]
 	queueRoomDelete(b.u, name, true)
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
-		return tx.WithContext(ctx).Delete(&search.Room{}, "id = ?", id).Error
+		return tx.WithContext(ctx).Delete(&search.Room{}, "id = ?", key).Error
 	})
 	b.u.Record(repox.Change{Type: "searchdemo.v1/Room", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getRoom)})
 }

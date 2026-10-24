@@ -94,6 +94,49 @@ type BookHooks struct {
 	BeforeDelete func(ctx context.Context, name string) error
 }
 
+// PageRepository is the provider-agnostic persistence surface for
+// Page (shelves/{shelf}/books/{book}/pages/{page}): full-message writes, AIP-160/AIP-132 lists with
+// opaque page tokens, field-mask updates, and etag optimistic concurrency.
+type PageRepository interface {
+	// Create persists m under parent and returns the stored record.
+	Create(ctx context.Context, parent string, m *refdemov1.Page) (*refdemov1.Page, error)
+	// Get returns the record addressed by its resource name, or
+	// repox.ErrNotFound.
+	Get(ctx context.Context, name string) (*refdemov1.Page, error)
+	// List returns one page of records under parent.
+	List(ctx context.Context, parent string, in repox.ListInput) ([]*refdemov1.Page, string, error)
+	// ListByKeys reads every record whose filter field field is one of keys
+	// -- a batched read by name, by parent, by any text, enum or reference
+	// field -- in statements of at most repox.KeysPerRead keys, at most
+	// repox.ReadParallelism at once, across every parent. in narrows
+	// each read; its page fields are ignored. See repox.ListByKeys for the
+	// order records come back in.
+	ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*refdemov1.Page, error)
+	// Update persists the masked fields of m; an empty mask replaces every
+	// mutable field. m.Etag, when set, guards against concurrent writes
+	// (repox.ErrConflict).
+	Update(ctx context.Context, m *refdemov1.Page, paths []string) (*refdemov1.Page, error)
+	// Delete removes the record addressed by its resource name.
+	Delete(ctx context.Context, name string) error
+}
+
+// PageHooks lets custom logic run inside the generated Page
+// adapters without editing them: normalization/derivation before writes,
+// derived fields after reads, and guards before deletes. Nil funcs are skipped.
+type PageHooks struct {
+	// BeforeCreate runs after name/id resolution, before the row is written.
+	BeforeCreate func(ctx context.Context, m *refdemov1.Page) error
+	// AfterRead runs on every record a read returns (Get, List, and the
+	// re-reads writes return).
+	AfterRead func(ctx context.Context, m *refdemov1.Page) error
+	// BeforeUpdate runs after the mask is applied to the merged record,
+	// before it is written.
+	BeforeUpdate func(ctx context.Context, existing, merged *refdemov1.Page, paths []string) error
+	// BeforeDelete runs before the row is removed (or, with soft delete,
+	// marked deleted); returning an error vetoes.
+	BeforeDelete func(ctx context.Context, name string) error
+}
+
 // ShelfRepository is the provider-agnostic persistence surface for
 // Shelf (shelves/{shelf}): full-message writes, AIP-160/AIP-132 lists with
 // opaque page tokens, field-mask updates, and etag optimistic concurrency.
@@ -166,6 +209,7 @@ type ShelfHooks struct {
 // Repositories bundles this schema's repository surfaces behind one factory.
 type Repositories struct {
 	Books  BookRepository
+	Pages  PageRepository
 	Shelfs ShelfRepository
 }
 
@@ -193,6 +237,15 @@ type Batch interface {
 	// PurgeBook queues the record's removal for good; a record already
 	// gone is not an error.
 	PurgeBook(name string)
+	// CreatePage queues a create and returns the name the record will have.
+	CreatePage(parent string, m *refdemov1.Page) (string, error)
+	// UpdatePage queues Update: the masked fields of m, every mutable
+	// field when paths is empty. m.Etag, when set, guards it; a guard that
+	// fails fails the whole Commit with repox.ErrConflict.
+	UpdatePage(m *refdemov1.Page, paths []string)
+	// DeletePage queues the record's removal for good; a record already
+	// gone is not an error.
+	DeletePage(name string)
 	// CreateShelf queues a create and returns the name the record will have.
 	CreateShelf(m *refdemov1.Shelf) (string, error)
 	// UpdateShelf queues Update: the masked fields of m, every mutable
@@ -248,9 +301,12 @@ type options struct {
 	projections       *repox.Projections
 	bookHooks         BookHooks
 	bookOverrides     map[string]filterx.SQLHandler
+	pageHooks         PageHooks
+	pageOverrides     map[string]filterx.SQLHandler
 	shelfHooks        ShelfHooks
 	shelfOverrides    map[string]filterx.SQLHandler
 	bookGQLOverrides  map[string]filterx.GraphQLHandler
+	pageGQLOverrides  map[string]filterx.GraphQLHandler
 	shelfGQLOverrides map[string]filterx.GraphQLHandler
 	retention         time.Duration
 }
@@ -297,6 +353,22 @@ func WithBookListOverride(field string, h filterx.SQLHandler) Option {
 	}
 }
 
+// WithPageHooks installs h on the Page adapters.
+func WithPageHooks(h PageHooks) Option {
+	return func(o *options) { o.pageHooks = h }
+}
+
+// WithPageListOverride substitutes the generated filter dispatch for one
+// Page filter field (e.g. a derived state computed via subqueries).
+func WithPageListOverride(field string, h filterx.SQLHandler) Option {
+	return func(o *options) {
+		if o.pageOverrides == nil {
+			o.pageOverrides = map[string]filterx.SQLHandler{}
+		}
+		o.pageOverrides[field] = h
+	}
+}
+
 // WithShelfHooks installs h on the Shelf adapters.
 func WithShelfHooks(h ShelfHooks) Option {
 	return func(o *options) { o.shelfHooks = h }
@@ -321,6 +393,17 @@ func WithBookGraphQLListOverride(field string, h filterx.GraphQLHandler) Option 
 			o.bookGQLOverrides = map[string]filterx.GraphQLHandler{}
 		}
 		o.bookGQLOverrides[field] = h
+	}
+}
+
+// WithPageGraphQLListOverride substitutes the generated filter dispatch
+// for one Page filter field on the GraphQL adapters.
+func WithPageGraphQLListOverride(field string, h filterx.GraphQLHandler) Option {
+	return func(o *options) {
+		if o.pageGQLOverrides == nil {
+			o.pageGQLOverrides = map[string]filterx.GraphQLHandler{}
+		}
+		o.pageGQLOverrides[field] = h
 	}
 }
 
@@ -356,12 +439,23 @@ func NewGraphQL(svc *genql.Service, opts ...Option) Repositories {
 	}
 	repos := Repositories{
 		Books:  &GraphQLBookRepository{Svc: svc, Hooks: o.bookHooks, Refs: o.references, ListOverrides: o.bookGQLOverrides, Retention: o.retention},
+		Pages:  &GraphQLPageRepository{Svc: svc, Hooks: o.pageHooks, Refs: o.references, ListOverrides: o.pageGQLOverrides},
 		Shelfs: &GraphQLShelfRepository{Svc: svc, Hooks: o.shelfHooks, Refs: o.references, ListOverrides: o.shelfGQLOverrides, Retention: o.retention},
 	}
 	if p := o.projections; p != nil {
 		if p.Watches("catalog.example.com/Book") {
 			r := repos.Books
 			repos.Books = &projectedBookRepository{BookRepository: r, run: func(ctx context.Context, f func(BookRepository) ([]repox.Change, error)) error {
+				changes, err := f(r)
+				if err != nil {
+					return err
+				}
+				return p.ProjectGraphQLAfter(ctx, repox.Conn{GraphQL: svc}, changes)
+			}}
+		}
+		if p.Watches("catalog.example.com/Page") {
+			r := repos.Pages
+			repos.Pages = &projectedPageRepository{PageRepository: r, run: func(ctx context.Context, f func(PageRepository) ([]repox.Change, error)) error {
 				changes, err := f(r)
 				if err != nil {
 					return err
@@ -391,12 +485,37 @@ func NewGorm(db *gorm.DB, opts ...Option) Repositories {
 	}
 	repos := Repositories{
 		Books:  &GormBookRepository{DB: db, Hooks: o.bookHooks, Refs: o.references, ListOverrides: o.bookOverrides, Retention: o.retention},
+		Pages:  &GormPageRepository{DB: db, Hooks: o.pageHooks, Refs: o.references, ListOverrides: o.pageOverrides},
 		Shelfs: &GormShelfRepository{DB: db, Hooks: o.shelfHooks, Refs: o.references, ListOverrides: o.shelfOverrides, Retention: o.retention},
 	}
 	if p := o.projections; p != nil {
 		if p.Watches("catalog.example.com/Book") {
 			g := repos.Books.(*GormBookRepository)
 			repos.Books = &projectedBookRepository{BookRepository: g, run: func(ctx context.Context, f func(BookRepository) ([]repox.Change, error)) error {
+				// The write and its projections in one transaction: the
+				// adapter is rebound to it, so its own transactions nest as
+				// savepoints and its re-reads see the write. The feed hears
+				// of it once it commits.
+				var committed []repox.Committed
+				err := repox.MapGormErr(db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+					bound := *g
+					bound.DB = tx
+					changes, err := f(&bound)
+					if err != nil {
+						return err
+					}
+					committed, err = p.Gorm(ctx, tx, changes)
+					return err
+				}))
+				if err == nil {
+					p.Publish(ctx, committed)
+				}
+				return err
+			}}
+		}
+		if p.Watches("catalog.example.com/Page") {
+			g := repos.Pages.(*GormPageRepository)
+			repos.Pages = &projectedPageRepository{PageRepository: g, run: func(ctx context.Context, f func(PageRepository) ([]repox.Change, error)) error {
 				// The write and its projections in one transaction: the
 				// adapter is rebound to it, so its own transactions nest as
 				// savepoints and its re-reads see the write. The feed hears
@@ -462,6 +581,7 @@ func guard(repos Repositories, refs *repox.References) Repositories {
 	}
 	return Repositories{
 		Books:  &guardedBookRepository{BookRepository: repos.Books, refs: refs},
+		Pages:  &guardedPageRepository{PageRepository: repos.Pages, refs: refs},
 		Shelfs: &guardedShelfRepository{ShelfRepository: repos.Shelfs, refs: refs},
 	}
 }
@@ -479,6 +599,7 @@ func observe(repos Repositories, changes repox.ChangeObserver) Repositories {
 	}
 	return Repositories{
 		Books:  &observedBookRepository{BookRepository: repos.Books, changes: changes},
+		Pages:  &observedPageRepository{PageRepository: repos.Pages, changes: changes},
 		Shelfs: &observedShelfRepository{ShelfRepository: repos.Shelfs, changes: changes},
 	}
 }
@@ -555,6 +676,48 @@ func (o *observedBookRepository) PurgeExpired(ctx context.Context, now time.Time
 		o.changes.Changed(ctx, name)
 	}
 	return res, err
+}
+
+// observedPageRepository reports every Page write to a ChangeObserver.
+//
+// It reports a write that returned an error too, whenever the name is known.
+// An error does not prove nothing was written -- the adapters re-read after
+// writing, and that re-read can fail -- and an observer told about a write
+// that did not happen only drops something it did not need to, while one not
+// told about a write that did keeps serving what the write replaced.
+type observedPageRepository struct {
+	PageRepository
+	changes repox.ChangeObserver
+}
+
+func (o *observedPageRepository) Create(ctx context.Context, parent string, m *refdemov1.Page) (*refdemov1.Page, error) {
+	out, err := o.PageRepository.Create(ctx, parent, m)
+	o.created(ctx, m, out)
+	return out, err
+}
+
+// created reports a Create: by the stored record's name, or failing that by
+// the name the caller asked for. A Create that failed before naming anything
+// wrote nothing.
+func (o *observedPageRepository) created(ctx context.Context, m, out *refdemov1.Page) {
+	switch {
+	case out.GetName() != "":
+		o.changes.Changed(ctx, out.GetName())
+	case m.GetName() != "":
+		o.changes.Changed(ctx, m.GetName())
+	}
+}
+
+func (o *observedPageRepository) Update(ctx context.Context, m *refdemov1.Page, paths []string) (*refdemov1.Page, error) {
+	out, err := o.PageRepository.Update(ctx, m, paths)
+	o.changes.Changed(ctx, m.GetName())
+	return out, err
+}
+
+func (o *observedPageRepository) Delete(ctx context.Context, name string) error {
+	err := o.PageRepository.Delete(ctx, name)
+	o.changes.Changed(ctx, name)
+	return err
 }
 
 // observedShelfRepository reports every Shelf write to a ChangeObserver.
@@ -741,6 +904,60 @@ func (p *projectedBookRepository) PurgeExpired(ctx context.Context, now time.Tim
 	return res, err
 }
 
+// projectedPageRepository runs the connection's projections over every
+// Page write; see WithProjections. run performs a write through the
+// repository it hands f and projects the changes f reports.
+type projectedPageRepository struct {
+	PageRepository
+	run func(ctx context.Context, f func(PageRepository) ([]repox.Change, error)) error
+}
+
+// getPage reads name through read, for a queued write's
+// Change.LoadPrior (repox.PriorOf).
+func getPage(ctx context.Context, read repox.Conn, name string) (*refdemov1.Page, error) {
+	return New(read).Pages.Get(ctx, name)
+}
+
+// changedPage is the change one write of a Page makes.
+func changedPage(name string, op repox.ChangeOp, rec *refdemov1.Page) []repox.Change {
+	c := repox.Change{Type: "catalog.example.com/Page", Name: name, Op: op}
+	if rec != nil {
+		c.Record = rec
+	}
+	return []repox.Change{c}
+}
+
+func (p *projectedPageRepository) Create(ctx context.Context, parent string, m *refdemov1.Page) (out *refdemov1.Page, err error) {
+	err = p.run(ctx, func(r PageRepository) ([]repox.Change, error) {
+		var err error
+		out, err = r.Create(ctx, parent, m)
+		return changedPage(out.GetName(), repox.ChangeCreate, out), err
+	})
+	return out, err
+}
+
+func (p *projectedPageRepository) Update(ctx context.Context, m *refdemov1.Page, paths []string) (out *refdemov1.Page, err error) {
+	err = p.run(ctx, func(r PageRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, m.GetName()))
+		if err != nil {
+			return nil, err
+		}
+		out, err = r.Update(ctx, m, paths)
+		return repox.WithPrior(changedPage(m.GetName(), repox.ChangeUpdate, out), prior), err
+	})
+	return out, err
+}
+
+func (p *projectedPageRepository) Delete(ctx context.Context, name string) error {
+	return p.run(ctx, func(r PageRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, name))
+		if err != nil {
+			return nil, err
+		}
+		return repox.WithPrior(changedPage(name, repox.ChangeDelete, nil), prior), r.Delete(ctx, name)
+	})
+}
+
 // projectedShelfRepository runs the connection's projections over every
 // Shelf write; see WithProjections. run performs a write through the
 // repository it hands f and projects the changes f reports.
@@ -907,6 +1124,51 @@ func queueBookPurge(u *repox.Unit, name string) (keep *bool) {
 		})
 	}
 	return keep
+}
+
+// guardedPageRepository keeps Page's references whole; see guard.
+type guardedPageRepository struct {
+	PageRepository
+	refs *repox.References
+}
+
+func (g *guardedPageRepository) Delete(ctx context.Context, name string) error {
+	check, err := g.refs.CheckDelete(ctx, "catalog.example.com/Page", name)
+	if err != nil {
+		return err
+	}
+	if err := g.PageRepository.Delete(ctx, name); err != nil {
+		return err
+	}
+	check.Done(ctx, true)
+	return nil
+}
+
+// resolvePageReferences proves, through refs, that every external
+// reference m sets within paths (all of them for an empty mask) names a
+// resource that exists.
+func resolvePageReferences(ctx context.Context, refs *repox.References, m *refdemov1.Page, paths []string) error {
+	return nil
+}
+
+// queuePageReferences makes u resolve m's external references within
+// paths before it commits, as guard does for the repositories.
+func queuePageReferences(u *repox.Unit, m *refdemov1.Page, paths []string) {
+}
+
+// queuePageDelete makes u consult name's referrers before it commits
+// and publish the NOTIFY event after, as guard does for Delete.
+func queuePageDelete(u *repox.Unit, name string, purged bool) {
+	refs := u.Conn().References
+	if refs == nil {
+		return
+	}
+	var check *repox.DeleteCheck
+	u.Before(func(ctx context.Context) (err error) {
+		check, err = refs.CheckDelete(ctx, "catalog.example.com/Page", name)
+		return err
+	})
+	u.After(func(ctx context.Context) { check.Done(ctx, purged) })
 }
 
 // guardedShelfRepository keeps Shelf's references whole; see guard.

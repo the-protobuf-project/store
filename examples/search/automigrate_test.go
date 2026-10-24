@@ -25,6 +25,10 @@ func TestAutoMigrateProjection(t *testing.T) {
 	if err := db.Raw(`SELECT data_type FROM information_schema.columns WHERE table_schema = 'search' AND table_name = 'room_days' AND column_name = 'free'`).Scan(&typ).Error; err != nil || typ != "tstzmultirange" {
 		t.Errorf("free column type = %q, %v; want tstzmultirange", typ, err)
 	}
+	// A plain Interval is text; only the projection's range is a range.
+	if err := db.Raw(`SELECT data_type FROM information_schema.columns WHERE table_schema = 'search' AND table_name = 'bookings' AND column_name = 'setup_window'`).Scan(&typ).Error; err != nil || typ != "text" {
+		t.Errorf("setup_window column type = %q, %v; want text", typ, err)
+	}
 	var methods []string
 	if err := db.Raw(`SELECT am.amname || ':' || i.relname FROM pg_index x JOIN pg_class i ON i.oid = x.indexrelid JOIN pg_class t ON t.oid = x.indrelid JOIN pg_am am ON am.oid = i.relam WHERE t.relname = 'room_days' ORDER BY i.relname`).Scan(&methods).Error; err != nil {
 		t.Fatal(err)

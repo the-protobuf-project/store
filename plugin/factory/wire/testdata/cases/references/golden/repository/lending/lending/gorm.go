@@ -83,18 +83,27 @@ func (r *GormLoanRepository) Create(ctx context.Context, in *refdemov1.Loan) (*r
 
 // Get returns the record addressed by its resource name.
 func (r *GormLoanRepository) Get(ctx context.Context, name string) (*refdemov1.Loan, error) {
-	ids, err := repox.SplitName(name, "loans")
+	key, err := r.rowKey(name)
 	if err != nil {
 		return nil, err
 	}
-	return r.get(ctx, ids[len(ids)-1])
+	return r.get(ctx, key)
 }
 
-// get loads by surrogate key — the private read every generated method re-reads
-// through, so Tier-2 overrides of Get never re-enter generated writes.
-func (r *GormLoanRepository) get(ctx context.Context, id string) (*refdemov1.Loan, error) {
+// rowKey validates name and returns what its row is found by: the bare id.
+func (r *GormLoanRepository) rowKey(name string) (string, error) {
+	ids, err := repox.SplitName(name, "loans")
+	if err != nil {
+		return "", err
+	}
+	return ids[len(ids)-1], nil
+}
+
+// get loads by row key (rowKey) — the private read every generated method
+// re-reads through, so Tier-2 overrides of Get never re-enter generated writes.
+func (r *GormLoanRepository) get(ctx context.Context, key string) (*refdemov1.Loan, error) {
 	var m lending.Loan
-	if err := r.DB.WithContext(ctx).First(&m, "id = ?", id).Error; err != nil {
+	if err := r.DB.WithContext(ctx).First(&m, "id = ?", key).Error; err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	return r.toProto(ctx, &m)
@@ -182,31 +191,29 @@ var loanColumns = map[string][]string{
 // Update persists the masked fields of in; an empty mask replaces every
 // mutable field. The write happens in one transaction guarded by in.Etag.
 func (r *GormLoanRepository) Update(ctx context.Context, in *refdemov1.Loan, paths []string) (*refdemov1.Loan, error) {
-	ids, err := repox.SplitName(in.GetName(), "loans")
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		return nil, err
 	}
-	id := ids[len(ids)-1]
-	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, id, in, paths, nil) })
+	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, key, in, paths, nil) })
 	if err != nil {
 		return nil, repox.MapGormErr(err)
 	}
-	return r.get(ctx, id)
+	return r.get(ctx, key)
 }
 
 // UpdateWithOutputOnly is Update plus the server-owned fields outputPaths
 // names, in Update's transaction and under its etag guard.
 func (r *GormLoanRepository) UpdateWithOutputOnly(ctx context.Context, in *refdemov1.Loan, paths, outputPaths []string) (*refdemov1.Loan, error) {
-	ids, err := repox.SplitName(in.GetName(), "loans")
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		return nil, err
 	}
-	id := ids[len(ids)-1]
-	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, id, in, paths, outputPaths) })
+	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, key, in, paths, outputPaths) })
 	if err != nil {
 		return nil, repox.MapGormErr(err)
 	}
-	return r.get(ctx, id)
+	return r.get(ctx, key)
 }
 
 // updateTx is Update's write inside tx, which a Batch shares with other
@@ -214,11 +221,13 @@ func (r *GormLoanRepository) UpdateWithOutputOnly(ctx context.Context, in *refde
 // waits for this transaction and then sees the etag it wrote, so two writers
 // holding the same etag cannot both pass the guard. outputPaths names the
 // server-owned fields written alongside (UpdateWithOutputOnly); nil for Update.
-func (r *GormLoanRepository) updateTx(ctx context.Context, tx *gorm.DB, id string, in *refdemov1.Loan, paths, outputPaths []string) error {
+func (r *GormLoanRepository) updateTx(ctx context.Context, tx *gorm.DB, key string, in *refdemov1.Loan, paths, outputPaths []string) error {
 	var existing lending.Loan
-	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "id = ?", id).Error; err != nil {
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "id = ?", key).Error; err != nil {
 		return err
 	}
+	id := existing.ID
+	_ = id
 	if in.GetEtag() != "" && existing.Etag != nil && *existing.Etag != in.GetEtag() {
 		return repox.ErrConflict
 	}
@@ -253,7 +262,7 @@ func (r *GormLoanRepository) updateTx(ctx context.Context, tx *gorm.DB, id strin
 // UpdateOutputOnly persists the server-owned fields of in that paths names, in
 // one transaction guarded by in.Etag.
 func (r *GormLoanRepository) UpdateOutputOnly(ctx context.Context, in *refdemov1.Loan, paths []string) (*refdemov1.Loan, error) {
-	ids, err := repox.SplitName(in.GetName(), "loans")
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +270,7 @@ func (r *GormLoanRepository) UpdateOutputOnly(ctx context.Context, in *refdemov1
 	if err != nil {
 		return nil, repox.MapGormErr(err)
 	}
-	return r.get(ctx, ids[len(ids)-1])
+	return r.get(ctx, key)
 }
 
 // updateOutputOnlyTx is UpdateOutputOnly's write inside tx, which a Batch
@@ -270,16 +279,15 @@ func (r *GormLoanRepository) updateOutputOnlyTx(ctx context.Context, tx *gorm.DB
 	if len(paths) == 0 {
 		return fmt.Errorf("%w: UpdateOutputOnly needs the fields to write", repox.ErrInvalidArgument)
 	}
-	ids, err := repox.SplitName(in.GetName(), "loans")
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		return err
 	}
-	id := ids[len(ids)-1]
 	{
 		var existing lending.Loan
 		// FOR UPDATE, as in updateTx: concurrent writers holding one etag
 		// take turns, and only the first passes the guard.
-		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "id = ?", id).Error; err != nil {
+		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "id = ?", key).Error; err != nil {
 			return err
 		}
 		if in.GetEtag() != "" && existing.Etag != nil && *existing.Etag != in.GetEtag() {
@@ -320,7 +328,7 @@ func (r *GormLoanRepository) newRow(in *refdemov1.Loan) (*lending.Loan, *refdemo
 // Delete soft-deletes the record addressed by its resource name: delete_time
 // is set, the row stays.
 func (r *GormLoanRepository) Delete(ctx context.Context, name string) error {
-	ids, err := repox.SplitName(name, "loans")
+	key, err := r.rowKey(name)
 	if err != nil {
 		return err
 	}
@@ -329,7 +337,7 @@ func (r *GormLoanRepository) Delete(ctx context.Context, name string) error {
 			return err
 		}
 	}
-	res := r.markDeleted(ctx, r.DB, ids[len(ids)-1])
+	res := r.markDeleted(ctx, r.DB, key)
 	if res.Error != nil {
 		return repox.MapGormErr(res.Error)
 	}
@@ -339,40 +347,40 @@ func (r *GormLoanRepository) Delete(ctx context.Context, name string) error {
 	return nil
 }
 
-// markDeleted sets the soft-delete mark on the live row id through db: Delete's
-// write, which a Batch runs inside its transaction.
-func (r *GormLoanRepository) markDeleted(ctx context.Context, db *gorm.DB, id string) *gorm.DB {
+// markDeleted sets the soft-delete mark on the live row found by key
+// (rowKey) through db: Delete's write, which a Batch runs inside its
+// transaction.
+func (r *GormLoanRepository) markDeleted(ctx context.Context, db *gorm.DB, key string) *gorm.DB {
 	now := time.Now()
 	return db.WithContext(ctx).Model(&lending.Loan{}).
-		Where("id = ? AND delete_time IS NULL", id).
+		Where("id = ? AND delete_time IS NULL", key).
 		Updates(map[string]any{"delete_time": now, "etag": repox.NewULID(), "expire_time": repox.ExpireAt(now, r.Retention)})
 }
 
 // Undelete clears the soft-delete mark and returns the restored record.
 func (r *GormLoanRepository) Undelete(ctx context.Context, name string) (*refdemov1.Loan, error) {
-	ids, err := repox.SplitName(name, "loans")
+	key, err := r.rowKey(name)
 	if err != nil {
 		return nil, err
 	}
-	id := ids[len(ids)-1]
 	res := r.DB.WithContext(ctx).Model(&lending.Loan{}).
-		Where("id = ? AND delete_time IS NOT NULL", id).
+		Where("id = ? AND delete_time IS NOT NULL", key).
 		Updates(map[string]any{"delete_time": nil, "etag": repox.NewULID(), "expire_time": nil})
 	if res.Error != nil {
 		return nil, repox.MapGormErr(res.Error)
 	}
 	if res.RowsAffected == 0 {
-		if _, err := r.get(ctx, id); err != nil {
+		if _, err := r.get(ctx, key); err != nil {
 			return nil, err
 		}
 		return nil, fmt.Errorf("%w: %s is not deleted", repox.ErrAlreadyExists, name)
 	}
-	return r.get(ctx, id)
+	return r.get(ctx, key)
 }
 
 // Purge removes the record addressed by its resource name for good.
 func (r *GormLoanRepository) Purge(ctx context.Context, name string) error {
-	ids, err := repox.SplitName(name, "loans")
+	key, err := r.rowKey(name)
 	if err != nil {
 		return err
 	}
@@ -381,18 +389,18 @@ func (r *GormLoanRepository) Purge(ctx context.Context, name string) error {
 			return err
 		}
 	}
-	id := ids[len(ids)-1]
-	_, err = r.purge(ctx, r.DB, id, name, true)
+	_, err = r.purge(ctx, r.DB, key, name, true)
 	return repox.MapGormErr(err)
 }
 
-// purge removes row id, named name, for good through db -- unless something
+// purge removes the row found by key (rowKey), named name, for good through
+// db -- unless something
 // still refers to it, when it keeps the row and reports kept: a row of this
 // database holding a foreign key to it (asked first, then caught again from
 // the constraint itself), or, when askReferrers, a referrer in another
 // database or service (r.Refs). A purge never fails, and never cascades,
 // because of a referrer. gorm.ErrRecordNotFound when there is no such row.
-func (r *GormLoanRepository) purge(ctx context.Context, db *gorm.DB, id, name string, askReferrers bool) (kept bool, err error) {
+func (r *GormLoanRepository) purge(ctx context.Context, db *gorm.DB, key, name string, askReferrers bool) (kept bool, err error) {
 	if askReferrers && r.Refs.KeepOnPurge(ctx, "lending.example.com/Loan", name) {
 		return true, nil
 	}
@@ -401,10 +409,10 @@ func (r *GormLoanRepository) purge(ctx context.Context, db *gorm.DB, id, name st
 	// this purge.
 	err = db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var existing lending.Loan
-		if err := tx.First(&existing, "id = ?", id).Error; err != nil {
+		if err := tx.First(&existing, "id = ?", key).Error; err != nil {
 			return err
 		}
-		return lending.NewLoanStore(tx).DeleteByID(ctx, id)
+		return lending.NewLoanStore(tx).DeleteByID(ctx, existing.ID)
 	})
 	if repox.IsForeignKeyViolation(err) {
 		r.Refs.Kept(ctx, name, "foreign key")
@@ -433,11 +441,11 @@ func (r *GormLoanRepository) PurgeExpired(ctx context.Context, now time.Time) (r
 			return res, err
 		}
 		for _, m := range page {
-			ids, err := repox.SplitName(m.GetName(), "loans")
+			key, err := r.rowKey(m.GetName())
 			if err != nil {
 				return res, err
 			}
-			kept, err := r.purge(ctx, r.DB, ids[len(ids)-1], m.GetName(), true)
+			kept, err := r.purge(ctx, r.DB, key, m.GetName(), true)
 			switch {
 			case errors.Is(err, gorm.ErrRecordNotFound):
 			case err != nil:
@@ -499,15 +507,15 @@ func (b *gormBatch) CreateLoan(in *refdemov1.Loan) (string, error) {
 // UpdateLoan queues Update; in.Etag, when set, guards it, and a guard
 // that fails rolls the whole batch back.
 func (b *gormBatch) UpdateLoan(in *refdemov1.Loan, paths []string) {
-	ids, err := repox.SplitName(in.GetName(), "loans")
+	r := &GormLoanRepository{DB: b.db}
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
 		return
 	}
-	r := &GormLoanRepository{DB: b.db}
 	queueLoanReferences(b.u, in, paths)
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
-		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, nil)
+		return r.updateTx(ctx, tx, key, in, paths, nil)
 	})
 	b.u.Record(repox.Change{Type: "lending.example.com/Loan", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getLoan)})
 }
@@ -515,15 +523,15 @@ func (b *gormBatch) UpdateLoan(in *refdemov1.Loan, paths []string) {
 // UpdateLoanWithOutputOnly queues UpdateWithOutputOnly; in.Etag, when
 // set, guards it, and a guard that fails rolls the whole batch back.
 func (b *gormBatch) UpdateLoanWithOutputOnly(in *refdemov1.Loan, paths, outputPaths []string) {
-	ids, err := repox.SplitName(in.GetName(), "loans")
+	r := &GormLoanRepository{DB: b.db}
+	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
 		return
 	}
-	r := &GormLoanRepository{DB: b.db}
 	queueLoanReferences(b.u, in, paths)
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
-		return r.updateTx(ctx, tx, ids[len(ids)-1], in, paths, outputPaths)
+		return r.updateTx(ctx, tx, key, in, paths, outputPaths)
 	})
 	b.u.Record(repox.Change{Type: "lending.example.com/Loan", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getLoan)})
 }
@@ -540,15 +548,15 @@ func (b *gormBatch) UpdateLoanOutputOnly(in *refdemov1.Loan, paths []string) {
 // DeleteLoan queues a soft delete. A record already deleted or gone is
 // not an error: two batches deleting the same record must not fail each other.
 func (b *gormBatch) DeleteLoan(name string) {
-	ids, err := repox.SplitName(name, "loans")
+	r := &GormLoanRepository{DB: b.db, Retention: b.retention}
+	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)
 		return
 	}
-	r := &GormLoanRepository{DB: b.db, Retention: b.retention}
 	queueLoanDelete(b.u, name, false)
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
-		return r.markDeleted(ctx, tx, ids[len(ids)-1]).Error
+		return r.markDeleted(ctx, tx, key).Error
 	})
 	b.u.Record(repox.Change{Type: "lending.example.com/Loan", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getLoan)})
 }
@@ -557,20 +565,19 @@ func (b *gormBatch) DeleteLoan(name string) {
 // gone is not an error: two batches clearing the same row must not fail each
 // other.
 func (b *gormBatch) PurgeLoan(name string) {
-	ids, err := repox.SplitName(name, "loans")
+	// A record something still refers to is kept, as Purge keeps it.
+	r := &GormLoanRepository{DB: b.db, Refs: b.u.Conn().References}
+	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)
 		return
 	}
-	id := ids[len(ids)-1]
-	// A record something still refers to is kept, as Purge keeps it.
-	r := &GormLoanRepository{DB: b.db, Refs: b.u.Conn().References}
 	keep := queueLoanPurge(b.u, name)
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		if *keep {
 			return nil
 		}
-		if _, err := r.purge(ctx, tx, id, name, false); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		if _, err := r.purge(ctx, tx, key, name, false); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
 		return nil

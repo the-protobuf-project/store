@@ -8,7 +8,7 @@ Generated from Protobuf by protoc-gen-store. Source of truth is the `.proto` fil
 
 | Models | Enums |
 | ---: | ---: |
-| 2 | 0 |
+| 3 | 0 |
 
 ## Entity relationships
 
@@ -19,10 +19,17 @@ erDiagram
         string id PK
         string shelf_id FK
     }
+    Page {
+        string id PK
+        string shelf_id FK
+        string book_id FK
+    }
     Shelf {
         string id PK
     }
     Book }o--|| Shelf : "shelf_id"
+    Page }o--|| Shelf : "shelf_id"
+    Page }o--|| Book : "book_id"
 ```
 
 ## Output
@@ -59,3 +66,15 @@ A book on a shelf: a nested resource, so a reference to it stores its full name 
 | `delete_time` | `TIMESTAMPTZ` | nullable |
 | `expire_time` | `TIMESTAMPTZ` | nullable |
 | `shelf_id` | `CHAR(26)` | not null |
+
+### `Page` → `pages`
+
+A page of a book: nested two deep, so the row it hangs off is a nested resource's, found by its name.
+
+| Column | Type | Null |
+| --- | --- | --- |
+| `id` | `CHAR(26)` | not null |
+| `name` | `VARCHAR(255)` | not null |
+| `text` | `VARCHAR(255)` | nullable |
+| `shelf_id` | `CHAR(26)` | not null |
+| `book_id` | `CHAR(26)` | not null |

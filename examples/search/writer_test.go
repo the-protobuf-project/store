@@ -146,11 +146,11 @@ func minTime(a, b time.Time) time.Time {
 // fixture is three rooms and their bookings, written through repositories
 // that maintain the projection.
 type fixture struct {
-	conn          repox.Conn
-	repos         search.Repositories
-	a, b, c       *searchdemov1.Room
-	morningA      *searchdemov1.Booking
-	committed     [][]repox.Committed
+	conn      repox.Conn
+	repos     search.Repositories
+	a, b, c   *searchdemov1.Room
+	morningA  *searchdemov1.Booking
+	committed [][]repox.Committed
 }
 
 func newFixture(t *testing.T, db *gorm.DB, feeds ...repox.ProjectionFeed) *fixture {

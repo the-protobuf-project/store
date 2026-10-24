@@ -36,6 +36,12 @@ import (
 	"github.com/the-protobuf-project/runtime-go/network/graphql"
 )
 
+// HasuraArrayContains says the DDN connector filters arrays of scalars
+// (query.nested_fields.filter_by.nested_arrays.contains), so a `:` on a
+// KindTags field is sent as _contains. ndc-postgres does not (v3.1.0), so it
+// is false and such a condition fails with ErrUnsupported before any request.
+var HasuraArrayContains = false
+
 // GraphQLHandler overrides (or extends) the engine's dispatch for one filter
 // field. Returning an error rejects the condition; a field absent from both
 // the spec and the overrides is rejected as unknown — which is also how a
@@ -151,11 +157,27 @@ func (e *HasuraEngine[M]) Predicate(conds []Condition) (graphql.Predicate, bool,
 // spec's sort allowlist. Empty order_by still yields the spec's primary-key
 // term, which [OrderTerms] appends to keep paging stable.
 func (e *HasuraEngine[M]) OrderTerms(orderBy string) ([]graphql.OrderTerm, error) {
-	terms, err := OrderTerms(e.spec, orderBy)
+	terms, err := hasuraOrderTerms(e.spec, orderBy)
 	if err != nil {
 		return nil, err
 	}
 	return gqlOrderTerms(terms), nil
+}
+
+// hasuraOrderTerms is OrderTerms less what DDN cannot order by: a JSON
+// attribute path, which its order_by has no expression for, is rejected with
+// ErrUnsupported.
+func hasuraOrderTerms(spec Spec, orderBy string) ([]OrderTerm, error) {
+	terms, err := OrderTerms(spec, orderBy)
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range terms {
+		if len(t.Path) > 0 {
+			return nil, fmt.Errorf("%w: ordering by the JSON attribute path %q is not supported on Hasura DDN; order over the Postgres search connection instead", ErrUnsupported, t.Name())
+		}
+	}
+	return terms, nil
 }
 
 // gqlOrderTerms converts resolved terms to their GraphQL form. Direction is all
@@ -179,7 +201,7 @@ func gqlOrderTerms(terms []OrderTerm) []graphql.OrderTerm {
 // this order_by is rejected with ErrInvalid. Exposed alongside Predicate and
 // OrderTerms so a caller composing its own request pages the same way List does.
 func (e *HasuraEngine[M]) Seek(orderBy, pageToken string) (graphql.Predicate, bool, error) {
-	terms, err := OrderTerms(e.spec, orderBy)
+	terms, err := hasuraOrderTerms(e.spec, orderBy)
 	if err != nil {
 		return graphql.Predicate{}, false, err
 	}
@@ -339,7 +361,7 @@ func GraphQLColumn(f reflect.StructField) string {
 // next-page token. Invalid filter/order input is rejected with ErrInvalid
 // before any query runs.
 func (e *HasuraEngine[M]) List(ctx context.Context, in ListInput) ([]M, string, error) {
-	terms, err := OrderTerms(e.spec, in.OrderBy)
+	terms, err := hasuraOrderTerms(e.spec, in.OrderBy)
 	if err != nil {
 		e.observer.Debug("rejected order_by", map[string]any{"table": e.spec.Table, "order_by": in.OrderBy, "error": err.Error()})
 		return nil, "", err
@@ -686,11 +708,16 @@ func gqlCondition(spec Spec, c Condition) (graphql.Predicate, error) {
 		}
 	case KindTags:
 		// The engine's array comparison: a text[] column holding the tag. DDN
-		// offers _contains on an array of scalars when the connector declares
-		// query.nested_fields.filter_by.nested_arrays.contains (NDC spec 0.2);
-		// against a connector that does not, the engine rejects the request
-		// rather than this engine guessing another shape.
+		// offers _contains on an array of scalars only when the connector
+		// declares query.nested_fields.filter_by.nested_arrays.contains (NDC
+		// spec 0.2), and ndc-postgres (v3.1.0) declares neither that nor
+		// exists.nested_scalar_collections, so `ddn model add` leaves array
+		// columns out of the BoolExp. Unless HasuraArrayContains says the
+		// connector has it, the condition fails here, plainly.
 		if c.Op == OpHas {
+			if !HasuraArrayContains {
+				return graphql.Predicate{}, fmt.Errorf("%w: %q is a text[] column, and tag containment is not supported on Hasura DDN over ndc-postgres (no array comparison); filter it over the Postgres search connection instead", ErrUnsupported, c.Field)
+			}
 			return graphql.Op(col, "_contains", c.Value), nil
 		}
 	}

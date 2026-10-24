@@ -3,7 +3,12 @@
 
 package types
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/the-protobuf-project/protokit/schema"
+	"github.com/the-protobuf-project/store/plugin/pb/storepbv1"
+)
 
 func TestBaseType(t *testing.T) {
 	cases := []struct {
@@ -143,5 +148,27 @@ func TestMongoPrismaType(t *testing.T) {
 		if got := MongoPrismaType(in); got != want {
 			t.Errorf("MongoPrismaType(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// A plain google.type.Interval column holds the converters' "start/end" text,
+// so every target must create it as text: tstzrange would reject the value.
+// Only a projection's range column, pinned by an explicit type, is a range.
+func TestIntervalIsText(t *testing.T) {
+	sql := SQL(schema.TypeInterval, false)
+	if sql != "TEXT" {
+		t.Fatalf("SQL(TypeInterval) = %q, want TEXT", sql)
+	}
+	if got := GormColumnType(sql); got != "" {
+		t.Errorf("GormColumnType(%q) = %q, want none (string maps to text)", sql, got)
+	}
+	if got := PrismaType(sql); got != "String" {
+		t.Errorf("PrismaType(%q) = %q, want String", sql, got)
+	}
+	if got := SQL(schema.TypeInterval, true); got != "TEXT[]" {
+		t.Errorf("SQL(repeated TypeInterval) = %q, want TEXT[]", got)
+	}
+	if got := SQLForColumn(&schema.Column{Type: schema.TypeInterval}, &storepbv1.ColumnOptions{Type: "TSTZRANGE"}); got != "TSTZRANGE" {
+		t.Errorf("a pinned range column resolves to %q, want TSTZRANGE", got)
 	}
 }

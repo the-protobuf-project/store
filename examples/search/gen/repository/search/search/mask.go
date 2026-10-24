@@ -38,6 +38,9 @@ func applyBookingMask(merged, in *searchdemov1.Booking, paths []string) {
 	if repox.GroupTouched(paths, "end_time") {
 		merged.EndTime = in.GetEndTime()
 	}
+	if repox.GroupTouched(paths, "setup_window") {
+		merged.SetupWindow = in.GetSetupWindow()
+	}
 }
 
 // applyRoomMask merges the masked fields of in onto merged. An empty

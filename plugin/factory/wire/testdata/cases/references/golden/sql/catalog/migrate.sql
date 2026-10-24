@@ -54,14 +54,34 @@ CREATE TABLE IF NOT EXISTS "catalog"."books" (
     "shelf_id"  CHAR(26)  NOT NULL
 );
 
+-- A page of a book: nested two deep, so the row it hangs off is a nested resource's, found by its name.
+CREATE TABLE IF NOT EXISTS "catalog"."pages" (
+    -- Unique identifier for the record.
+    "id"  CHAR(26)  NOT NULL  PRIMARY KEY,
+    -- The page's resource name.
+    "name"  VARCHAR(255)  NOT NULL  UNIQUE,
+    -- What is printed on it.
+    "text"  VARCHAR(255),
+    -- Parent reference to Shelf (from the AIP resource pattern).
+    "shelf_id"  CHAR(26)  NOT NULL,
+    -- Parent reference to Book (from the AIP resource pattern).
+    "book_id"  CHAR(26)  NOT NULL
+);
+
 -- Foreign keys
 ALTER TABLE "catalog"."books" DROP CONSTRAINT IF EXISTS "fk_books_shelf_id";
 ALTER TABLE "catalog"."books" ADD CONSTRAINT "fk_books_shelf_id" FOREIGN KEY ("shelf_id") REFERENCES "catalog"."shelves"("id") ON DELETE CASCADE;
+ALTER TABLE "catalog"."pages" DROP CONSTRAINT IF EXISTS "fk_pages_shelf_id";
+ALTER TABLE "catalog"."pages" ADD CONSTRAINT "fk_pages_shelf_id" FOREIGN KEY ("shelf_id") REFERENCES "catalog"."shelves"("id") ON DELETE CASCADE;
+ALTER TABLE "catalog"."pages" DROP CONSTRAINT IF EXISTS "fk_pages_book_id";
+ALTER TABLE "catalog"."pages" ADD CONSTRAINT "fk_pages_book_id" FOREIGN KEY ("book_id") REFERENCES "catalog"."books"("id") ON DELETE CASCADE;
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS "idx_shelves_delete_time" ON "catalog"."shelves" ("delete_time");
 CREATE INDEX IF NOT EXISTS "idx_books_delete_time" ON "catalog"."books" ("delete_time");
 CREATE INDEX IF NOT EXISTS "idx_books_shelf_id_id" ON "catalog"."books" ("shelf_id", "id");
+CREATE INDEX IF NOT EXISTS "idx_pages_book_id_id" ON "catalog"."pages" ("book_id", "id");
+CREATE INDEX IF NOT EXISTS "idx_pages_shelf_id" ON "catalog"."pages" ("shelf_id");
 
 -- Documentation
 COMMENT ON TABLE "catalog"."shelves" IS 'A shelf holds books.';
@@ -79,5 +99,11 @@ COMMENT ON COLUMN "catalog"."books"."etag" IS 'Optimistic-concurrency token.';
 COMMENT ON COLUMN "catalog"."books"."delete_time" IS 'When the book was soft-deleted.';
 COMMENT ON COLUMN "catalog"."books"."expire_time" IS 'When the soft-deleted book goes for good.';
 COMMENT ON COLUMN "catalog"."books"."shelf_id" IS 'Parent reference to Shelf (from the AIP resource pattern).';
+COMMENT ON TABLE "catalog"."pages" IS 'A page of a book: nested two deep, so the row it hangs off is a nested resource''s, found by its name.';
+COMMENT ON COLUMN "catalog"."pages"."id" IS 'Unique identifier for the record.';
+COMMENT ON COLUMN "catalog"."pages"."name" IS 'The page''s resource name.';
+COMMENT ON COLUMN "catalog"."pages"."text" IS 'What is printed on it.';
+COMMENT ON COLUMN "catalog"."pages"."shelf_id" IS 'Parent reference to Shelf (from the AIP resource pattern).';
+COMMENT ON COLUMN "catalog"."pages"."book_id" IS 'Parent reference to Book (from the AIP resource pattern).';
 
 COMMIT;

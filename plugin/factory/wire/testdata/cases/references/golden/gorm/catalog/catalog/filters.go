@@ -61,3 +61,20 @@ var BookFilterSpec = filterx.Spec{
 	},
 	PK: []filterx.SortSpec{{Column: "id", Kind: filterx.KindText, NotNull: true}},
 }
+
+// PageFilterSpec is Page's AIP-160 filter / AIP-132 order_by surface,
+// consumed by the filterx.Gorm, filterx.Hasura and filterx.OpenSearch engines.
+var PageFilterSpec = filterx.Spec{
+	Table: `"catalog"."pages"`,
+	Fields: map[string]filterx.FieldSpec{
+		"book":  {Column: "book_id", Kind: filterx.KindRef},
+		"name":  {Column: "name", Kind: filterx.KindText},
+		"shelf": {Column: "shelf_id", Kind: filterx.KindRef},
+		"text":  {Column: "text", Kind: filterx.KindText},
+	},
+	Sort: map[string]filterx.SortSpec{
+		"name": {Column: "name", Kind: filterx.KindText, NotNull: true},
+		"text": {Column: "text", Kind: filterx.KindText},
+	},
+	PK: []filterx.SortSpec{{Column: "id", Kind: filterx.KindText, NotNull: true}},
+}

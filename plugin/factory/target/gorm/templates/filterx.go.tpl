@@ -27,6 +27,13 @@ import (
 // invalid-argument error (e.g. a gRPC InvalidArgument) with errors.Is.
 var ErrInvalid = errors.New("invalid filter or order_by")
 
+// ErrUnsupported marks a filter or order_by that is valid but that the
+// backend asked cannot evaluate -- tag containment or ordering by a JSON
+// attribute path on Hasura DDN, say. It wraps ErrInvalid, so a caller that
+// only checks ErrInvalid still answers invalid-argument; errors.Is with
+// ErrUnsupported tells the two apart.
+var ErrUnsupported = fmt.Errorf("%w: unsupported on this backend", ErrInvalid)
+
 // Op is the comparison in a single filter term.
 type Op int
 
@@ -571,11 +578,29 @@ type OrderTerm struct {
 	Desc    bool
 	Kind    Kind
 	NotNull bool
+	// Path, when set, makes the term a declared JSON attribute path under the
+	// KindJSON column Column (FieldSpec.JSONKeys): it orders by the value at
+	// the path, typed as Kind.
+	Path []string
+}
+
+// Name is the term's identity in a page token and a row: its column, or for a
+// JSON path term the column and the dotted path ("attributes.max_occupancy").
+func (t OrderTerm) Name() string {
+	if len(t.Path) == 0 {
+		return t.Column
+	}
+	return t.Column + "." + strings.Join(t.Path, ".")
 }
 
 // OrderTerms parses an AIP-132 order_by string ("expiry_date desc, name")
 // against the spec's sort allowlist. Unknown fields and malformed terms are
 // rejected with ErrInvalid.
+//
+// A path under a KindJSON field sorts when FieldSpec.JSONKeys declares it
+// ((store.v1.query).json_keys): "attributes.max_occupancy desc" orders by the
+// value at the path, compared as its declared kind. An undeclared path is
+// rejected with ErrInvalid, since its values have no one type to order by.
 //
 // The spec's primary key is appended as the final term (see [Spec.PK]), so the
 // result is always a total order — including for the empty order_by, which
@@ -594,11 +619,10 @@ func OrderTerms(spec Spec, orderBy string) ([]OrderTerm, error) {
 		if len(fields) == 0 || len(fields) > 2 {
 			return nil, fmt.Errorf("%w: malformed order_by term %q", ErrInvalid, strings.TrimSpace(part))
 		}
-		ss, ok := spec.Sort[fields[0]]
-		if !ok {
-			return nil, fmt.Errorf("%w: cannot sort by %q", ErrInvalid, fields[0])
+		term, err := sortTerm(spec, fields[0])
+		if err != nil {
+			return nil, err
 		}
-		term := OrderTerm{Column: ss.Column, Kind: ss.Kind, NotNull: ss.NotNull}
 		if len(fields) == 2 {
 			switch strings.ToLower(fields[1]) {
 			case "asc":
@@ -613,6 +637,25 @@ func OrderTerms(spec Spec, orderBy string) ([]OrderTerm, error) {
 	return pkTerms(spec, terms), nil
 }
 
+// sortTerm resolves one order_by field: an entry of the sort allowlist, or a
+// declared JSON attribute path.
+func sortTerm(spec Spec, field string) (OrderTerm, error) {
+	if ss, ok := spec.Sort[field]; ok {
+		return OrderTerm{Column: ss.Column, Kind: ss.Kind, NotNull: ss.NotNull}, nil
+	}
+	p, ok, err := LookupJSON(spec, field)
+	if err != nil {
+		return OrderTerm{}, err
+	}
+	if !ok {
+		return OrderTerm{}, fmt.Errorf("%w: cannot sort by %q", ErrInvalid, field)
+	}
+	if p.Kind == KindJSON {
+		return OrderTerm{}, fmt.Errorf("%w: cannot sort by %q: only a JSON path declared in (store.v1.query).json_keys sorts", ErrInvalid, field)
+	}
+	return OrderTerm{Column: p.Field.Column, Kind: p.Kind, Path: p.Path}, nil
+}
+
 // pkTerms appends the spec's primary-key columns to terms, skipping any column
 // the caller already sorts on. Ascending is the tiebreaker direction: it only
 // orders rows the caller's own terms left tied, so the choice is invisible
@@ -621,7 +664,7 @@ func pkTerms(spec Spec, terms []OrderTerm) []OrderTerm {
 	for _, pk := range spec.PK {
 		sorted := false
 		for _, t := range terms {
-			if t.Column == pk.Column {
+			if t.Column == pk.Column && len(t.Path) == 0 {
 				sorted = true
 				break
 			}
@@ -685,7 +728,7 @@ type Cursor struct {
 func EncodeCursor(terms []OrderTerm, vals []*string) (string, error) {
 	c := Cursor{Cols: make([]string, len(terms)), Vals: vals}
 	for i, t := range terms {
-		c.Cols[i] = t.Column
+		c.Cols[i] = t.Name()
 	}
 	raw, err := json.Marshal(c)
 	if err != nil {
@@ -719,7 +762,7 @@ func DecodeCursor(terms []OrderTerm, token string) ([]*string, error) {
 		return nil, fmt.Errorf("%w: page token does not match this order_by", ErrInvalid)
 	}
 	for i, t := range terms {
-		if c.Cols[i] != t.Column {
+		if c.Cols[i] != t.Name() {
 			return nil, fmt.Errorf("%w: page token does not match this order_by", ErrInvalid)
 		}
 	}
@@ -761,9 +804,69 @@ func CursorValues(row any, terms []OrderTerm, keyOf ColumnKey, nameOf FieldNamer
 		if !ok {
 			return nil, fmt.Errorf("filterx: %T has no field for sort column %q", row, t.Column)
 		}
+		if len(t.Path) > 0 {
+			v, err := jsonCursorValue(fv, t.Path)
+			if err != nil {
+				return nil, fmt.Errorf("filterx: sort column %q: %w", t.Name(), err)
+			}
+			out[i] = v
+			continue
+		}
 		out[i] = formatCursorValue(fv, t.Kind)
 	}
 	return out, nil
+}
+
+// jsonCursorValue reads the value at path out of a JSON document field (raw
+// JSON bytes or text) in the text form a page token carries, or nil when the
+// path holds nothing or null.
+func jsonCursorValue(v reflect.Value, path []string) (*string, error) {
+	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			return nil, nil
+		}
+		v = v.Elem()
+	}
+	var raw []byte
+	switch {
+	case v.Kind() == reflect.String:
+		raw = []byte(v.String())
+	case v.Kind() == reflect.Slice && v.Type().Elem().Kind() == reflect.Uint8:
+		raw = v.Bytes()
+	default:
+		b, err := json.Marshal(v.Interface())
+		if err != nil {
+			return nil, err
+		}
+		raw = b
+	}
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var doc any
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	dec.UseNumber()
+	if err := dec.Decode(&doc); err != nil {
+		return nil, err
+	}
+	return JSONCursorText(doc, path), nil
+}
+
+// JSONCursorText is the value at path in a decoded JSON document in the text
+// form a page token carries, or nil when the path holds nothing or null.
+func JSONCursorText(doc any, path []string) *string {
+	for _, seg := range path {
+		m, ok := doc.(map[string]any)
+		if !ok {
+			return nil
+		}
+		doc = m[seg]
+	}
+	if doc == nil {
+		return nil
+	}
+	s := fmt.Sprint(doc)
+	return &s
 }
 
 // formatCursorValue renders one column value in the text form a page token

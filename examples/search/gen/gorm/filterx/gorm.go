@@ -131,13 +131,50 @@ func orderClause(terms []OrderTerm) string {
 		if t.Desc {
 			dir = "DESC"
 		}
-		parts = append(parts, t.Column+" "+dir)
+		col := t.Column
+		if len(t.Path) > 0 {
+			col = sqlTermExpr(`"`+t.Column+`"`, t)
+		}
+		parts = append(parts, col+" "+dir)
 	}
 	return strings.Join(parts, ", ")
 }
 
 // qualifyCol renders a column reference qualified by the spec's table.
 func qualifyCol(spec Spec, col string) string { return spec.Table + `."` + col + `"` }
+
+// SQLTermExpr is the SQL expression a resolved order term sorts by, qualified
+// by the spec's table: the column, or for a JSON path term the value at the
+// path cast to its declared kind -- ("t"."attributes" ->> 'max_occupancy')::bigint.
+// A value at the path that does not read as that kind fails the query, as
+// the declaration says it cannot happen.
+func SQLTermExpr(spec Spec, t OrderTerm) string { return sqlTermExpr(qualifyCol(spec, t.Column), t) }
+
+// sqlTermExpr is SQLTermExpr over the column reference col. LookupJSON admits
+// only [A-Za-z0-9_-] path segments, so the path is safe inline.
+func sqlTermExpr(col string, t OrderTerm) string {
+	if len(t.Path) == 0 {
+		return col
+	}
+	text := "(" + col + " ->> '" + t.Path[0] + "')"
+	if len(t.Path) > 1 {
+		text = "(" + col + " #>> '{" + strings.Join(t.Path, ",") + "}')"
+	}
+	switch t.Kind {
+	case KindInt:
+		return "(" + text + "::bigint)"
+	case KindFloat:
+		return "(" + text + "::double precision)"
+	case KindBool:
+		return "(" + text + "::boolean)"
+	case KindDate:
+		return "(" + text + "::date)"
+	case KindTimestamp:
+		return "(" + text + "::timestamptz)"
+	default:
+		return text
+	}
+}
 
 // Seek renders the keyset predicate resuming after pageToken, under the ordering
 // orderBy resolves to — the clause List ANDs in to fetch the next page. The
@@ -213,7 +250,7 @@ func keysetWhere(spec Spec, terms []OrderTerm, cursor []*string) (string, []any,
 
 // keysetEq matches rows tying with the cursor on one term.
 func keysetEq(spec Spec, t OrderTerm, v *string) (string, []any, error) {
-	col := qualifyCol(spec, t.Column)
+	col := SQLTermExpr(spec, t)
 	if v == nil {
 		return col + " IS NULL", nil, nil
 	}
@@ -227,7 +264,7 @@ func keysetEq(spec Spec, t OrderTerm, v *string) (string, []any, error) {
 // keysetAfter matches rows sorting strictly after the cursor on one term.
 // Returns "" when no row can: an ASC NULL already sorts last.
 func keysetAfter(spec Spec, t OrderTerm, v *string) (string, []any, error) {
-	col := qualifyCol(spec, t.Column)
+	col := SQLTermExpr(spec, t)
 	if v == nil {
 		if t.Desc {
 			return col + " IS NOT NULL", nil, nil // DESC sorts NULLs first

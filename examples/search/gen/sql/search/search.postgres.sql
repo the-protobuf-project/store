@@ -51,6 +51,8 @@ CREATE TABLE "search"."bookings" (
     "start_time"  TIMESTAMPTZ  NOT NULL,
     -- When it ends.
     "end_time"  TIMESTAMPTZ  NOT NULL,
+    -- When the room is set up for it, which may start before and end after the booking. A plain Interval column, stored as "start/end" text, unlike the projection's range column.
+    "setup_window"  TEXT,
     CONSTRAINT "fk_bookings_room" FOREIGN KEY ("room") REFERENCES "search"."rooms"("id")
 );
 CREATE INDEX "idx_bookings_room" ON "search"."bookings" ("room");
@@ -79,7 +81,7 @@ CREATE TABLE "search"."room_days" (
     "row_version"  BIGINT  NOT NULL  DEFAULT 0
 );
 CREATE UNIQUE INDEX "idx_room_days_room_day" ON "search"."room_days" ("room", "day");
-CREATE INDEX "idx_room_days_floor_day" ON "search"."room_days" ("floor", "day");
+CREATE INDEX "idx_room_days_floor_day_id" ON "search"."room_days" ("floor", "day", "id");
 -- range containment (@>) cannot use a B-tree
 CREATE INDEX IF NOT EXISTS "idx_room_days_free_gist" ON "search"."room_days" USING gist ("free");
 -- tag containment (@>) cannot use a B-tree
@@ -106,6 +108,7 @@ COMMENT ON COLUMN "search"."bookings"."name" IS 'The booking''s resource name.';
 COMMENT ON COLUMN "search"."bookings"."room" IS 'The room booked.';
 COMMENT ON COLUMN "search"."bookings"."start_time" IS 'When it starts.';
 COMMENT ON COLUMN "search"."bookings"."end_time" IS 'When it ends.';
+COMMENT ON COLUMN "search"."bookings"."setup_window" IS 'When the room is set up for it, which may start before and end after the booking. A plain Interval column, stored as "start/end" text, unlike the projection''s range column.';
 COMMENT ON TABLE "search"."room_days" IS 'RoomDay is one room''s free time on one day: the projection a search by time window reads instead of the bookings.';
 COMMENT ON COLUMN "search"."room_days"."id" IS 'The row''s key: its key fields'' values as a JSON array.';
 COMMENT ON COLUMN "search"."room_days"."room" IS 'The room.';

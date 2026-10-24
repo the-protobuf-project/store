@@ -490,13 +490,15 @@ func sqlState(err error) string {
 }
 
 // MapFilterxErr translates the filter/order engines' rejection onto
-// ErrInvalidArgument, keeping the descriptive message.
+// ErrInvalidArgument, keeping the descriptive message and the engine's error
+// (errors.Is(err, filterx.ErrUnsupported) still holds for what a backend
+// cannot evaluate).
 func MapFilterxErr(err error) error {
 	if err == nil {
 		return nil
 	}
 	if errors.Is(err, filterx.ErrInvalid) {
-		return fmt.Errorf("%w: %s", ErrInvalidArgument, err.Error())
+		return fmt.Errorf("%w: %w", ErrInvalidArgument, err)
 	}
 	return err
 }
@@ -518,6 +520,57 @@ func SplitName(name string, collections ...string) ([]string, error) {
 		ids = append(ids, parts[2*i+1])
 	}
 	return ids, nil
+}
+
+// NamePattern turns a resource name whose ids may be AIP-159's "-" (any)
+// into a LIKE pattern: each "-" id matches any id, every other character
+// matches itself. wild is false, and pattern is name, when no id is "-".
+func NamePattern(name string) (pattern string, wild bool) {
+	parts := strings.Split(name, "/")
+	for i := 1; i < len(parts); i += 2 {
+		if parts[i] == "-" {
+			wild = true
+		}
+	}
+	if !wild {
+		return name, false
+	}
+	esc := strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`)
+	for i, p := range parts {
+		if i%2 == 1 && p == "-" {
+			parts[i] = "%"
+		} else {
+			parts[i] = esc.Replace(p)
+		}
+	}
+	return strings.Join(parts, "/"), true
+}
+
+// NameMatch is the SQL comparison (with its one placeholder) and argument
+// that match a name column against name: equality, or LIKE when an id of
+// name is "-" (see NamePattern).
+func NameMatch(name string) (op, arg string) {
+	if p, wild := NamePattern(name); wild {
+		return "LIKE ?", p
+	}
+	return "= ?", name
+}
+
+// RowKey returns the surrogate key of the row of table (a quoted, qualified
+// identifier) whose name is name, or fallback when there is none. A nested
+// resource's row is keyed by a surrogate of its own rather than by its id, so
+// a column pointing at it -- a nested child's ancestor column -- is filled
+// from its name. The fallback, the bare id, lets the foreign key report a
+// parent that does not exist, as it always has.
+func RowKey(ctx context.Context, db *gorm.DB, table, name, fallback string) (string, error) {
+	var keys []string
+	if err := db.WithContext(ctx).Table(table).Where("name = ?", name).Limit(1).Pluck("id", &keys).Error; err != nil {
+		return "", err
+	}
+	if len(keys) == 0 {
+		return fallback, nil
+	}
+	return keys[0], nil
 }
 
 // LastSegment returns the final path component of a resource name — the bare

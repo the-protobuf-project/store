@@ -22,6 +22,7 @@ import (
 	"example.com/test/gen/repox"
 	"example.com/test/genql"
 	"example.com/test/genql/catalogql/booksql"
+	"example.com/test/genql/catalogql/pagesql"
 	"example.com/test/genql/catalogql/shelvesql"
 	"example.com/test/gormdb/catalog/catalog"
 	"example.com/test/gormdb/filterx"
@@ -83,6 +84,7 @@ func (r *GraphQLBookRepository) Create(ctx context.Context, parent string, in *r
 		return nil, err
 	}
 	id := repox.NewULID()
+	rowID := id
 	if in.GetName() != "" {
 		ids, err := repox.SplitName(in.GetName(), "shelves", "books")
 		if err != nil {
@@ -97,6 +99,9 @@ func (r *GraphQLBookRepository) Create(ctx context.Context, parent string, in *r
 	}
 	in = proto.Clone(in).(*refdemov1.Book)
 	in.Name = FormatBookName(parentIDs[0], id)
+	// The id is unique only under the parent, so the row is keyed by a
+	// surrogate of its own: the id itself only when it was minted here.
+	id = rowID
 	if h := r.Hooks.BeforeCreate; h != nil {
 		if err := h(ctx, in); err != nil {
 			return nil, err
@@ -114,11 +119,37 @@ func (r *GraphQLBookRepository) Create(ctx context.Context, parent string, in *r
 
 // Get returns the record addressed by its resource name.
 func (r *GraphQLBookRepository) Get(ctx context.Context, name string) (*refdemov1.Book, error) {
-	ids, err := repox.SplitName(name, "shelves", "books")
+	row, err := r.find(ctx, name)
 	if err != nil {
 		return nil, err
 	}
-	return r.get(ctx, ids[len(ids)-1])
+	return r.toProto(ctx, row, nil)
+}
+
+// rowID returns the surrogate key of the row named name, looked up by name:
+// the id is unique only under the parent, so it is not the key.
+// repox.ErrNotFound when there is no such row.
+func (r *GraphQLBookRepository) rowID(ctx context.Context, name string) (string, error) {
+	row, err := r.find(ctx, name)
+	if err != nil {
+		return "", err
+	}
+	return row.Id, nil
+}
+
+// find reads the row named name; repox.ErrNotFound when there is none.
+func (r *GraphQLBookRepository) find(ctx context.Context, name string) (*booksql.CatalogBooks, error) {
+	if _, err := repox.SplitName(name, "shelves", "books"); err != nil {
+		return nil, err
+	}
+	row, err := r.Svc.Query.Catalog.Books.Find(ctx, booksql.List().Where(booksql.Name.Eq(name)))
+	if err != nil {
+		return nil, mapGraphQLErr(err)
+	}
+	if row == nil {
+		return nil, repox.ErrNotFound
+	}
+	return row, nil
 }
 
 // get loads by surrogate key — the private read every generated method
@@ -213,18 +244,11 @@ func (r *GraphQLBookRepository) UpdateWithOutputOnly(ctx context.Context, in *re
 // update is Update's write, with the server-owned fields outputPaths names
 // (UpdateWithOutputOnly) merged into its patch.
 func (r *GraphQLBookRepository) update(ctx context.Context, in *refdemov1.Book, paths, outputPaths []string) (*refdemov1.Book, error) {
-	ids, err := repox.SplitName(in.GetName(), "shelves", "books")
+	row, err := r.find(ctx, in.GetName())
 	if err != nil {
 		return nil, err
 	}
-	id := ids[len(ids)-1]
-	row, err := r.Svc.Query.Catalog.Books.Get(ctx, id)
-	if err != nil {
-		return nil, mapGraphQLErr(err)
-	}
-	if row == nil {
-		return nil, repox.ErrNotFound
-	}
+	id := row.Id
 	existingPB := bookFromRow(row)
 	merged := proto.Clone(existingPB).(*refdemov1.Book)
 	applyBookMask(merged, in, paths)
@@ -264,6 +288,7 @@ func (r *GraphQLBookRepository) newInput(parent string, in *refdemov1.Book) (boo
 		return ci, nil, err
 	}
 	id := repox.NewULID()
+	rowID := id
 	if in.GetName() != "" {
 		ids, err := repox.SplitName(in.GetName(), "shelves", "books")
 		if err != nil {
@@ -278,6 +303,7 @@ func (r *GraphQLBookRepository) newInput(parent string, in *refdemov1.Book) (boo
 	}
 	in = proto.Clone(in).(*refdemov1.Book)
 	in.Name = FormatBookName(parentIDs[0], id)
+	id = rowID // keyed as Create keys it
 	ci = bookToCreateInput(in)
 	ci.Id = id
 	ci.ShelfId = parentIDs[0]
@@ -350,11 +376,10 @@ func (r *GraphQLBookRepository) UpdateOutputOnly(ctx context.Context, in *refdem
 	if len(paths) == 0 {
 		return nil, fmt.Errorf("%w: UpdateOutputOnly needs the fields to write", repox.ErrInvalidArgument)
 	}
-	ids, err := repox.SplitName(in.GetName(), "shelves", "books")
+	id, err := r.rowID(ctx, in.GetName())
 	if err != nil {
 		return nil, err
 	}
-	id := ids[len(ids)-1]
 	patch := bookToOutputPatch(in, paths)
 	patch.Etag = graphql.Value(repox.NewULID())
 	if in.GetEtag() != "" {
@@ -376,8 +401,7 @@ func (r *GraphQLBookRepository) UpdateOutputOnly(ctx context.Context, in *refdem
 // Delete soft-deletes the record addressed by its resource name: delete_time
 // is set, the row stays.
 func (r *GraphQLBookRepository) Delete(ctx context.Context, name string) error {
-	ids, err := repox.SplitName(name, "shelves", "books")
-	if err != nil {
+	if _, err := repox.SplitName(name, "shelves", "books"); err != nil {
 		return err
 	}
 	if h := r.Hooks.BeforeDelete; h != nil {
@@ -385,7 +409,11 @@ func (r *GraphQLBookRepository) Delete(ctx context.Context, name string) error {
 			return err
 		}
 	}
-	if _, err := r.Svc.Mutation.Catalog.Books.UpdateIfMatch(ctx, ids[len(ids)-1], r.deletePatch(), booksql.DeleteTime.IsNull(true)); err != nil {
+	id, err := r.rowID(ctx, name)
+	if err != nil {
+		return err
+	}
+	if _, err := r.Svc.Mutation.Catalog.Books.UpdateIfMatch(ctx, id, r.deletePatch(), booksql.DeleteTime.IsNull(true)); err != nil {
 		if errors.Is(err, graphql.ErrConflict) {
 			return repox.ErrNotFound
 		}
@@ -409,11 +437,10 @@ func (r *GraphQLBookRepository) deletePatch() booksql.UpdateInput {
 
 // Undelete clears the soft-delete mark and returns the restored record.
 func (r *GraphQLBookRepository) Undelete(ctx context.Context, name string) (*refdemov1.Book, error) {
-	ids, err := repox.SplitName(name, "shelves", "books")
+	id, err := r.rowID(ctx, name)
 	if err != nil {
 		return nil, err
 	}
-	id := ids[len(ids)-1]
 	patch := booksql.UpdateInput{DeleteTime: graphql.Null[string]()}
 	patch.ExpireTime = graphql.Null[string]()
 	patch.Etag = graphql.Value(repox.NewULID())
@@ -431,8 +458,7 @@ func (r *GraphQLBookRepository) Undelete(ctx context.Context, name string) (*ref
 
 // Purge removes the record addressed by its resource name for good.
 func (r *GraphQLBookRepository) Purge(ctx context.Context, name string) error {
-	ids, err := repox.SplitName(name, "shelves", "books")
-	if err != nil {
+	if _, err := repox.SplitName(name, "shelves", "books"); err != nil {
 		return err
 	}
 	if h := r.Hooks.BeforeDelete; h != nil {
@@ -440,7 +466,10 @@ func (r *GraphQLBookRepository) Purge(ctx context.Context, name string) error {
 			return err
 		}
 	}
-	id := ids[len(ids)-1]
+	id, err := r.rowID(ctx, name)
+	if err != nil {
+		return err
+	}
 	_, err = r.purge(ctx, id, name, true)
 	return err
 }
@@ -483,11 +512,14 @@ func (r *GraphQLBookRepository) PurgeExpired(ctx context.Context, now time.Time)
 			return res, err
 		}
 		for _, m := range page {
-			ids, err := repox.SplitName(m.GetName(), "shelves", "books")
+			id, err := r.rowID(ctx, m.GetName())
+			if errors.Is(err, repox.ErrNotFound) {
+				continue // gone since the page was read
+			}
 			if err != nil {
 				return res, err
 			}
-			kept, err := r.purge(ctx, ids[len(ids)-1], m.GetName(), true)
+			kept, err := r.purge(ctx, id, m.GetName(), true)
 			switch {
 			case errors.Is(err, repox.ErrNotFound):
 			case err != nil:
@@ -527,6 +559,352 @@ func (r *GraphQLBookRepository) ListByKeys(ctx context.Context, field string, ke
 
 // Compile-time proof the adapter satisfies the interface.
 var _ BookRepository = (*GraphQLBookRepository)(nil)
+
+// GraphQLPageRepository is the GraphQL adapter of PageRepository
+// over the generated client: the same flat CRUD the gorm adapter implements,
+// against Catalog.Pages. Exported fields are the Tier-2 seam.
+type GraphQLPageRepository struct {
+	Svc   *genql.Service
+	Hooks PageHooks
+	// Refs, when set, is asked before a purge whether anything in another
+	// database or service still refers to the record (see Purge).
+	Refs *repox.References
+	// ListOverrides substitute the generated dispatch for single filter fields.
+	ListOverrides map[string]filterx.GraphQLHandler
+}
+
+// NewGraphQLPageRepository returns the GraphQL adapter bound to svc.
+func NewGraphQLPageRepository(svc *genql.Service) *GraphQLPageRepository {
+	return &GraphQLPageRepository{Svc: svc}
+}
+
+// Create persists in under parent and returns the stored record.
+func (r *GraphQLPageRepository) Create(ctx context.Context, parent string, in *refdemov1.Page) (*refdemov1.Page, error) {
+	parentIDs, err := repox.SplitName(parent, "shelves", "books")
+	if err != nil {
+		return nil, err
+	}
+	id := repox.NewULID()
+	rowID := id
+	if in.GetName() != "" {
+		ids, err := repox.SplitName(in.GetName(), "shelves", "books", "pages")
+		if err != nil {
+			return nil, err
+		}
+		for i := range parentIDs {
+			if ids[i] != parentIDs[i] {
+				return nil, fmt.Errorf("%w: name %q is not under parent %q", repox.ErrInvalidArgument, in.GetName(), parent)
+			}
+		}
+		id = ids[len(ids)-1]
+	}
+	in = proto.Clone(in).(*refdemov1.Page)
+	in.Name = FormatPageName(parentIDs[0], parentIDs[1], id)
+	// The id is unique only under the parent, so the row is keyed by a
+	// surrogate of its own: the id itself only when it was minted here.
+	id = rowID
+	if h := r.Hooks.BeforeCreate; h != nil {
+		if err := h(ctx, in); err != nil {
+			return nil, err
+		}
+	}
+	ci := pageToCreateInput(in)
+	ci.Id = id
+	ci.ShelfId = parentIDs[0]
+	ci.BookId = parentIDs[1]
+	if err := r.linkParents(ctx, &ci, in.GetName(), nil); err != nil {
+		return nil, err
+	}
+	if _, err := r.Svc.Mutation.Catalog.Pages.Create(ctx, ci); err != nil {
+		return nil, mapGraphQLErr(err)
+	}
+	return r.get(ctx, id)
+}
+
+// linkParents points ci's columns for its nested ancestors at their rows,
+// found in known (rows a Batch is creating, by name) or else looked up by
+// name: a nested resource's row is keyed by a surrogate of its own, not by
+// its id.
+func (r *GraphQLPageRepository) linkParents(ctx context.Context, ci *pagesql.CreateInput, name string, known map[string]string) error {
+	ids, err := repox.SplitName(name, "shelves", "books", "pages")
+	if err != nil {
+		return err
+	}
+	{
+		n := "shelves/" + ids[0] + "/books/" + ids[1]
+		if k, ok := known[n]; ok {
+			ci.BookId = k
+		} else if row, err := r.Svc.Query.Catalog.Books.Find(ctx, booksql.List().Where(booksql.Name.Eq(n))); err != nil {
+			return mapGraphQLErr(err)
+		} else if row != nil {
+			ci.BookId = row.Id
+		}
+	}
+	return nil
+}
+
+// Get returns the record addressed by its resource name.
+func (r *GraphQLPageRepository) Get(ctx context.Context, name string) (*refdemov1.Page, error) {
+	row, err := r.find(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	return r.toProto(ctx, row, nil)
+}
+
+// rowID returns the surrogate key of the row named name, looked up by name:
+// the id is unique only under the parent, so it is not the key.
+// repox.ErrNotFound when there is no such row.
+func (r *GraphQLPageRepository) rowID(ctx context.Context, name string) (string, error) {
+	row, err := r.find(ctx, name)
+	if err != nil {
+		return "", err
+	}
+	return row.Id, nil
+}
+
+// find reads the row named name; repox.ErrNotFound when there is none.
+func (r *GraphQLPageRepository) find(ctx context.Context, name string) (*pagesql.CatalogPages, error) {
+	if _, err := repox.SplitName(name, "shelves", "books", "pages"); err != nil {
+		return nil, err
+	}
+	row, err := r.Svc.Query.Catalog.Pages.Find(ctx, pagesql.List().Where(pagesql.Name.Eq(name)))
+	if err != nil {
+		return nil, mapGraphQLErr(err)
+	}
+	if row == nil {
+		return nil, repox.ErrNotFound
+	}
+	return row, nil
+}
+
+// get loads by surrogate key — the private read every generated method
+// re-reads through.
+func (r *GraphQLPageRepository) get(ctx context.Context, id string) (*refdemov1.Page, error) {
+	row, err := r.Svc.Query.Catalog.Pages.Get(ctx, id)
+	if err != nil {
+		return nil, mapGraphQLErr(err)
+	}
+	if row == nil {
+		return nil, repox.ErrNotFound
+	}
+	return r.toProto(ctx, row, nil)
+}
+
+// toProto converts a loaded row, hydrating the value objects mask reads (all
+// of them for an empty mask) through their stored references, and runs the
+// AfterRead hook.
+func (r *GraphQLPageRepository) toProto(ctx context.Context, row *pagesql.CatalogPages, mask []string) (*refdemov1.Page, error) {
+	out := pageFromRow(row)
+	if h := r.Hooks.AfterRead; h != nil {
+		if err := h(ctx, out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// List returns one page of records under parent.
+func (r *GraphQLPageRepository) List(ctx context.Context, parent string, in repox.ListInput) ([]*refdemov1.Page, string, error) {
+	parentIDs, err := repox.SplitName(parent, "shelves", "books")
+	if err != nil {
+		return nil, "", err
+	}
+	// AIP-159: "-" for the parent reads across every parent.
+	if parentIDs[len(parentIDs)-1] == "-" {
+		return r.list(ctx, in)
+	}
+	// The parent is nested, so its row is found by name.
+	match := booksql.Name.Eq(parent)
+	if p, wild := repox.NamePattern(parent); wild {
+		match = booksql.Name.Like(p)
+	}
+	parents, err := r.Svc.Query.Catalog.Books.List(ctx, booksql.List().Where(match))
+	if err != nil {
+		return nil, "", mapGraphQLErr(err)
+	}
+	keys := make([]string, 0, len(parents))
+	for i := range parents {
+		keys = append(keys, parents[i].Id)
+	}
+	return r.list(ctx, in, pagesql.BookId.In(keys...))
+}
+
+func (r *GraphQLPageRepository) list(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) ([]*refdemov1.Page, string, error) {
+	conds, err := filterx.Parse(in.Filter)
+	if err != nil {
+		return nil, "", repox.MapFilterxErr(err)
+	}
+	conds = append(conds, in.Where...)
+	if err := repox.CheckReadMask((*refdemov1.Page)(nil), in.ReadMask); err != nil {
+		return nil, "", err
+	}
+	eng := filterx.Hasura[pagesql.CatalogPages](catalog.PageFilterSpec, r.Svc.Query.Catalog.Pages).Scope(scope...)
+	for f, h := range r.ListOverrides {
+		eng.Override(f, h)
+	}
+	rows, next, err := eng.List(ctx, filterx.ListInput{
+		PageSize:  in.PageSize,
+		PageToken: in.PageToken,
+		OrderBy:   in.OrderBy,
+		Filter:    conds,
+	})
+	if err != nil {
+		return nil, "", repox.MapFilterxErr(err)
+	}
+	items := make([]*refdemov1.Page, 0, len(rows))
+	for i := range rows {
+		out, err := r.toProto(ctx, &rows[i], in.ReadMask)
+		if err != nil {
+			return nil, "", err
+		}
+		repox.Narrow(out, in.ReadMask)
+		items = append(items, out)
+	}
+	return items, next, nil
+}
+
+// Update persists the masked fields of in; an empty mask replaces every
+// mutable field. When in.Etag is set the write is guarded server-side
+// (UpdateIfMatch); a stale etag returns repox.ErrConflict.
+func (r *GraphQLPageRepository) Update(ctx context.Context, in *refdemov1.Page, paths []string) (*refdemov1.Page, error) {
+	return r.update(ctx, in, paths, nil)
+}
+
+// update is Update's write, with the server-owned fields outputPaths names
+// (UpdateWithOutputOnly) merged into its patch.
+func (r *GraphQLPageRepository) update(ctx context.Context, in *refdemov1.Page, paths, outputPaths []string) (*refdemov1.Page, error) {
+	row, err := r.find(ctx, in.GetName())
+	if err != nil {
+		return nil, err
+	}
+	id := row.Id
+	existingPB := pageFromRow(row)
+	merged := proto.Clone(existingPB).(*refdemov1.Page)
+	applyPageMask(merged, in, paths)
+	if h := r.Hooks.BeforeUpdate; h != nil {
+		if err := h(ctx, existingPB, merged, paths); err != nil {
+			return nil, err
+		}
+	}
+	patch := pageToUpdatePatch(merged)
+	resp, err := r.Svc.Mutation.Catalog.Pages.Update(ctx, id, patch)
+	if err != nil {
+		return nil, mapGraphQLErr(err)
+	}
+	if resp.AffectedRows == 0 {
+		return nil, repox.ErrNotFound
+	}
+	return r.get(ctx, id)
+}
+
+// newInput builds the insert a Batch queues for in under parent, and
+// the record it stands for, named: the same resolution Create applies.
+func (r *GraphQLPageRepository) newInput(parent string, in *refdemov1.Page) (pagesql.CreateInput, *refdemov1.Page, error) {
+	var ci pagesql.CreateInput
+	parentIDs, err := repox.SplitName(parent, "shelves", "books")
+	if err != nil {
+		return ci, nil, err
+	}
+	id := repox.NewULID()
+	rowID := id
+	if in.GetName() != "" {
+		ids, err := repox.SplitName(in.GetName(), "shelves", "books", "pages")
+		if err != nil {
+			return ci, nil, err
+		}
+		for i := range parentIDs {
+			if ids[i] != parentIDs[i] {
+				return ci, nil, fmt.Errorf("%w: name %q is not under parent %q", repox.ErrInvalidArgument, in.GetName(), parent)
+			}
+		}
+		id = ids[len(ids)-1]
+	}
+	in = proto.Clone(in).(*refdemov1.Page)
+	in.Name = FormatPageName(parentIDs[0], parentIDs[1], id)
+	id = rowID // keyed as Create keys it
+	ci = pageToCreateInput(in)
+	ci.Id = id
+	ci.ShelfId = parentIDs[0]
+	ci.BookId = parentIDs[1]
+	return ci, in, nil
+}
+
+// updateOps queues Update's writes onto ops, for a Batch: the value-object
+// rows that replace the masked ones, the row update, then the removal of what
+// they replaced. With in.Etag set the update is guarded inside the batch: a
+// self-update of the key whose post-check asserts the etag fails the request
+// when the record moved on, and the guarded update after it writes the row.
+//
+// outputPaths names the server-owned fields written alongside
+// (Update<Model>WithOutputOnly); nil for Update.
+func (r *GraphQLPageRepository) updateOps(ctx context.Context, ops *repox.Ops, id string, in *refdemov1.Page, paths, outputPaths []string) (repox.Check, error) {
+	row, err := r.Svc.Query.Catalog.Pages.Get(ctx, id)
+	if err != nil {
+		return nil, mapGraphQLErr(err)
+	}
+	if row == nil {
+		return nil, repox.ErrNotFound
+	}
+	existingPB := pageFromRow(row)
+	merged := proto.Clone(existingPB).(*refdemov1.Page)
+	applyPageMask(merged, in, paths)
+	patch := pageToUpdatePatch(merged)
+	var utx, atx repox.Ops
+	*ops = append(*ops, utx...)
+	resp := new(pagesql.UpdateCatalogPagesByIdResponse)
+	ops.Add(r.Svc.Mutation.Catalog.Pages.UpdateOp(id, patch, resp))
+	*ops = append(*ops, atx...)
+	return func(ctx context.Context, failed error) error {
+		if failed == nil {
+			if resp.AffectedRows == 0 {
+				return repox.ErrNotFound
+			}
+			return nil
+		}
+		return nil
+	}, nil
+}
+
+// Delete removes the record addressed by its resource name.
+func (r *GraphQLPageRepository) Delete(ctx context.Context, name string) error {
+	if _, err := repox.SplitName(name, "shelves", "books", "pages"); err != nil {
+		return err
+	}
+	if h := r.Hooks.BeforeDelete; h != nil {
+		if err := h(ctx, name); err != nil {
+			return err
+		}
+	}
+	id, err := r.rowID(ctx, name)
+	if err != nil {
+		return err
+	}
+	return r.remove(ctx, id)
+}
+
+// remove deletes row id with the value-object rows it owns.
+func (r *GraphQLPageRepository) remove(ctx context.Context, id string) error {
+	resp, err := r.Svc.Mutation.Catalog.Pages.Delete(ctx, id)
+	if err != nil {
+		return mapGraphQLErr(err)
+	}
+	if resp.AffectedRows == 0 {
+		return repox.ErrNotFound
+	}
+	return nil
+}
+
+// ListByKeys reads every record whose filter field field is one of keys; see
+// repox.ListByKeys.
+func (r *GraphQLPageRepository) ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*refdemov1.Page, error) {
+	return repox.ListByKeys(ctx, field, keys, in, func(ctx context.Context, in repox.ListInput) ([]*refdemov1.Page, string, error) {
+		return r.List(ctx, "shelves/-/books/-", in)
+	})
+}
+
+// Compile-time proof the adapter satisfies the interface.
+var _ PageRepository = (*GraphQLPageRepository)(nil)
 
 // GraphQLShelfRepository is the GraphQL adapter of ShelfRepository
 // over the generated client: the same flat CRUD the gorm adapter implements,
@@ -582,6 +960,15 @@ func (r *GraphQLShelfRepository) Get(ctx context.Context, name string) (*refdemo
 		return nil, err
 	}
 	return r.get(ctx, ids[len(ids)-1])
+}
+
+// rowID returns the surrogate key of the row named name: its bare id.
+func (r *GraphQLShelfRepository) rowID(_ context.Context, name string) (string, error) {
+	ids, err := repox.SplitName(name, "shelves")
+	if err != nil {
+		return "", err
+	}
+	return ids[len(ids)-1], nil
 }
 
 // get loads by surrogate key — the private read every generated method
@@ -795,11 +1182,10 @@ func (r *GraphQLShelfRepository) UpdateOutputOnly(ctx context.Context, in *refde
 	if len(paths) == 0 {
 		return nil, fmt.Errorf("%w: UpdateOutputOnly needs the fields to write", repox.ErrInvalidArgument)
 	}
-	ids, err := repox.SplitName(in.GetName(), "shelves")
+	id, err := r.rowID(ctx, in.GetName())
 	if err != nil {
 		return nil, err
 	}
-	id := ids[len(ids)-1]
 	patch := shelfToOutputPatch(in, paths)
 	patch.Etag = graphql.Value(repox.NewULID())
 	if in.GetEtag() != "" {
@@ -821,8 +1207,7 @@ func (r *GraphQLShelfRepository) UpdateOutputOnly(ctx context.Context, in *refde
 // Delete soft-deletes the record addressed by its resource name: delete_time
 // is set, the row stays.
 func (r *GraphQLShelfRepository) Delete(ctx context.Context, name string) error {
-	ids, err := repox.SplitName(name, "shelves")
-	if err != nil {
+	if _, err := repox.SplitName(name, "shelves"); err != nil {
 		return err
 	}
 	if h := r.Hooks.BeforeDelete; h != nil {
@@ -830,7 +1215,11 @@ func (r *GraphQLShelfRepository) Delete(ctx context.Context, name string) error 
 			return err
 		}
 	}
-	if _, err := r.Svc.Mutation.Catalog.Shelves.UpdateIfMatch(ctx, ids[len(ids)-1], r.deletePatch(), shelvesql.DeleteTime.IsNull(true)); err != nil {
+	id, err := r.rowID(ctx, name)
+	if err != nil {
+		return err
+	}
+	if _, err := r.Svc.Mutation.Catalog.Shelves.UpdateIfMatch(ctx, id, r.deletePatch(), shelvesql.DeleteTime.IsNull(true)); err != nil {
 		if errors.Is(err, graphql.ErrConflict) {
 			return repox.ErrNotFound
 		}
@@ -854,11 +1243,10 @@ func (r *GraphQLShelfRepository) deletePatch() shelvesql.UpdateInput {
 
 // Undelete clears the soft-delete mark and returns the restored record.
 func (r *GraphQLShelfRepository) Undelete(ctx context.Context, name string) (*refdemov1.Shelf, error) {
-	ids, err := repox.SplitName(name, "shelves")
+	id, err := r.rowID(ctx, name)
 	if err != nil {
 		return nil, err
 	}
-	id := ids[len(ids)-1]
 	patch := shelvesql.UpdateInput{DeleteTime: graphql.Null[string]()}
 	patch.ExpireTime = graphql.Null[string]()
 	patch.Etag = graphql.Value(repox.NewULID())
@@ -876,8 +1264,7 @@ func (r *GraphQLShelfRepository) Undelete(ctx context.Context, name string) (*re
 
 // Purge removes the record addressed by its resource name for good.
 func (r *GraphQLShelfRepository) Purge(ctx context.Context, name string) error {
-	ids, err := repox.SplitName(name, "shelves")
-	if err != nil {
+	if _, err := repox.SplitName(name, "shelves"); err != nil {
 		return err
 	}
 	if h := r.Hooks.BeforeDelete; h != nil {
@@ -885,7 +1272,10 @@ func (r *GraphQLShelfRepository) Purge(ctx context.Context, name string) error {
 			return err
 		}
 	}
-	id := ids[len(ids)-1]
+	id, err := r.rowID(ctx, name)
+	if err != nil {
+		return err
+	}
 	_, err = r.purge(ctx, id, name, true)
 	return err
 }
@@ -928,11 +1318,14 @@ func (r *GraphQLShelfRepository) PurgeExpired(ctx context.Context, now time.Time
 			return res, err
 		}
 		for _, m := range page {
-			ids, err := repox.SplitName(m.GetName(), "shelves")
+			id, err := r.rowID(ctx, m.GetName())
+			if errors.Is(err, repox.ErrNotFound) {
+				continue // gone since the page was read
+			}
 			if err != nil {
 				return res, err
 			}
-			kept, err := r.purge(ctx, ids[len(ids)-1], m.GetName(), true)
+			kept, err := r.purge(ctx, id, m.GetName(), true)
 			switch {
 			case errors.Is(err, repox.ErrNotFound):
 			case err != nil:
@@ -981,10 +1374,23 @@ type graphQLBatch struct {
 	u         *repox.Unit
 	svc       *genql.Service
 	retention time.Duration
+	// keys holds the row key of every record this batch creates, by name: a
+	// later write in the batch finds its row here, since it is not stored
+	// until the batch's request runs.
+	keys map[string]string
 }
 
 // Commit applies the Unit's writes; see repox.Unit.Commit.
 func (b *graphQLBatch) Commit(ctx context.Context) error { return b.u.Commit(ctx) }
+
+// rowID returns the row key of the record named name: one this batch creates,
+// else what resolve (a repository's rowID) finds.
+func (b *graphQLBatch) rowID(ctx context.Context, name string, resolve func(context.Context, string) (string, error)) (string, error) {
+	if id, ok := b.keys[name]; ok {
+		return id, nil
+	}
+	return resolve(ctx, name)
+}
 
 // CreateBook queues a create and returns the name the record will have.
 func (b *graphQLBatch) CreateBook(parent string, in *refdemov1.Book) (string, error) {
@@ -993,6 +1399,10 @@ func (b *graphQLBatch) CreateBook(parent string, in *refdemov1.Book) (string, er
 	if err != nil {
 		return "", err
 	}
+	if b.keys == nil {
+		b.keys = map[string]string{}
+	}
+	b.keys[named.GetName()] = ci.Id
 	queueBookReferences(b.u, named, nil)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		ops.Add(b.svc.Mutation.Catalog.Books.CreateOp(ci, new(booksql.InsertCatalogBooksResponse)))
@@ -1005,15 +1415,18 @@ func (b *graphQLBatch) CreateBook(parent string, in *refdemov1.Book) (string, er
 // UpdateBook queues Update; in.Etag, when set, guards it inside the
 // batch's request (see updateOps).
 func (b *graphQLBatch) UpdateBook(in *refdemov1.Book, paths []string) {
-	ids, err := repox.SplitName(in.GetName(), "shelves", "books")
-	if err != nil {
+	if _, err := repox.SplitName(in.GetName(), "shelves", "books"); err != nil {
 		b.u.Fail(err)
 		return
 	}
 	r := &GraphQLBookRepository{Svc: b.svc}
 	queueBookReferences(b.u, in, paths)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
-		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, nil)
+		id, err := b.rowID(ctx, in.GetName(), r.rowID)
+		if err != nil {
+			return nil, err
+		}
+		return r.updateOps(ctx, ops, id, in, paths, nil)
 	})
 	b.u.Record(repox.Change{Type: "catalog.example.com/Book", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getBook)})
 }
@@ -1021,15 +1434,18 @@ func (b *graphQLBatch) UpdateBook(in *refdemov1.Book, paths []string) {
 // UpdateBookWithOutputOnly queues UpdateWithOutputOnly; in.Etag, when
 // set, guards it inside the batch's request, as UpdateBook's does.
 func (b *graphQLBatch) UpdateBookWithOutputOnly(in *refdemov1.Book, paths, outputPaths []string) {
-	ids, err := repox.SplitName(in.GetName(), "shelves", "books")
-	if err != nil {
+	if _, err := repox.SplitName(in.GetName(), "shelves", "books"); err != nil {
 		b.u.Fail(err)
 		return
 	}
 	r := &GraphQLBookRepository{Svc: b.svc}
 	queueBookReferences(b.u, in, paths)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
-		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, outputPaths)
+		id, err := b.rowID(ctx, in.GetName(), r.rowID)
+		if err != nil {
+			return nil, err
+		}
+		return r.updateOps(ctx, ops, id, in, paths, outputPaths)
 	})
 	b.u.Record(repox.Change{Type: "catalog.example.com/Book", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getBook)})
 }
@@ -1041,23 +1457,30 @@ func (b *graphQLBatch) UpdateBookOutputOnly(in *refdemov1.Book, paths []string) 
 		b.u.Fail(fmt.Errorf("%w: UpdateOutputOnly needs the fields to write", repox.ErrInvalidArgument))
 		return
 	}
-	ids, err := repox.SplitName(in.GetName(), "shelves", "books")
-	if err != nil {
+	if _, err := repox.SplitName(in.GetName(), "shelves", "books"); err != nil {
 		b.u.Fail(err)
 		return
 	}
-	id := ids[len(ids)-1]
+	r := &GraphQLBookRepository{Svc: b.svc}
 	patch := bookToOutputPatch(in, paths)
 	patch.Etag = graphql.Value(repox.NewULID())
 	b.u.Record(repox.Change{Type: "catalog.example.com/Book", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getBook)})
 	if etag := in.GetEtag(); etag != "" {
 		b.u.QueueGraphQLAhead(func(ctx context.Context) error {
-			_, err := b.svc.Mutation.Catalog.Books.UpdateIfMatch(ctx, id, patch, booksql.Etag.Eq(etag))
+			id, err := b.rowID(ctx, in.GetName(), r.rowID)
+			if err != nil {
+				return err
+			}
+			_, err = b.svc.Mutation.Catalog.Books.UpdateIfMatch(ctx, id, patch, booksql.Etag.Eq(etag))
 			return mapGraphQLErr(err)
 		})
 		return
 	}
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		id, err := b.rowID(ctx, in.GetName(), r.rowID)
+		if err != nil {
+			return nil, err
+		}
 		ops.Add(b.svc.Mutation.Catalog.Books.UpdateOp(id, patch, new(booksql.UpdateCatalogBooksByIdResponse)))
 		return nil, nil
 	})
@@ -1066,15 +1489,21 @@ func (b *graphQLBatch) UpdateBookOutputOnly(in *refdemov1.Book, paths []string) 
 // DeleteBook queues a soft delete. A record already deleted or gone is
 // not an error.
 func (b *graphQLBatch) DeleteBook(name string) {
-	ids, err := repox.SplitName(name, "shelves", "books")
-	if err != nil {
+	if _, err := repox.SplitName(name, "shelves", "books"); err != nil {
 		b.u.Fail(err)
 		return
 	}
 	r := &GraphQLBookRepository{Svc: b.svc, Retention: b.retention}
 	queueBookDelete(b.u, name, false)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
-		ops.Add(b.svc.Mutation.Catalog.Books.UpdateOp(ids[len(ids)-1], r.deletePatch(), new(booksql.UpdateCatalogBooksByIdResponse), booksql.Update().PreCheck(booksql.DeleteTime.IsNull(true))))
+		id, err := b.rowID(ctx, name, r.rowID)
+		if errors.Is(err, repox.ErrNotFound) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		ops.Add(b.svc.Mutation.Catalog.Books.UpdateOp(id, r.deletePatch(), new(booksql.UpdateCatalogBooksByIdResponse), booksql.Update().PreCheck(booksql.DeleteTime.IsNull(true))))
 		return nil, nil
 	})
 	b.u.Record(repox.Change{Type: "catalog.example.com/Book", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getBook)})
@@ -1083,12 +1512,11 @@ func (b *graphQLBatch) DeleteBook(name string) {
 // PurgeBook queues the record's removal for good. A record already
 // gone is not an error.
 func (b *graphQLBatch) PurgeBook(name string) {
-	ids, err := repox.SplitName(name, "shelves", "books")
-	if err != nil {
+	if _, err := repox.SplitName(name, "shelves", "books"); err != nil {
 		b.u.Fail(err)
 		return
 	}
-	id := ids[len(ids)-1]
+	r := &GraphQLBookRepository{Svc: b.svc}
 	// A record a referrer in another database or service names is kept, as
 	// Purge keeps it. One a foreign key of this database still names fails
 	// the commit with repox.ErrForeignKey: the request is one transaction,
@@ -1098,10 +1526,82 @@ func (b *graphQLBatch) PurgeBook(name string) {
 		if *keep {
 			return nil, nil
 		}
+		id, err := b.rowID(ctx, name, r.rowID)
+		if errors.Is(err, repox.ErrNotFound) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
 		ops.Add(b.svc.Mutation.Catalog.Books.DeleteOp(id, new(booksql.DeleteCatalogBooksByIdResponse)))
 		return nil, nil
 	})
 	b.u.Record(repox.Change{Type: "catalog.example.com/Book", Name: name, Op: repox.ChangePurge, LoadPrior: repox.PriorOf(name, getBook)})
+}
+
+// CreatePage queues a create and returns the name the record will have.
+func (b *graphQLBatch) CreatePage(parent string, in *refdemov1.Page) (string, error) {
+	r := &GraphQLPageRepository{Svc: b.svc}
+	ci, named, err := r.newInput(parent, in)
+	if err != nil {
+		return "", err
+	}
+	if b.keys == nil {
+		b.keys = map[string]string{}
+	}
+	b.keys[named.GetName()] = ci.Id
+	queuePageReferences(b.u, named, nil)
+	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		if err := r.linkParents(ctx, &ci, named.GetName(), b.keys); err != nil {
+			return nil, err
+		}
+		ops.Add(b.svc.Mutation.Catalog.Pages.CreateOp(ci, new(pagesql.InsertCatalogPagesResponse)))
+		return nil, nil
+	})
+	b.u.Record(repox.Change{Type: "catalog.example.com/Page", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
+	return named.GetName(), nil
+}
+
+// UpdatePage queues Update; in.Etag, when set, guards it inside the
+// batch's request (see updateOps).
+func (b *graphQLBatch) UpdatePage(in *refdemov1.Page, paths []string) {
+	if _, err := repox.SplitName(in.GetName(), "shelves", "books", "pages"); err != nil {
+		b.u.Fail(err)
+		return
+	}
+	r := &GraphQLPageRepository{Svc: b.svc}
+	queuePageReferences(b.u, in, paths)
+	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		id, err := b.rowID(ctx, in.GetName(), r.rowID)
+		if err != nil {
+			return nil, err
+		}
+		return r.updateOps(ctx, ops, id, in, paths, nil)
+	})
+	b.u.Record(repox.Change{Type: "catalog.example.com/Page", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getPage)})
+}
+
+// DeletePage queues the record's removal for good. A record already
+// gone is not an error.
+func (b *graphQLBatch) DeletePage(name string) {
+	if _, err := repox.SplitName(name, "shelves", "books", "pages"); err != nil {
+		b.u.Fail(err)
+		return
+	}
+	r := &GraphQLPageRepository{Svc: b.svc}
+	queuePageDelete(b.u, name, true)
+	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		id, err := b.rowID(ctx, name, r.rowID)
+		if errors.Is(err, repox.ErrNotFound) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		ops.Add(b.svc.Mutation.Catalog.Pages.DeleteOp(id, new(pagesql.DeleteCatalogPagesByIdResponse)))
+		return nil, nil
+	})
+	b.u.Record(repox.Change{Type: "catalog.example.com/Page", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getPage)})
 }
 
 // CreateShelf queues a create and returns the name the record will have.
@@ -1111,6 +1611,10 @@ func (b *graphQLBatch) CreateShelf(in *refdemov1.Shelf) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if b.keys == nil {
+		b.keys = map[string]string{}
+	}
+	b.keys[named.GetName()] = ci.Id
 	queueShelfReferences(b.u, named, nil)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		ops.Add(b.svc.Mutation.Catalog.Shelves.CreateOp(ci, new(shelvesql.InsertCatalogShelvesResponse)))
@@ -1123,15 +1627,18 @@ func (b *graphQLBatch) CreateShelf(in *refdemov1.Shelf) (string, error) {
 // UpdateShelf queues Update; in.Etag, when set, guards it inside the
 // batch's request (see updateOps).
 func (b *graphQLBatch) UpdateShelf(in *refdemov1.Shelf, paths []string) {
-	ids, err := repox.SplitName(in.GetName(), "shelves")
-	if err != nil {
+	if _, err := repox.SplitName(in.GetName(), "shelves"); err != nil {
 		b.u.Fail(err)
 		return
 	}
 	r := &GraphQLShelfRepository{Svc: b.svc}
 	queueShelfReferences(b.u, in, paths)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
-		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, nil)
+		id, err := b.rowID(ctx, in.GetName(), r.rowID)
+		if err != nil {
+			return nil, err
+		}
+		return r.updateOps(ctx, ops, id, in, paths, nil)
 	})
 	b.u.Record(repox.Change{Type: "catalog.example.com/Shelf", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getShelf)})
 }
@@ -1139,15 +1646,18 @@ func (b *graphQLBatch) UpdateShelf(in *refdemov1.Shelf, paths []string) {
 // UpdateShelfWithOutputOnly queues UpdateWithOutputOnly; in.Etag, when
 // set, guards it inside the batch's request, as UpdateShelf's does.
 func (b *graphQLBatch) UpdateShelfWithOutputOnly(in *refdemov1.Shelf, paths, outputPaths []string) {
-	ids, err := repox.SplitName(in.GetName(), "shelves")
-	if err != nil {
+	if _, err := repox.SplitName(in.GetName(), "shelves"); err != nil {
 		b.u.Fail(err)
 		return
 	}
 	r := &GraphQLShelfRepository{Svc: b.svc}
 	queueShelfReferences(b.u, in, paths)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
-		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, outputPaths)
+		id, err := b.rowID(ctx, in.GetName(), r.rowID)
+		if err != nil {
+			return nil, err
+		}
+		return r.updateOps(ctx, ops, id, in, paths, outputPaths)
 	})
 	b.u.Record(repox.Change{Type: "catalog.example.com/Shelf", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getShelf)})
 }
@@ -1159,23 +1669,30 @@ func (b *graphQLBatch) UpdateShelfOutputOnly(in *refdemov1.Shelf, paths []string
 		b.u.Fail(fmt.Errorf("%w: UpdateOutputOnly needs the fields to write", repox.ErrInvalidArgument))
 		return
 	}
-	ids, err := repox.SplitName(in.GetName(), "shelves")
-	if err != nil {
+	if _, err := repox.SplitName(in.GetName(), "shelves"); err != nil {
 		b.u.Fail(err)
 		return
 	}
-	id := ids[len(ids)-1]
+	r := &GraphQLShelfRepository{Svc: b.svc}
 	patch := shelfToOutputPatch(in, paths)
 	patch.Etag = graphql.Value(repox.NewULID())
 	b.u.Record(repox.Change{Type: "catalog.example.com/Shelf", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getShelf)})
 	if etag := in.GetEtag(); etag != "" {
 		b.u.QueueGraphQLAhead(func(ctx context.Context) error {
-			_, err := b.svc.Mutation.Catalog.Shelves.UpdateIfMatch(ctx, id, patch, shelvesql.Etag.Eq(etag))
+			id, err := b.rowID(ctx, in.GetName(), r.rowID)
+			if err != nil {
+				return err
+			}
+			_, err = b.svc.Mutation.Catalog.Shelves.UpdateIfMatch(ctx, id, patch, shelvesql.Etag.Eq(etag))
 			return mapGraphQLErr(err)
 		})
 		return
 	}
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		id, err := b.rowID(ctx, in.GetName(), r.rowID)
+		if err != nil {
+			return nil, err
+		}
 		ops.Add(b.svc.Mutation.Catalog.Shelves.UpdateOp(id, patch, new(shelvesql.UpdateCatalogShelvesByIdResponse)))
 		return nil, nil
 	})
@@ -1184,15 +1701,21 @@ func (b *graphQLBatch) UpdateShelfOutputOnly(in *refdemov1.Shelf, paths []string
 // DeleteShelf queues a soft delete. A record already deleted or gone is
 // not an error.
 func (b *graphQLBatch) DeleteShelf(name string) {
-	ids, err := repox.SplitName(name, "shelves")
-	if err != nil {
+	if _, err := repox.SplitName(name, "shelves"); err != nil {
 		b.u.Fail(err)
 		return
 	}
 	r := &GraphQLShelfRepository{Svc: b.svc, Retention: b.retention}
 	queueShelfDelete(b.u, name, false)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
-		ops.Add(b.svc.Mutation.Catalog.Shelves.UpdateOp(ids[len(ids)-1], r.deletePatch(), new(shelvesql.UpdateCatalogShelvesByIdResponse), shelvesql.Update().PreCheck(shelvesql.DeleteTime.IsNull(true))))
+		id, err := b.rowID(ctx, name, r.rowID)
+		if errors.Is(err, repox.ErrNotFound) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		ops.Add(b.svc.Mutation.Catalog.Shelves.UpdateOp(id, r.deletePatch(), new(shelvesql.UpdateCatalogShelvesByIdResponse), shelvesql.Update().PreCheck(shelvesql.DeleteTime.IsNull(true))))
 		return nil, nil
 	})
 	b.u.Record(repox.Change{Type: "catalog.example.com/Shelf", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getShelf)})
@@ -1201,12 +1724,11 @@ func (b *graphQLBatch) DeleteShelf(name string) {
 // PurgeShelf queues the record's removal for good. A record already
 // gone is not an error.
 func (b *graphQLBatch) PurgeShelf(name string) {
-	ids, err := repox.SplitName(name, "shelves")
-	if err != nil {
+	if _, err := repox.SplitName(name, "shelves"); err != nil {
 		b.u.Fail(err)
 		return
 	}
-	id := ids[len(ids)-1]
+	r := &GraphQLShelfRepository{Svc: b.svc}
 	// A record a referrer in another database or service names is kept, as
 	// Purge keeps it. One a foreign key of this database still names fails
 	// the commit with repox.ErrForeignKey: the request is one transaction,
@@ -1215,6 +1737,13 @@ func (b *graphQLBatch) PurgeShelf(name string) {
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		if *keep {
 			return nil, nil
+		}
+		id, err := b.rowID(ctx, name, r.rowID)
+		if errors.Is(err, repox.ErrNotFound) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
 		}
 		ops.Add(b.svc.Mutation.Catalog.Shelves.DeleteOp(id, new(shelvesql.DeleteCatalogShelvesByIdResponse)))
 		return nil, nil

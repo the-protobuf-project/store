@@ -170,8 +170,8 @@ func policyName(p storepbv1.ReferenceOptions_OnDelete) string {
 }
 
 // referencedSQL is the query a GORM purge asks before removing a row: does any
-// row, deleted or not, still hold a foreign key to it? One placeholder, the
-// row's surrogate key. Empty when nothing can refer to the table.
+// row, deleted or not, still hold a foreign key to it? One placeholder, what
+// the row is found by (keyColumn). Empty when nothing can refer to the table.
 func referencedSQL(r *resource) string {
 	if len(r.ReferencedBy) == 0 || r.Cols.PK == nil {
 		return ""
@@ -183,7 +183,16 @@ func referencedSQL(r *resource) string {
 			qualifiedIdent(f.Schema, f.Table), alias, alias, quoteIdent(f.Column), quoteIdent(f.RefColumn)))
 	}
 	return fmt.Sprintf("SELECT %s FROM %s t WHERE t.%s = ?",
-		strings.Join(terms, " OR "), qualifiedIdent(r.Schema.Name, r.Table.Name), quoteIdent(r.Cols.PK.Name))
+		strings.Join(terms, " OR "), qualifiedIdent(r.Schema.Name, r.Table.Name), quoteIdent(keyColumn(r)))
+}
+
+// keyColumn is the column the GORM adapter finds r's rows by: the name for a
+// nested resource (see nameKeyed), the surrogate key otherwise.
+func keyColumn(r *resource) string {
+	if r.nameKeyed() {
+		return r.Cols.NameKey.Name
+	}
+	return r.Cols.PK.Name
 }
 
 func quoteIdent(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }

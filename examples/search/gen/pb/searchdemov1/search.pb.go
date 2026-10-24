@@ -184,7 +184,11 @@ type Booking struct {
 	// When it starts.
 	StartTime *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=start_time,json=startTime,proto3" json:"start_time,omitempty"`
 	// When it ends.
-	EndTime       *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=end_time,json=endTime,proto3" json:"end_time,omitempty"`
+	EndTime *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=end_time,json=endTime,proto3" json:"end_time,omitempty"`
+	// When the room is set up for it, which may start before and end after the
+	// booking. A plain Interval column, stored as "start/end" text, unlike the
+	// projection's range column.
+	SetupWindow   *interval.Interval `protobuf:"bytes,5,opt,name=setup_window,json=setupWindow,proto3" json:"setup_window,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -243,6 +247,13 @@ func (x *Booking) GetStartTime() *timestamppb.Timestamp {
 func (x *Booking) GetEndTime() *timestamppb.Timestamp {
 	if x != nil {
 		return x.EndTime
+	}
+	return nil
+}
+
+func (x *Booking) GetSetupWindow() *interval.Interval {
+	if x != nil {
+		return x.SetupWindow
 	}
 	return nil
 }
@@ -371,14 +382,15 @@ const file_searchdemo_v1_search_proto_rawDesc = "" +
 	"attributes\x18\x05 \x01(\v2\x17.google.protobuf.StructB\x0f\xe2\xb5\x18\v\"\t\n" +
 	"\x05seats\x10\x02R\n" +
 	"attributes:8\xeaA/\n" +
-	"\x12searchdemo.v1/Room\x12\frooms/{room}*\x05rooms2\x04room\xca\xf3\x18\x02\x18\x01\"\x97\x02\n" +
+	"\x12searchdemo.v1/Room\x12\frooms/{room}*\x05rooms2\x04room\xca\xf3\x18\x02\x18\x01\"\xd1\x02\n" +
 	"\aBooking\x12\x17\n" +
 	"\x04name\x18\x01 \x01(\tB\x03\xe0A\bR\x04name\x12.\n" +
 	"\x04room\x18\x02 \x01(\tB\x1a\xe0A\x02\xfaA\x14\n" +
 	"\x12searchdemo.v1/RoomR\x04room\x12>\n" +
 	"\n" +
 	"start_time\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampB\x03\xe0A\x02R\tstartTime\x12:\n" +
-	"\bend_time\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampB\x03\xe0A\x02R\aendTime:G\xeaA>\n" +
+	"\bend_time\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampB\x03\xe0A\x02R\aendTime\x128\n" +
+	"\fsetup_window\x18\x05 \x01(\v2\x15.google.type.IntervalR\vsetupWindow:G\xeaA>\n" +
 	"\x15searchdemo.v1/Booking\x12\x12bookings/{booking}*\bbookings2\abooking\xca\xf3\x18\x02\x18\x01\"\xce\x03\n" +
 	"\aRoomDay\x12\x12\n" +
 	"\x04room\x18\x01 \x01(\tR\x04room\x12#\n" +
@@ -422,22 +434,23 @@ var file_searchdemo_v1_search_proto_goTypes = []any{
 	(*RoomDay)(nil),               // 3: searchdemo.v1.RoomDay
 	(*structpb.Struct)(nil),       // 4: google.protobuf.Struct
 	(*timestamppb.Timestamp)(nil), // 5: google.protobuf.Timestamp
-	(*date.Date)(nil),             // 6: google.type.Date
-	(*interval.Interval)(nil),     // 7: google.type.Interval
+	(*interval.Interval)(nil),     // 6: google.type.Interval
+	(*date.Date)(nil),             // 7: google.type.Date
 }
 var file_searchdemo_v1_search_proto_depIdxs = []int32{
 	4, // 0: searchdemo.v1.Room.attributes:type_name -> google.protobuf.Struct
 	5, // 1: searchdemo.v1.Booking.start_time:type_name -> google.protobuf.Timestamp
 	5, // 2: searchdemo.v1.Booking.end_time:type_name -> google.protobuf.Timestamp
-	6, // 3: searchdemo.v1.RoomDay.day:type_name -> google.type.Date
-	7, // 4: searchdemo.v1.RoomDay.free:type_name -> google.type.Interval
-	4, // 5: searchdemo.v1.RoomDay.attributes:type_name -> google.protobuf.Struct
-	0, // 6: searchdemo.v1.RoomDay.occupancy:type_name -> searchdemo.v1.Occupancy
-	7, // [7:7] is the sub-list for method output_type
-	7, // [7:7] is the sub-list for method input_type
-	7, // [7:7] is the sub-list for extension type_name
-	7, // [7:7] is the sub-list for extension extendee
-	0, // [0:7] is the sub-list for field type_name
+	6, // 3: searchdemo.v1.Booking.setup_window:type_name -> google.type.Interval
+	7, // 4: searchdemo.v1.RoomDay.day:type_name -> google.type.Date
+	6, // 5: searchdemo.v1.RoomDay.free:type_name -> google.type.Interval
+	4, // 6: searchdemo.v1.RoomDay.attributes:type_name -> google.protobuf.Struct
+	0, // 7: searchdemo.v1.RoomDay.occupancy:type_name -> searchdemo.v1.Occupancy
+	8, // [8:8] is the sub-list for method output_type
+	8, // [8:8] is the sub-list for method input_type
+	8, // [8:8] is the sub-list for extension type_name
+	8, // [8:8] is the sub-list for extension extendee
+	0, // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_searchdemo_v1_search_proto_init() }

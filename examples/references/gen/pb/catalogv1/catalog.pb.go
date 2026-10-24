@@ -195,6 +195,62 @@ func (x *Book) GetExpireTime() *timestamppb.Timestamp {
 	return nil
 }
 
+// A page of a book: nested two deep, so the row it hangs off is a nested
+// resource's, found by its name.
+type Page struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The page's resource name.
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// What is printed on it.
+	Text          string `protobuf:"bytes,2,opt,name=text,proto3" json:"text,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Page) Reset() {
+	*x = Page{}
+	mi := &file_refdemo_catalog_v1_catalog_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Page) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Page) ProtoMessage() {}
+
+func (x *Page) ProtoReflect() protoreflect.Message {
+	mi := &file_refdemo_catalog_v1_catalog_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Page.ProtoReflect.Descriptor instead.
+func (*Page) Descriptor() ([]byte, []int) {
+	return file_refdemo_catalog_v1_catalog_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *Page) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *Page) GetText() string {
+	if x != nil {
+		return x.Text
+	}
+	return ""
+}
+
 var File_refdemo_catalog_v1_catalog_proto protoreflect.FileDescriptor
 
 const file_refdemo_catalog_v1_catalog_proto_rawDesc = "" +
@@ -217,7 +273,11 @@ const file_refdemo_catalog_v1_catalog_proto_rawDesc = "" +
 	"deleteTime\x12@\n" +
 	"\vexpire_time\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampB\x03\xe0A\x03R\n" +
 	"expireTime:N\xeaAE\n" +
-	"\x18catalog.example.com/Book\x12\x1cshelves/{shelf}/books/{book}*\x05books2\x04book\xca\xf3\x18\x02\x18\x01B~\n" +
+	"\x18catalog.example.com/Book\x12\x1cshelves/{shelf}/books/{book}*\x05books2\x04book\xca\xf3\x18\x02\x18\x01\"\x90\x01\n" +
+	"\x04Page\x12\x17\n" +
+	"\x04name\x18\x01 \x01(\tB\x03\xe0A\bR\x04name\x12\x12\n" +
+	"\x04text\x18\x02 \x01(\tR\x04text:[\xeaAR\n" +
+	"\x18catalog.example.com/Page\x12)shelves/{shelf}/books/{book}/pages/{page}*\x05pages2\x04page\xca\xf3\x18\x02\x18\x01B~\n" +
 	"\x16com.refdemo.catalog.v1B\fCatalogProtoP\x01ZTgithub.com/the-protobuf-project/store/examples/references/gen/pb/catalogv1;catalogv1b\x06proto3"
 
 var (
@@ -232,17 +292,18 @@ func file_refdemo_catalog_v1_catalog_proto_rawDescGZIP() []byte {
 	return file_refdemo_catalog_v1_catalog_proto_rawDescData
 }
 
-var file_refdemo_catalog_v1_catalog_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_refdemo_catalog_v1_catalog_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_refdemo_catalog_v1_catalog_proto_goTypes = []any{
 	(*Shelf)(nil),                 // 0: refdemo.catalog.v1.Shelf
 	(*Book)(nil),                  // 1: refdemo.catalog.v1.Book
-	(*timestamppb.Timestamp)(nil), // 2: google.protobuf.Timestamp
+	(*Page)(nil),                  // 2: refdemo.catalog.v1.Page
+	(*timestamppb.Timestamp)(nil), // 3: google.protobuf.Timestamp
 }
 var file_refdemo_catalog_v1_catalog_proto_depIdxs = []int32{
-	2, // 0: refdemo.catalog.v1.Shelf.delete_time:type_name -> google.protobuf.Timestamp
-	2, // 1: refdemo.catalog.v1.Shelf.expire_time:type_name -> google.protobuf.Timestamp
-	2, // 2: refdemo.catalog.v1.Book.delete_time:type_name -> google.protobuf.Timestamp
-	2, // 3: refdemo.catalog.v1.Book.expire_time:type_name -> google.protobuf.Timestamp
+	3, // 0: refdemo.catalog.v1.Shelf.delete_time:type_name -> google.protobuf.Timestamp
+	3, // 1: refdemo.catalog.v1.Shelf.expire_time:type_name -> google.protobuf.Timestamp
+	3, // 2: refdemo.catalog.v1.Book.delete_time:type_name -> google.protobuf.Timestamp
+	3, // 3: refdemo.catalog.v1.Book.expire_time:type_name -> google.protobuf.Timestamp
 	4, // [4:4] is the sub-list for method output_type
 	4, // [4:4] is the sub-list for method input_type
 	4, // [4:4] is the sub-list for extension type_name
@@ -261,7 +322,7 @@ func file_refdemo_catalog_v1_catalog_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_refdemo_catalog_v1_catalog_proto_rawDesc), len(file_refdemo_catalog_v1_catalog_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

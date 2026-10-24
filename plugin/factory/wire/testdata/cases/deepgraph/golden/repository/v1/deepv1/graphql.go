@@ -157,6 +157,15 @@ func (r *GraphQLAgendaRepository) Get(ctx context.Context, name string) (*deepv1
 	return r.get(ctx, ids[len(ids)-1])
 }
 
+// rowID returns the surrogate key of the row named name: its bare id.
+func (r *GraphQLAgendaRepository) rowID(_ context.Context, name string) (string, error) {
+	ids, err := repox.SplitName(name, "agendas")
+	if err != nil {
+		return "", err
+	}
+	return ids[len(ids)-1], nil
+}
+
 // get loads by surrogate key — the private read every generated method
 // re-reads through.
 func (r *GraphQLAgendaRepository) get(ctx context.Context, id string) (*deepv1.Agenda, error) {
@@ -758,8 +767,7 @@ func (r *GraphQLAgendaRepository) purgeOps(ctx context.Context, dtx *repox.Ops, 
 // Delete soft-deletes the record addressed by its resource name: delete_time
 // is set, the row stays.
 func (r *GraphQLAgendaRepository) Delete(ctx context.Context, name string) error {
-	ids, err := repox.SplitName(name, "agendas")
-	if err != nil {
+	if _, err := repox.SplitName(name, "agendas"); err != nil {
 		return err
 	}
 	if h := r.Hooks.BeforeDelete; h != nil {
@@ -767,7 +775,11 @@ func (r *GraphQLAgendaRepository) Delete(ctx context.Context, name string) error
 			return err
 		}
 	}
-	if _, err := r.Svc.Mutation.DeepV1.Agendas.UpdateIfMatch(ctx, ids[len(ids)-1], r.deletePatch(), agendasql.DeleteTime.IsNull(true)); err != nil {
+	id, err := r.rowID(ctx, name)
+	if err != nil {
+		return err
+	}
+	if _, err := r.Svc.Mutation.DeepV1.Agendas.UpdateIfMatch(ctx, id, r.deletePatch(), agendasql.DeleteTime.IsNull(true)); err != nil {
 		if errors.Is(err, graphql.ErrConflict) {
 			return repox.ErrNotFound
 		}
@@ -788,11 +800,10 @@ func (r *GraphQLAgendaRepository) deletePatch() agendasql.UpdateInput {
 
 // Undelete clears the soft-delete mark and returns the restored record.
 func (r *GraphQLAgendaRepository) Undelete(ctx context.Context, name string) (*deepv1.Agenda, error) {
-	ids, err := repox.SplitName(name, "agendas")
+	id, err := r.rowID(ctx, name)
 	if err != nil {
 		return nil, err
 	}
-	id := ids[len(ids)-1]
 	patch := agendasql.UpdateInput{DeleteTime: graphql.Null[string]()}
 	patch.Etag = graphql.Value(repox.NewULID())
 	if _, err := r.Svc.Mutation.DeepV1.Agendas.UpdateIfMatch(ctx, id, patch, agendasql.DeleteTime.IsNull(false)); err != nil {
@@ -809,8 +820,7 @@ func (r *GraphQLAgendaRepository) Undelete(ctx context.Context, name string) (*d
 
 // Purge removes the record addressed by its resource name for good.
 func (r *GraphQLAgendaRepository) Purge(ctx context.Context, name string) error {
-	ids, err := repox.SplitName(name, "agendas")
-	if err != nil {
+	if _, err := repox.SplitName(name, "agendas"); err != nil {
 		return err
 	}
 	if h := r.Hooks.BeforeDelete; h != nil {
@@ -818,7 +828,10 @@ func (r *GraphQLAgendaRepository) Purge(ctx context.Context, name string) error 
 			return err
 		}
 	}
-	id := ids[len(ids)-1]
+	id, err := r.rowID(ctx, name)
+	if err != nil {
+		return err
+	}
 	_, err = r.purge(ctx, id, name, true)
 	return err
 }
@@ -948,6 +961,7 @@ func (r *GraphQLMeetingRepository) Create(ctx context.Context, parent string, in
 		return nil, err
 	}
 	id := repox.NewULID()
+	rowID := id
 	if in.GetName() != "" {
 		ids, err := repox.SplitName(in.GetName(), "agendas", "meetings")
 		if err != nil {
@@ -962,6 +976,9 @@ func (r *GraphQLMeetingRepository) Create(ctx context.Context, parent string, in
 	}
 	in = proto.Clone(in).(*deepv1.Meeting)
 	in.Name = FormatMeetingName(parentIDs[0], id)
+	// The id is unique only under the parent, so the row is keyed by a
+	// surrogate of its own: the id itself only when it was minted here.
+	id = rowID
 	if h := r.Hooks.BeforeCreate; h != nil {
 		if err := h(ctx, in); err != nil {
 			return nil, err
@@ -1018,11 +1035,37 @@ func (r *GraphQLMeetingRepository) Create(ctx context.Context, parent string, in
 
 // Get returns the record addressed by its resource name.
 func (r *GraphQLMeetingRepository) Get(ctx context.Context, name string) (*deepv1.Meeting, error) {
-	ids, err := repox.SplitName(name, "agendas", "meetings")
+	row, err := r.find(ctx, name)
 	if err != nil {
 		return nil, err
 	}
-	return r.get(ctx, ids[len(ids)-1])
+	return r.toProto(ctx, row, nil)
+}
+
+// rowID returns the surrogate key of the row named name, looked up by name:
+// the id is unique only under the parent, so it is not the key.
+// repox.ErrNotFound when there is no such row.
+func (r *GraphQLMeetingRepository) rowID(ctx context.Context, name string) (string, error) {
+	row, err := r.find(ctx, name)
+	if err != nil {
+		return "", err
+	}
+	return row.Id, nil
+}
+
+// find reads the row named name; repox.ErrNotFound when there is none.
+func (r *GraphQLMeetingRepository) find(ctx context.Context, name string) (*meetingsql.DeepV1Meetings, error) {
+	if _, err := repox.SplitName(name, "agendas", "meetings"); err != nil {
+		return nil, err
+	}
+	row, err := r.Svc.Query.DeepV1.Meetings.Find(ctx, meetingsql.List().Where(meetingsql.Name.Eq(name)))
+	if err != nil {
+		return nil, mapGraphQLErr(err)
+	}
+	if row == nil {
+		return nil, repox.ErrNotFound
+	}
+	return row, nil
 }
 
 // get loads by surrogate key — the private read every generated method
@@ -1186,18 +1229,11 @@ func (r *GraphQLMeetingRepository) Update(ctx context.Context, in *deepv1.Meetin
 // update is Update's write, with the server-owned fields outputPaths names
 // (UpdateWithOutputOnly) merged into its patch.
 func (r *GraphQLMeetingRepository) update(ctx context.Context, in *deepv1.Meeting, paths, outputPaths []string) (*deepv1.Meeting, error) {
-	ids, err := repox.SplitName(in.GetName(), "agendas", "meetings")
+	row, err := r.find(ctx, in.GetName())
 	if err != nil {
 		return nil, err
 	}
-	id := ids[len(ids)-1]
-	row, err := r.Svc.Query.DeepV1.Meetings.Get(ctx, id)
-	if err != nil {
-		return nil, mapGraphQLErr(err)
-	}
-	if row == nil {
-		return nil, repox.ErrNotFound
-	}
+	id := row.Id
 	var staleStart string
 	var staleEnd string
 	staleRule := repox.Deref(row.RuleId)
@@ -1351,6 +1387,7 @@ func (r *GraphQLMeetingRepository) newInput(parent string, in *deepv1.Meeting) (
 		return ci, nil, err
 	}
 	id := repox.NewULID()
+	rowID := id
 	if in.GetName() != "" {
 		ids, err := repox.SplitName(in.GetName(), "agendas", "meetings")
 		if err != nil {
@@ -1365,6 +1402,7 @@ func (r *GraphQLMeetingRepository) newInput(parent string, in *deepv1.Meeting) (
 	}
 	in = proto.Clone(in).(*deepv1.Meeting)
 	in.Name = FormatMeetingName(parentIDs[0], id)
+	id = rowID // keyed as Create keys it
 	ci = meetingToCreateInput(in)
 	ci.Id = id
 	ci.AgendaId = parentIDs[0]
@@ -1611,8 +1649,7 @@ func (r *GraphQLMeetingRepository) purgeOps(ctx context.Context, dtx *repox.Ops,
 
 // Delete removes the record addressed by its resource name.
 func (r *GraphQLMeetingRepository) Delete(ctx context.Context, name string) error {
-	ids, err := repox.SplitName(name, "agendas", "meetings")
-	if err != nil {
+	if _, err := repox.SplitName(name, "agendas", "meetings"); err != nil {
 		return err
 	}
 	if h := r.Hooks.BeforeDelete; h != nil {
@@ -1620,7 +1657,10 @@ func (r *GraphQLMeetingRepository) Delete(ctx context.Context, name string) erro
 			return err
 		}
 	}
-	id := ids[len(ids)-1]
+	id, err := r.rowID(ctx, name)
+	if err != nil {
+		return err
+	}
 	return r.remove(ctx, id)
 }
 
@@ -1709,10 +1749,23 @@ var _ MeetingRepository = (*GraphQLMeetingRepository)(nil)
 type graphQLBatch struct {
 	u   *repox.Unit
 	svc *genql.Service
+	// keys holds the row key of every record this batch creates, by name: a
+	// later write in the batch finds its row here, since it is not stored
+	// until the batch's request runs.
+	keys map[string]string
 }
 
 // Commit applies the Unit's writes; see repox.Unit.Commit.
 func (b *graphQLBatch) Commit(ctx context.Context) error { return b.u.Commit(ctx) }
+
+// rowID returns the row key of the record named name: one this batch creates,
+// else what resolve (a repository's rowID) finds.
+func (b *graphQLBatch) rowID(ctx context.Context, name string, resolve func(context.Context, string) (string, error)) (string, error) {
+	if id, ok := b.keys[name]; ok {
+		return id, nil
+	}
+	return resolve(ctx, name)
+}
 
 // CreateAgenda queues a create and returns the name the record will have.
 func (b *graphQLBatch) CreateAgenda(in *deepv1.Agenda) (string, error) {
@@ -1721,6 +1774,10 @@ func (b *graphQLBatch) CreateAgenda(in *deepv1.Agenda) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if b.keys == nil {
+		b.keys = map[string]string{}
+	}
+	b.keys[named.GetName()] = ci.Id
 	queueAgendaReferences(b.u, named, nil)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		return r.insertOps(ctx, ops, named, ci)
@@ -1732,15 +1789,18 @@ func (b *graphQLBatch) CreateAgenda(in *deepv1.Agenda) (string, error) {
 // UpdateAgenda queues Update; in.Etag, when set, guards it inside the
 // batch's request (see updateOps).
 func (b *graphQLBatch) UpdateAgenda(in *deepv1.Agenda, paths []string) {
-	ids, err := repox.SplitName(in.GetName(), "agendas")
-	if err != nil {
+	if _, err := repox.SplitName(in.GetName(), "agendas"); err != nil {
 		b.u.Fail(err)
 		return
 	}
 	r := &GraphQLAgendaRepository{Svc: b.svc}
 	queueAgendaReferences(b.u, in, paths)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
-		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, nil)
+		id, err := b.rowID(ctx, in.GetName(), r.rowID)
+		if err != nil {
+			return nil, err
+		}
+		return r.updateOps(ctx, ops, id, in, paths, nil)
 	})
 	b.u.Record(repox.Change{Type: "deep.v1/Agenda", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getAgenda)})
 }
@@ -1748,15 +1808,21 @@ func (b *graphQLBatch) UpdateAgenda(in *deepv1.Agenda, paths []string) {
 // DeleteAgenda queues a soft delete. A record already deleted or gone is
 // not an error.
 func (b *graphQLBatch) DeleteAgenda(name string) {
-	ids, err := repox.SplitName(name, "agendas")
-	if err != nil {
+	if _, err := repox.SplitName(name, "agendas"); err != nil {
 		b.u.Fail(err)
 		return
 	}
 	r := &GraphQLAgendaRepository{Svc: b.svc}
 	queueAgendaDelete(b.u, name, false)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
-		ops.Add(b.svc.Mutation.DeepV1.Agendas.UpdateOp(ids[len(ids)-1], r.deletePatch(), new(agendasql.UpdateDeepV1AgendasByIdResponse), agendasql.Update().PreCheck(agendasql.DeleteTime.IsNull(true))))
+		id, err := b.rowID(ctx, name, r.rowID)
+		if errors.Is(err, repox.ErrNotFound) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		ops.Add(b.svc.Mutation.DeepV1.Agendas.UpdateOp(id, r.deletePatch(), new(agendasql.UpdateDeepV1AgendasByIdResponse), agendasql.Update().PreCheck(agendasql.DeleteTime.IsNull(true))))
 		return nil, nil
 	})
 	b.u.Record(repox.Change{Type: "deep.v1/Agenda", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getAgenda)})
@@ -1765,21 +1831,26 @@ func (b *graphQLBatch) DeleteAgenda(name string) {
 // PurgeAgenda queues the record's removal for good. A record already
 // gone is not an error.
 func (b *graphQLBatch) PurgeAgenda(name string) {
-	ids, err := repox.SplitName(name, "agendas")
-	if err != nil {
+	if _, err := repox.SplitName(name, "agendas"); err != nil {
 		b.u.Fail(err)
 		return
 	}
-	id := ids[len(ids)-1]
+	r := &GraphQLAgendaRepository{Svc: b.svc}
 	// A record a referrer in another database or service names is kept, as
 	// Purge keeps it. One a foreign key of this database still names fails
 	// the commit with repox.ErrForeignKey: the request is one transaction,
 	// and the engine cannot skip one of its mutations.
 	keep := queueAgendaPurge(b.u, name)
-	r := &GraphQLAgendaRepository{Svc: b.svc}
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		if *keep {
 			return nil, nil
+		}
+		id, err := b.rowID(ctx, name, r.rowID)
+		if errors.Is(err, repox.ErrNotFound) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
 		}
 		return r.purgeOps(ctx, ops, id)
 	})
@@ -1793,6 +1864,10 @@ func (b *graphQLBatch) CreateMeeting(parent string, in *deepv1.Meeting) (string,
 	if err != nil {
 		return "", err
 	}
+	if b.keys == nil {
+		b.keys = map[string]string{}
+	}
+	b.keys[named.GetName()] = ci.Id
 	queueMeetingReferences(b.u, named, nil)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		return r.insertOps(ctx, ops, named, ci)
@@ -1804,15 +1879,18 @@ func (b *graphQLBatch) CreateMeeting(parent string, in *deepv1.Meeting) (string,
 // UpdateMeeting queues Update; in.Etag, when set, guards it inside the
 // batch's request (see updateOps).
 func (b *graphQLBatch) UpdateMeeting(in *deepv1.Meeting, paths []string) {
-	ids, err := repox.SplitName(in.GetName(), "agendas", "meetings")
-	if err != nil {
+	if _, err := repox.SplitName(in.GetName(), "agendas", "meetings"); err != nil {
 		b.u.Fail(err)
 		return
 	}
 	r := &GraphQLMeetingRepository{Svc: b.svc}
 	queueMeetingReferences(b.u, in, paths)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
-		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, nil)
+		id, err := b.rowID(ctx, in.GetName(), r.rowID)
+		if err != nil {
+			return nil, err
+		}
+		return r.updateOps(ctx, ops, id, in, paths, nil)
 	})
 	b.u.Record(repox.Change{Type: "deep.v1/Meeting", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getMeeting)})
 }
@@ -1820,15 +1898,20 @@ func (b *graphQLBatch) UpdateMeeting(in *deepv1.Meeting, paths []string) {
 // DeleteMeeting queues the record's removal for good. A record already
 // gone is not an error.
 func (b *graphQLBatch) DeleteMeeting(name string) {
-	ids, err := repox.SplitName(name, "agendas", "meetings")
-	if err != nil {
+	if _, err := repox.SplitName(name, "agendas", "meetings"); err != nil {
 		b.u.Fail(err)
 		return
 	}
-	id := ids[len(ids)-1]
-	queueMeetingDelete(b.u, name, true)
 	r := &GraphQLMeetingRepository{Svc: b.svc}
+	queueMeetingDelete(b.u, name, true)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		id, err := b.rowID(ctx, name, r.rowID)
+		if errors.Is(err, repox.ErrNotFound) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
 		return r.purgeOps(ctx, ops, id)
 	})
 	b.u.Record(repox.Change{Type: "deep.v1/Meeting", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getMeeting)})

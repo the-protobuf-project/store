@@ -45,6 +45,9 @@ var {{.Var}} = &repox.Projection[*{{.PB}}]{
 {{- end}}
 		},
 		Range: "{{.Range}}",
+{{- if .IndexLeads}}
+		IndexLeads: []string{ {{- range $i, $c := .IndexLeads}}{{if $i}}, {{end}}"{{$c}}"{{end -}} },
+{{- end}}
 {{- if .Manual}}
 		// Maintained by hand: no write projects it.
 		Sources: nil,

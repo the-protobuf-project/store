@@ -110,6 +110,15 @@ func (r *GraphQLLoanRepository) Get(ctx context.Context, name string) (*refdemov
 	return r.get(ctx, ids[len(ids)-1])
 }
 
+// rowID returns the surrogate key of the row named name: its bare id.
+func (r *GraphQLLoanRepository) rowID(_ context.Context, name string) (string, error) {
+	ids, err := repox.SplitName(name, "loans")
+	if err != nil {
+		return "", err
+	}
+	return ids[len(ids)-1], nil
+}
+
 // get loads by surrogate key — the private read every generated method
 // re-reads through.
 func (r *GraphQLLoanRepository) get(ctx context.Context, id string) (*refdemov1.Loan, error) {
@@ -321,11 +330,10 @@ func (r *GraphQLLoanRepository) UpdateOutputOnly(ctx context.Context, in *refdem
 	if len(paths) == 0 {
 		return nil, fmt.Errorf("%w: UpdateOutputOnly needs the fields to write", repox.ErrInvalidArgument)
 	}
-	ids, err := repox.SplitName(in.GetName(), "loans")
+	id, err := r.rowID(ctx, in.GetName())
 	if err != nil {
 		return nil, err
 	}
-	id := ids[len(ids)-1]
 	patch := loanToOutputPatch(in, paths)
 	patch.Etag = graphql.Value(repox.NewULID())
 	if in.GetEtag() != "" {
@@ -347,8 +355,7 @@ func (r *GraphQLLoanRepository) UpdateOutputOnly(ctx context.Context, in *refdem
 // Delete soft-deletes the record addressed by its resource name: delete_time
 // is set, the row stays.
 func (r *GraphQLLoanRepository) Delete(ctx context.Context, name string) error {
-	ids, err := repox.SplitName(name, "loans")
-	if err != nil {
+	if _, err := repox.SplitName(name, "loans"); err != nil {
 		return err
 	}
 	if h := r.Hooks.BeforeDelete; h != nil {
@@ -356,7 +363,11 @@ func (r *GraphQLLoanRepository) Delete(ctx context.Context, name string) error {
 			return err
 		}
 	}
-	if _, err := r.Svc.Mutation.Lending.Loans.UpdateIfMatch(ctx, ids[len(ids)-1], r.deletePatch(), loansql.DeleteTime.IsNull(true)); err != nil {
+	id, err := r.rowID(ctx, name)
+	if err != nil {
+		return err
+	}
+	if _, err := r.Svc.Mutation.Lending.Loans.UpdateIfMatch(ctx, id, r.deletePatch(), loansql.DeleteTime.IsNull(true)); err != nil {
 		if errors.Is(err, graphql.ErrConflict) {
 			return repox.ErrNotFound
 		}
@@ -380,11 +391,10 @@ func (r *GraphQLLoanRepository) deletePatch() loansql.UpdateInput {
 
 // Undelete clears the soft-delete mark and returns the restored record.
 func (r *GraphQLLoanRepository) Undelete(ctx context.Context, name string) (*refdemov1.Loan, error) {
-	ids, err := repox.SplitName(name, "loans")
+	id, err := r.rowID(ctx, name)
 	if err != nil {
 		return nil, err
 	}
-	id := ids[len(ids)-1]
 	patch := loansql.UpdateInput{DeleteTime: graphql.Null[string]()}
 	patch.ExpireTime = graphql.Null[string]()
 	patch.Etag = graphql.Value(repox.NewULID())
@@ -402,8 +412,7 @@ func (r *GraphQLLoanRepository) Undelete(ctx context.Context, name string) (*ref
 
 // Purge removes the record addressed by its resource name for good.
 func (r *GraphQLLoanRepository) Purge(ctx context.Context, name string) error {
-	ids, err := repox.SplitName(name, "loans")
-	if err != nil {
+	if _, err := repox.SplitName(name, "loans"); err != nil {
 		return err
 	}
 	if h := r.Hooks.BeforeDelete; h != nil {
@@ -411,7 +420,10 @@ func (r *GraphQLLoanRepository) Purge(ctx context.Context, name string) error {
 			return err
 		}
 	}
-	id := ids[len(ids)-1]
+	id, err := r.rowID(ctx, name)
+	if err != nil {
+		return err
+	}
 	_, err = r.purge(ctx, id, name, true)
 	return err
 }
@@ -454,11 +466,14 @@ func (r *GraphQLLoanRepository) PurgeExpired(ctx context.Context, now time.Time)
 			return res, err
 		}
 		for _, m := range page {
-			ids, err := repox.SplitName(m.GetName(), "loans")
+			id, err := r.rowID(ctx, m.GetName())
+			if errors.Is(err, repox.ErrNotFound) {
+				continue // gone since the page was read
+			}
 			if err != nil {
 				return res, err
 			}
-			kept, err := r.purge(ctx, ids[len(ids)-1], m.GetName(), true)
+			kept, err := r.purge(ctx, id, m.GetName(), true)
 			switch {
 			case errors.Is(err, repox.ErrNotFound):
 			case err != nil:
@@ -507,10 +522,23 @@ type graphQLBatch struct {
 	u         *repox.Unit
 	svc       *genql.Service
 	retention time.Duration
+	// keys holds the row key of every record this batch creates, by name: a
+	// later write in the batch finds its row here, since it is not stored
+	// until the batch's request runs.
+	keys map[string]string
 }
 
 // Commit applies the Unit's writes; see repox.Unit.Commit.
 func (b *graphQLBatch) Commit(ctx context.Context) error { return b.u.Commit(ctx) }
+
+// rowID returns the row key of the record named name: one this batch creates,
+// else what resolve (a repository's rowID) finds.
+func (b *graphQLBatch) rowID(ctx context.Context, name string, resolve func(context.Context, string) (string, error)) (string, error) {
+	if id, ok := b.keys[name]; ok {
+		return id, nil
+	}
+	return resolve(ctx, name)
+}
 
 // CreateLoan queues a create and returns the name the record will have.
 func (b *graphQLBatch) CreateLoan(in *refdemov1.Loan) (string, error) {
@@ -519,6 +547,10 @@ func (b *graphQLBatch) CreateLoan(in *refdemov1.Loan) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if b.keys == nil {
+		b.keys = map[string]string{}
+	}
+	b.keys[named.GetName()] = ci.Id
 	queueLoanReferences(b.u, named, nil)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		ops.Add(b.svc.Mutation.Lending.Loans.CreateOp(ci, new(loansql.InsertLendingLoansResponse)))
@@ -531,15 +563,18 @@ func (b *graphQLBatch) CreateLoan(in *refdemov1.Loan) (string, error) {
 // UpdateLoan queues Update; in.Etag, when set, guards it inside the
 // batch's request (see updateOps).
 func (b *graphQLBatch) UpdateLoan(in *refdemov1.Loan, paths []string) {
-	ids, err := repox.SplitName(in.GetName(), "loans")
-	if err != nil {
+	if _, err := repox.SplitName(in.GetName(), "loans"); err != nil {
 		b.u.Fail(err)
 		return
 	}
 	r := &GraphQLLoanRepository{Svc: b.svc}
 	queueLoanReferences(b.u, in, paths)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
-		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, nil)
+		id, err := b.rowID(ctx, in.GetName(), r.rowID)
+		if err != nil {
+			return nil, err
+		}
+		return r.updateOps(ctx, ops, id, in, paths, nil)
 	})
 	b.u.Record(repox.Change{Type: "lending.example.com/Loan", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getLoan)})
 }
@@ -547,15 +582,18 @@ func (b *graphQLBatch) UpdateLoan(in *refdemov1.Loan, paths []string) {
 // UpdateLoanWithOutputOnly queues UpdateWithOutputOnly; in.Etag, when
 // set, guards it inside the batch's request, as UpdateLoan's does.
 func (b *graphQLBatch) UpdateLoanWithOutputOnly(in *refdemov1.Loan, paths, outputPaths []string) {
-	ids, err := repox.SplitName(in.GetName(), "loans")
-	if err != nil {
+	if _, err := repox.SplitName(in.GetName(), "loans"); err != nil {
 		b.u.Fail(err)
 		return
 	}
 	r := &GraphQLLoanRepository{Svc: b.svc}
 	queueLoanReferences(b.u, in, paths)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
-		return r.updateOps(ctx, ops, ids[len(ids)-1], in, paths, outputPaths)
+		id, err := b.rowID(ctx, in.GetName(), r.rowID)
+		if err != nil {
+			return nil, err
+		}
+		return r.updateOps(ctx, ops, id, in, paths, outputPaths)
 	})
 	b.u.Record(repox.Change{Type: "lending.example.com/Loan", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getLoan)})
 }
@@ -567,23 +605,30 @@ func (b *graphQLBatch) UpdateLoanOutputOnly(in *refdemov1.Loan, paths []string) 
 		b.u.Fail(fmt.Errorf("%w: UpdateOutputOnly needs the fields to write", repox.ErrInvalidArgument))
 		return
 	}
-	ids, err := repox.SplitName(in.GetName(), "loans")
-	if err != nil {
+	if _, err := repox.SplitName(in.GetName(), "loans"); err != nil {
 		b.u.Fail(err)
 		return
 	}
-	id := ids[len(ids)-1]
+	r := &GraphQLLoanRepository{Svc: b.svc}
 	patch := loanToOutputPatch(in, paths)
 	patch.Etag = graphql.Value(repox.NewULID())
 	b.u.Record(repox.Change{Type: "lending.example.com/Loan", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getLoan)})
 	if etag := in.GetEtag(); etag != "" {
 		b.u.QueueGraphQLAhead(func(ctx context.Context) error {
-			_, err := b.svc.Mutation.Lending.Loans.UpdateIfMatch(ctx, id, patch, loansql.Etag.Eq(etag))
+			id, err := b.rowID(ctx, in.GetName(), r.rowID)
+			if err != nil {
+				return err
+			}
+			_, err = b.svc.Mutation.Lending.Loans.UpdateIfMatch(ctx, id, patch, loansql.Etag.Eq(etag))
 			return mapGraphQLErr(err)
 		})
 		return
 	}
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		id, err := b.rowID(ctx, in.GetName(), r.rowID)
+		if err != nil {
+			return nil, err
+		}
 		ops.Add(b.svc.Mutation.Lending.Loans.UpdateOp(id, patch, new(loansql.UpdateLendingLoansByIdResponse)))
 		return nil, nil
 	})
@@ -592,15 +637,21 @@ func (b *graphQLBatch) UpdateLoanOutputOnly(in *refdemov1.Loan, paths []string) 
 // DeleteLoan queues a soft delete. A record already deleted or gone is
 // not an error.
 func (b *graphQLBatch) DeleteLoan(name string) {
-	ids, err := repox.SplitName(name, "loans")
-	if err != nil {
+	if _, err := repox.SplitName(name, "loans"); err != nil {
 		b.u.Fail(err)
 		return
 	}
 	r := &GraphQLLoanRepository{Svc: b.svc, Retention: b.retention}
 	queueLoanDelete(b.u, name, false)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
-		ops.Add(b.svc.Mutation.Lending.Loans.UpdateOp(ids[len(ids)-1], r.deletePatch(), new(loansql.UpdateLendingLoansByIdResponse), loansql.Update().PreCheck(loansql.DeleteTime.IsNull(true))))
+		id, err := b.rowID(ctx, name, r.rowID)
+		if errors.Is(err, repox.ErrNotFound) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		ops.Add(b.svc.Mutation.Lending.Loans.UpdateOp(id, r.deletePatch(), new(loansql.UpdateLendingLoansByIdResponse), loansql.Update().PreCheck(loansql.DeleteTime.IsNull(true))))
 		return nil, nil
 	})
 	b.u.Record(repox.Change{Type: "lending.example.com/Loan", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getLoan)})
@@ -609,12 +660,11 @@ func (b *graphQLBatch) DeleteLoan(name string) {
 // PurgeLoan queues the record's removal for good. A record already
 // gone is not an error.
 func (b *graphQLBatch) PurgeLoan(name string) {
-	ids, err := repox.SplitName(name, "loans")
-	if err != nil {
+	if _, err := repox.SplitName(name, "loans"); err != nil {
 		b.u.Fail(err)
 		return
 	}
-	id := ids[len(ids)-1]
+	r := &GraphQLLoanRepository{Svc: b.svc}
 	// A record a referrer in another database or service names is kept, as
 	// Purge keeps it. One a foreign key of this database still names fails
 	// the commit with repox.ErrForeignKey: the request is one transaction,
@@ -623,6 +673,13 @@ func (b *graphQLBatch) PurgeLoan(name string) {
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		if *keep {
 			return nil, nil
+		}
+		id, err := b.rowID(ctx, name, r.rowID)
+		if errors.Is(err, repox.ErrNotFound) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
 		}
 		ops.Add(b.svc.Mutation.Lending.Loans.DeleteOp(id, new(loansql.DeleteLendingLoansByIdResponse)))
 		return nil, nil

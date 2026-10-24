@@ -29,7 +29,18 @@ type gqlResourceView struct {
 	ResPkg     string // client resource package name, e.g. "membersql"
 	Row        string // qualified row type, e.g. "membersql.OrganisationMembers"
 	ParentPred string // parent scope predicate field, e.g. "membersql.OrganisationId"
-	EtagPred   string // etag predicate, e.g. "membersql.Etag" (HasEtag only)
+	// NamePred is the name column's predicate field, e.g. "booksql.Name",
+	// which finds a nested resource's row (NameKeyed only).
+	NamePred string
+	// ParentRows is the client of a nested parent's rows, whose keys a List
+	// under it is scoped to: the parent is found by name. Nil when the parent
+	// is keyed by its bare id.
+	ParentRows *gqlParentRows
+	// GQLParentLinks re-point the CreateInput's columns for nested ancestors
+	// at their rows (linkParents); empty when every ancestor is keyed by its
+	// bare id.
+	GQLParentLinks []string
+	EtagPred       string // etag predicate, e.g. "membersql.Etag" (HasEtag only)
 	// DeleteTimePred and DeleteTimeInputField address the soft-delete column
 	// (SoftDelete only), e.g. "membersql.DeleteTime" and "DeleteTime".
 	DeleteTimePred       string
@@ -82,6 +93,13 @@ type gqlResourceView struct {
 	GQLDeepDeletes      []string // subtree removal after the resource delete
 	DeepPkgs            []string // client resource packages the fragments use
 	DeepPBImports       []string // proto packages of oneof wrappers
+}
+
+// gqlParentRows addresses a nested parent's rows on the client.
+type gqlParentRows struct {
+	Domain, Resource, ResPkg string
+	NamePred                 string // e.g. "booksql.Name"
+	KeyField                 string // the row's key field, e.g. "Id"
 }
 
 // helperNeeds tracks which scalar helpers graphql_convert.go must include.
@@ -151,7 +169,28 @@ func gqlResourceViews(pb *pbIndex, db *schema.Database, s *schema.Schema, resour
 			for _, a := range r.AncestorFKs {
 				v.GQLParentAssigns = append(v.GQLParentAssigns,
 					fmt.Sprintf("ci.%s = parentIDs[%d]", export(camel(a.Column)), a.Index))
+				if a.Nested != nil {
+					nm := gqlNamesOf(a.Nested.Table)
+					v.DeepPkgs = append(v.DeepPkgs, nm.DomPkg+"/"+nm.ResPkg)
+					field := export(camel(a.Column))
+					v.GQLParentLinks = append(v.GQLParentLinks, fmt.Sprintf(
+						"{\n\t\tn := %s\n\t\tif k, ok := known[n]; ok {\n\t\t\tci.%s = k\n\t\t} else if row, err := r.Svc.Query.%s.%s.Find(ctx, %s.List().Where(%s.%s.Eq(n))); err != nil {\n\t\t\treturn mapGraphQLErr(err)\n\t\t} else if row != nil {\n\t\t\tci.%s = row.%s\n\t\t}\n\t}",
+						nameExpr(r.Segments[:a.Index+1], "ids"), field, nm.Domain, nm.Resource, nm.ResPkg,
+						nm.ResPkg, export(camel(a.Nested.Cols.NameKey.Name)), field, export(camel(a.Nested.Cols.PK.Name))))
+				}
 			}
+			if p := r.Parent; p != nil && p.nameKeyed() && r.ParentFK != "" {
+				nm := gqlNamesOf(p.Table)
+				v.DeepPkgs = append(v.DeepPkgs, nm.DomPkg+"/"+nm.ResPkg)
+				v.ParentRows = &gqlParentRows{
+					Domain: nm.Domain, Resource: nm.Resource, ResPkg: nm.ResPkg,
+					NamePred: nm.ResPkg + "." + export(camel(p.Cols.NameKey.Name)),
+					KeyField: export(camel(p.Cols.PK.Name)),
+				}
+			}
+		}
+		if v.NameKeyed {
+			v.NamePred = v.ResPkg + "." + export(camel(r.Cols.NameKey.Name))
 		}
 		if c := r.Cols.DeleteTime; c != nil {
 			v.DeleteTimePred = v.ResPkg + "." + export(camel(c.Name))

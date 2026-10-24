@@ -10,6 +10,14 @@
       "byIdQuery": "catalogBooksById"
     },
     {
+      "field": "deleteCatalogPagesById",
+      "kind": "delete",
+      "resourceType": "catalog.example.com/Page",
+      "pattern": "shelves/{shelf}/books/{book}/pages/{page}",
+      "keyArgument": "keyId",
+      "byIdQuery": "catalogPagesById"
+    },
+    {
       "field": "deleteCatalogShelvesById",
       "kind": "delete",
       "resourceType": "catalog.example.com/Shelf",
