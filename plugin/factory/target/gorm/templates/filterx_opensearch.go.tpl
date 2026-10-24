@@ -56,18 +56,10 @@ func (e *OpenSearchEngine) Override(field string, h OpenSearchHandler) *OpenSear
 func (e *OpenSearchEngine) Query(conds []Condition) (map[string]any, error) {
 	clauses := make([]any, 0, len(conds))
 	for _, c := range conds {
-		if h, ok := e.overrides[c.Field]; ok {
-			q, err := h(c)
-			if err != nil {
-				return nil, err
-			}
-			clauses = append(clauses, q)
+		if _, overridden := e.overrides[c.Field]; (IsComposite(c) || !overridden) && c.Hint && reachesVia(e.spec, c) {
 			continue
 		}
-		if c.Hint && reachesVia(e.spec, c) {
-			continue
-		}
-		q, err := osCondition(e.spec, c)
+		q, err := e.condition(c)
 		if err != nil {
 			return nil, err
 		}
@@ -142,6 +134,50 @@ func osRange(field string, op Op, v any) (map[string]any, bool) {
 	return map[string]any{"range": map[string]any{field: map[string]any{key: v}}}, true
 }
 
+// condition translates one condition, its overrides applying at any depth
+// of OR, AND and NOT.
+func (e *OpenSearchEngine) condition(c Condition) (map[string]any, error) {
+	if IsComposite(c) {
+		return osComposite(c, e.condition)
+	}
+	if h, ok := e.overrides[c.Field]; ok {
+		return h(c)
+	}
+	return osCondition(e.spec, c)
+}
+
+// osComposite translates an OpOr, OpAnd or OpNot condition, each operand
+// through each.
+func osComposite(c Condition, each func(Condition) (map[string]any, error)) (map[string]any, error) {
+	qs := make([]any, 0, len(c.Any))
+	for _, alt := range c.Any {
+		q, err := each(alt)
+		if err != nil {
+			return nil, err
+		}
+		qs = append(qs, q)
+	}
+	if c.Op == OpOr {
+		return osAny(qs), nil
+	}
+	and := osAll(qs)
+	if c.Op == OpNot {
+		return osNot(and), nil
+	}
+	return and, nil
+}
+
+func osAll(qs []any) map[string]any {
+	switch len(qs) {
+	case 0:
+		return map[string]any{"match_all": map[string]any{}}
+	case 1:
+		q, _ := qs[0].(map[string]any)
+		return q
+	}
+	return map[string]any{"bool": map[string]any{"filter": qs}}
+}
+
 func osAny(qs []any) map[string]any {
 	if len(qs) == 0 {
 		return map[string]any{"match_none": map[string]any{}}
@@ -151,16 +187,8 @@ func osAny(qs []any) map[string]any {
 
 // osCondition translates one spec-listed condition.
 func osCondition(spec Spec, c Condition) (map[string]any, error) {
-	if c.Op == OpOr {
-		alts := make([]any, 0, len(c.Any))
-		for _, alt := range c.Any {
-			q, err := osCondition(spec, alt)
-			if err != nil {
-				return nil, err
-			}
-			alts = append(alts, q)
-		}
-		return osAny(alts), nil
+	if IsComposite(c) {
+		return osComposite(c, func(alt Condition) (map[string]any, error) { return osCondition(spec, alt) })
 	}
 	if c.Field == "" {
 		if len(spec.Search) == 0 {

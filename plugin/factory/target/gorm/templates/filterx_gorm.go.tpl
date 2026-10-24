@@ -65,15 +65,7 @@ func (e *GormEngine[M]) Where(conds []Condition) (string, []any, error) {
 		args    []any
 	)
 	for _, c := range conds {
-		if h, ok := e.overrides[c.Field]; ok {
-			cl, a, err := h(c)
-			if err != nil {
-				return "", nil, err
-			}
-			clauses, args = append(clauses, cl), append(args, a...)
-			continue
-		}
-		cl, a, err := sqlCondition(e.spec, c)
+		cl, a, err := e.condition(c)
 		if err != nil {
 			return "", nil, err
 		}
@@ -82,22 +74,46 @@ func (e *GormEngine[M]) Where(conds []Condition) (string, []any, error) {
 	return strings.Join(clauses, " AND "), args, nil
 }
 
-// sqlAny translates an OpOr condition: its alternatives ORed. An empty one
-// matches nothing.
-func sqlAny(spec Spec, c Condition) (string, []any, error) {
-	if len(c.Any) == 0 {
-		return "FALSE", nil, nil
+// condition translates one condition, its overrides applying at any depth
+// of OR, AND and NOT.
+func (e *GormEngine[M]) condition(c Condition) (string, []any, error) {
+	if IsComposite(c) {
+		return sqlComposite(c, e.condition)
 	}
+	if h, ok := e.overrides[c.Field]; ok {
+		return h(c)
+	}
+	return sqlCondition(e.spec, c)
+}
+
+// sqlComposite translates an OpOr, OpAnd or OpNot condition, each operand
+// through each. An empty OR matches nothing and an empty AND everything.
+// NOT holds where its operand does not hold, including where the operand is
+// NULL (a comparison with a NULL column), as a document missing the field
+// matches a must_not on OpenSearch.
+func sqlComposite(c Condition, each func(Condition) (string, []any, error)) (string, []any, error) {
 	parts := make([]string, 0, len(c.Any))
 	var args []any
 	for _, alt := range c.Any {
-		cl, a, err := sqlCondition(spec, alt)
+		cl, a, err := each(alt)
 		if err != nil {
 			return "", nil, err
 		}
 		parts, args = append(parts, cl), append(args, a...)
 	}
-	return "(" + strings.Join(parts, " OR ") + ")", args, nil
+	switch {
+	case c.Op == OpOr && len(parts) == 0:
+		return "FALSE", nil, nil
+	case c.Op == OpOr:
+		return "(" + strings.Join(parts, " OR ") + ")", args, nil
+	case len(parts) == 0:
+		parts = []string{"TRUE"}
+	}
+	and := "(" + strings.Join(parts, " AND ") + ")"
+	if c.Op == OpNot {
+		return "NOT coalesce(" + and + ", false)", args, nil
+	}
+	return and, args, nil
 }
 
 // OrderClause resolves an order_by string into a safe "col DIR, ..." clause
@@ -338,8 +354,8 @@ func (e *GormEngine[M]) List(ctx context.Context, q *gorm.DB, in ListInput) ([]M
 
 // sqlCondition translates one spec-listed condition.
 func sqlCondition(spec Spec, c Condition) (string, []any, error) {
-	if c.Op == OpOr {
-		return sqlAny(spec, c)
+	if IsComposite(c) {
+		return sqlComposite(c, func(alt Condition) (string, []any, error) { return sqlCondition(spec, alt) })
 	}
 	if c.Field == "" {
 		return sqlSearchCondition(spec, c)

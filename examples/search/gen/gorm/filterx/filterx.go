@@ -71,20 +71,30 @@ const (
 	// OpNull matches a field that is unset (Value "true") or set ("false"). For
 	// a reference to a value object it asks whether the object exists.
 	OpNull
-	// OpOr matches when any of Condition.Any does. Built in code only.
+	// OpOr matches when any of Condition.Any does: `a OR b` in a filter, or
+	// built in code.
 	OpOr
+	// OpAnd matches when every one of Condition.Any does: a parenthesized
+	// group, `(a b)`.
+	OpAnd
+	// OpNot matches when Condition.Any (ANDed) does not: `NOT a` or `-a`. A
+	// row the negated test cannot be decided for (a NULL compared) matches,
+	// as a document missing the field does on OpenSearch.
+	OpNot
 )
 
 // Condition is one parsed term of a filter expression. A condition with an
 // empty Field is a bareword free-text term, matched against the spec's Search
-// columns. Conditions in a slice are AND-combined.
+// columns, unless it is a composite (OpOr, OpAnd, OpNot) over Any.
+// Conditions in a slice are AND-combined.
 type Condition struct {
 	Field string
 	Op    Op
 	Value string
 	// Values are OpIn's alternatives; every other Op reads Value.
 	Values []string
-	// Any are OpOr's alternatives.
+	// Any are the operands of a composite: OpOr's alternatives, OpAnd's
+	// conjuncts, OpNot's negated conjunction.
 	Any []Condition
 	// Hint marks a condition that only narrows: an engine that can evaluate
 	// it does, one that cannot leaves it out, so the caller must not rely on
@@ -103,6 +113,20 @@ type Condition struct {
 func Or(alternatives ...Condition) Condition {
 	return Condition{Op: OpOr, Any: alternatives}
 }
+
+// And is the condition "all of these", a parenthesized group.
+func And(conds ...Condition) Condition {
+	return Condition{Op: OpAnd, Any: conds}
+}
+
+// Not is the condition "not c".
+func Not(c Condition) Condition {
+	return Condition{Op: OpNot, Any: []Condition{c}}
+}
+
+// IsComposite reports whether c combines other conditions (OpOr, OpAnd,
+// OpNot) rather than testing a field.
+func IsComposite(c Condition) bool { return c.Op == OpOr || c.Op == OpAnd || c.Op == OpNot }
 
 // IsNull is the condition "field is unset" (null) or "is set" (!null).
 func IsNull(field string, null bool) Condition {
@@ -221,52 +245,193 @@ type SortSpec struct {
 
 // --- filter parsing --------------------------------------------------------------
 
-// Parse parses a pragmatic subset of the AIP-160 filter language into a flat,
-// AND-combined list of conditions. It supports:
+// Parse parses an AIP-160 filter into AND-combined conditions. It supports:
 //
 //   - `field = value`, `field != value`, `field : value`
-//   - `field <= value`, `field >= value` (ordered fields, e.g. dates)
+//   - `field < value`, `field <= value`, `field > value`, `field >= value`
+//     (ordered fields, e.g. dates)
 //   - quoted values ("two words") and barewords (SUMMER25)
 //   - a bare term with no operator, treated as a free-text search
 //   - terms separated by whitespace or an explicit `AND`
+//   - `a OR b`, which binds tighter than AND as AIP-160 says: `a b OR c` is
+//     `a AND (b OR c)`
+//   - `NOT a` and `-a`
+//   - parentheses grouping any of these
 //
-// It validates only syntax; the engines validate each Field against the spec.
-// A malformed expression yields ErrInvalid. The empty string parses to no
-// conditions (an unfiltered list).
+// AND, OR and NOT are keywords only unquoted; OR and NOT only in capitals
+// (AND in any case, as before). It validates only syntax; the engines
+// validate each Field against the spec. A malformed expression yields
+// ErrInvalid. The empty string parses to no conditions (an unfiltered list).
 func Parse(filter string) ([]Condition, error) {
 	toks, err := tokenize(filter)
 	if err != nil {
 		return nil, err
 	}
-
-	var conds []Condition
-	for i := 0; i < len(toks); {
-		t := toks[i]
-		if t.op {
-			return nil, fmt.Errorf("%w: unexpected operator %q in filter", ErrInvalid, t.text)
-		}
-		if strings.EqualFold(t.text, "AND") && !t.quoted {
-			i++
-			continue
-		}
-		// A value token followed by an operator is a `field op value` term.
-		if i+1 < len(toks) && toks[i+1].op {
-			if i+2 >= len(toks) || toks[i+2].op {
-				return nil, fmt.Errorf("%w: filter operator %q is missing a value", ErrInvalid, toks[i+1].text)
-			}
-			op, err := parseOp(toks[i+1].text)
-			if err != nil {
-				return nil, err
-			}
-			conds = append(conds, Condition{Field: t.text, Op: op, Value: toks[i+2].text, Quoted: toks[i+2].quoted})
-			i += 3
-			continue
-		}
-		// Otherwise it's a free-text term.
-		conds = append(conds, Condition{Op: OpHas, Value: t.text})
-		i++
+	p := &filterParser{toks: toks}
+	conds, err := p.expression(0)
+	if err != nil {
+		return nil, err
+	}
+	if p.i < len(toks) {
+		return nil, fmt.Errorf("%w: unbalanced %q in filter", ErrInvalid, toks[p.i].text)
 	}
 	return conds, nil
+}
+
+// maxFilterDepth bounds the nesting of parentheses and NOTs, so a hostile
+// filter cannot exhaust the stack.
+const maxFilterDepth = 32
+
+// filterParser is a recursive-descent parser over AIP-160's grammar:
+//
+//	expression = sequence { AND sequence }   (whitespace is AND too)
+//	factor     = term { OR term }
+//	term       = [ NOT | "-" ] term | simple
+//	simple     = restriction | "(" expression ")"
+type filterParser struct {
+	toks []token
+	i    int
+}
+
+func (p *filterParser) at(kw string) bool {
+	if p.i >= len(p.toks) {
+		return false
+	}
+	t := p.toks[p.i]
+	if t.op || t.quoted || t.paren != 0 {
+		return false
+	}
+	if kw == "AND" {
+		return strings.EqualFold(t.text, kw)
+	}
+	return t.text == kw
+}
+
+func (p *filterParser) atParen(c byte) bool {
+	return p.i < len(p.toks) && p.toks[p.i].paren == c
+}
+
+// expression parses factors up to the end or a closing parenthesis, ANDed;
+// a parenthesized group in it is flattened into it.
+func (p *filterParser) expression(depth int) ([]Condition, error) {
+	var conds []Condition
+	for {
+		for p.at("AND") {
+			p.i++
+		}
+		if p.i >= len(p.toks) || p.atParen(')') {
+			return conds, nil
+		}
+		c, err := p.factor(depth)
+		if err != nil {
+			return nil, err
+		}
+		if c.Op == OpAnd {
+			conds = append(conds, c.Any...)
+		} else {
+			conds = append(conds, c)
+		}
+	}
+}
+
+func (p *filterParser) factor(depth int) (Condition, error) {
+	c, err := p.term(depth)
+	if err != nil {
+		return Condition{}, err
+	}
+	alts := []Condition{c}
+	for p.at("OR") {
+		p.i++
+		if p.i >= len(p.toks) || p.atParen(')') || p.at("AND") || p.at("OR") {
+			return Condition{}, fmt.Errorf("%w: OR is missing its right operand", ErrInvalid)
+		}
+		alt, err := p.term(depth)
+		if err != nil {
+			return Condition{}, err
+		}
+		alts = append(alts, alt)
+	}
+	if len(alts) == 1 {
+		return c, nil
+	}
+	return Or(alts...), nil
+}
+
+func (p *filterParser) term(depth int) (Condition, error) {
+	negate := false
+	if p.at("NOT") {
+		p.i++
+		negate = true
+	} else if t := p.toks[p.i]; !t.op && !t.quoted && t.paren == 0 && strings.HasPrefix(t.text, "-") {
+		if t.text != "-" {
+			p.toks[p.i].text = t.text[1:] // -a
+		} else if t.negates {
+			p.i++ // -"a b", -(a b)
+		} else {
+			return Condition{}, fmt.Errorf("%w: %q must prefix a term", ErrInvalid, "-")
+		}
+		negate = true
+	}
+	if !negate {
+		return p.simple(depth)
+	}
+	if depth >= maxFilterDepth {
+		return Condition{}, fmt.Errorf("%w: filter nests deeper than %d", ErrInvalid, maxFilterDepth)
+	}
+	if p.i >= len(p.toks) || p.atParen(')') || p.at("AND") || p.at("OR") {
+		return Condition{}, fmt.Errorf("%w: NOT is missing its operand", ErrInvalid)
+	}
+	c, err := p.term(depth + 1)
+	if err != nil {
+		return Condition{}, err
+	}
+	return Not(c), nil
+}
+
+func (p *filterParser) simple(depth int) (Condition, error) {
+	t := p.toks[p.i]
+	switch {
+	case t.paren == '(':
+		if depth >= maxFilterDepth {
+			return Condition{}, fmt.Errorf("%w: filter nests deeper than %d", ErrInvalid, maxFilterDepth)
+		}
+		p.i++
+		conds, err := p.expression(depth + 1)
+		if err != nil {
+			return Condition{}, err
+		}
+		if !p.atParen(')') {
+			return Condition{}, fmt.Errorf("%w: unbalanced %q in filter", ErrInvalid, "(")
+		}
+		p.i++
+		switch len(conds) {
+		case 0:
+			return Condition{}, fmt.Errorf("%w: empty parentheses in filter", ErrInvalid)
+		case 1:
+			return conds[0], nil
+		}
+		return And(conds...), nil
+	case t.paren != 0:
+		return Condition{}, fmt.Errorf("%w: unbalanced %q in filter", ErrInvalid, t.text)
+	case t.op:
+		return Condition{}, fmt.Errorf("%w: unexpected operator %q in filter", ErrInvalid, t.text)
+	}
+	// A value token followed by an operator is a `field op value` term.
+	if p.i+1 < len(p.toks) && p.toks[p.i+1].op {
+		if p.i+2 >= len(p.toks) || p.toks[p.i+2].op || p.toks[p.i+2].paren != 0 {
+			return Condition{}, fmt.Errorf("%w: filter operator %q is missing a value", ErrInvalid, p.toks[p.i+1].text)
+		}
+		op, err := parseOp(p.toks[p.i+1].text)
+		if err != nil {
+			return Condition{}, err
+		}
+		v := p.toks[p.i+2]
+		p.i += 3
+		return Condition{Field: t.text, Op: op, Value: v.text, Quoted: v.quoted}, nil
+	}
+	// Otherwise it's a free-text term.
+	p.i++
+	return Condition{Op: OpHas, Value: t.text}, nil
 }
 
 func parseOp(s string) (Op, error) {
@@ -293,8 +458,12 @@ func parseOp(s string) (Op, error) {
 // token is a lexed unit: a value (bareword or quoted string) or an operator.
 type token struct {
 	text   string
-	op     bool // true for =, !=, :, <=, >=
+	op     bool // true for =, !=, :, <, <=, >, >=
 	quoted bool // true when the value came from a quoted string literal
+	paren  byte // '(' or ')' for a parenthesis, else 0
+	// negates marks a "-" written right before a quoted string or a
+	// parenthesis, which it negates.
+	negates bool
 }
 
 // tokenize splits a filter expression into value and operator tokens, honoring
@@ -322,6 +491,9 @@ func tokenize(s string) ([]token, error) {
 		case '=', ':':
 			toks = append(toks, token{text: string(c), op: true})
 			i++
+		case '(', ')':
+			toks = append(toks, token{text: string(c), paren: c})
+			i++
 		case '!':
 			if i+1 < len(s) && s[i+1] == '=' {
 				toks = append(toks, token{text: "!=", op: true})
@@ -342,7 +514,10 @@ func tokenize(s string) ([]token, error) {
 			for j < len(s) && !isDelim(s[j]) {
 				j++
 			}
-			toks = append(toks, token{text: s[i:j]})
+			// A lone "-" glued to a quoted string or a parenthesis
+			// negates it: -"two words", -(a OR b).
+			glued := s[i:j] == "-" && j < len(s) && (s[j] == '"' || s[j] == '(')
+			toks = append(toks, token{text: s[i:j], negates: glued})
 			i = j
 		}
 	}
@@ -350,7 +525,7 @@ func tokenize(s string) ([]token, error) {
 }
 
 func isDelim(c byte) bool {
-	return c == ' ' || c == '\t' || c == '=' || c == ':' || c == '!' || c == '"' || c == '<' || c == '>'
+	return c == ' ' || c == '\t' || c == '=' || c == ':' || c == '!' || c == '"' || c == '<' || c == '>' || c == '(' || c == ')'
 }
 
 // --- JSON attribute paths -----------------------------------------------------

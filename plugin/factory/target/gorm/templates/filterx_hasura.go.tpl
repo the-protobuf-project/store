@@ -109,7 +109,7 @@ func (e *HasuraEngine[M]) Observe(o Observer) *HasuraEngine[M] {
 func (e *HasuraEngine[M]) Predicate(conds []Condition) (graphql.Predicate, bool, error) {
 	preds := make([]graphql.Predicate, 0, len(conds))
 	for _, c := range conds {
-		if h, ok := e.overrides[c.Field]; ok {
+		if h, ok := e.overrides[c.Field]; ok && !IsComposite(c) {
 			p, err := h(c)
 			if err != nil {
 				return graphql.Predicate{}, false, err
@@ -119,6 +119,14 @@ func (e *HasuraEngine[M]) Predicate(conds []Condition) (graphql.Predicate, bool,
 		}
 		if e.viaReady(c) {
 			continue // List matches it page by page (see Via)
+		}
+		if IsComposite(c) && len(e.overrides) > 0 {
+			p, err := gqlComposite(c, e.condition)
+			if err != nil {
+				return graphql.Predicate{}, false, err
+			}
+			preds = append(preds, p)
+			continue
 		}
 		p, ok, err := gqlConditionOrHint(e.spec, c)
 		if err != nil {
@@ -136,6 +144,42 @@ func (e *HasuraEngine[M]) Predicate(conds []Condition) (graphql.Predicate, bool,
 	default:
 		return graphql.And(preds...), true, nil
 	}
+}
+
+// condition translates one condition, its overrides applying at any depth
+// of OR, AND and NOT.
+func (e *HasuraEngine[M]) condition(c Condition) (graphql.Predicate, error) {
+	if IsComposite(c) {
+		return gqlComposite(c, e.condition)
+	}
+	if h, ok := e.overrides[c.Field]; ok {
+		return h(c)
+	}
+	return gqlCondition(e.spec, c)
+}
+
+// gqlComposite translates an OpOr, OpAnd or OpNot condition, each operand
+// through each.
+func gqlComposite(c Condition, each func(Condition) (graphql.Predicate, error)) (graphql.Predicate, error) {
+	preds := make([]graphql.Predicate, 0, len(c.Any))
+	for _, alt := range c.Any {
+		p, err := each(alt)
+		if err != nil {
+			return graphql.Predicate{}, err
+		}
+		preds = append(preds, p)
+	}
+	if c.Op == OpOr {
+		return graphql.Or(preds...), nil
+	}
+	and := graphql.And(preds...)
+	if len(preds) == 1 {
+		and = preds[0]
+	}
+	if c.Op == OpNot {
+		return graphql.Not(and), nil
+	}
+	return and, nil
 }
 
 // OrderTerms resolves an order_by string into GraphQL order terms via the
@@ -425,7 +469,7 @@ func (e *HasuraEngine[M]) viaReady(c Condition) bool {
 	}
 	var ready func(c Condition) bool
 	ready = func(c Condition) bool {
-		if c.Op == OpOr {
+		if IsComposite(c) {
 			for _, alt := range c.Any {
 				if !ready(alt) {
 					return false
@@ -476,16 +520,8 @@ func (e *HasuraEngine[M]) keep(ctx context.Context, page []M, vias []Condition, 
 // viaPredicate renders c for keep, resolving each value-object term through
 // its lookup over the references page holds.
 func (e *HasuraEngine[M]) viaPredicate(ctx context.Context, page []M, c Condition) (graphql.Predicate, error) {
-	if c.Op == OpOr {
-		preds := make([]graphql.Predicate, 0, len(c.Any))
-		for _, alt := range c.Any {
-			p, err := e.viaPredicate(ctx, page, alt)
-			if err != nil {
-				return graphql.Predicate{}, err
-			}
-			preds = append(preds, p)
-		}
-		return graphql.Or(preds...), nil
+	if IsComposite(c) {
+		return gqlComposite(c, func(alt Condition) (graphql.Predicate, error) { return e.viaPredicate(ctx, page, alt) })
 	}
 	f, ok := e.spec.Fields[c.Field]
 	if !ok || f.Via == nil {
@@ -556,16 +592,8 @@ func columnValues[M any](rows []M, col string) []string {
 
 // gqlCondition translates one spec-listed condition.
 func gqlCondition(spec Spec, c Condition) (graphql.Predicate, error) {
-	if c.Op == OpOr {
-		preds := make([]graphql.Predicate, 0, len(c.Any))
-		for _, alt := range c.Any {
-			p, err := gqlCondition(spec, alt)
-			if err != nil {
-				return graphql.Predicate{}, err
-			}
-			preds = append(preds, p)
-		}
-		return graphql.Or(preds...), nil
+	if IsComposite(c) {
+		return gqlComposite(c, func(alt Condition) (graphql.Predicate, error) { return gqlCondition(spec, alt) })
 	}
 	if c.Field == "" {
 		return gqlSearchPredicate(spec, c)
@@ -836,10 +864,10 @@ func gqlConditionOrHint(spec Spec, c Condition) (graphql.Predicate, bool, error)
 	return p, err == nil, err
 }
 
-// reachesVia reports whether c, or any of its alternatives, names a
+// reachesVia reports whether c, or any of its operands, names a
 // value-object field.
 func reachesVia(spec Spec, c Condition) bool {
-	if c.Op == OpOr {
+	if IsComposite(c) {
 		for _, alt := range c.Any {
 			if reachesVia(spec, alt) {
 				return true

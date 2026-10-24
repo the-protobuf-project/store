@@ -479,7 +479,18 @@ validate **before** any query runs, `:` does a case-insensitive contains with
 ILIKE escaping, bareword terms (`filter: "beach resort"`) match the `search`
 columns, resource-reference fields compare the bare id segment
 (`operator = "operators/op1"` and `= "op1"` are equivalent), and results
-paginate limit+1 with an opaque page token. Invalid filter/order input is
+paginate limit+1 with an opaque page token.
+
+The grammar is AIP-160's boolean one: terms separated by whitespace or `AND`,
+`a OR b` (which binds tighter than `AND`, so `a b OR c` is `a AND (b OR c)`),
+`NOT a` or `-a` (also `-"two words"`, `-(a OR b)`), and parentheses. `OR` and
+`NOT` are keywords only in capitals and unquoted. They parse into
+`filterx.Or`, `filterx.And` and `filterx.Not` conditions, which every engine
+(SQL, Hasura, OpenSearch) renders, overrides included at any depth. `NOT`
+holds where its operand cannot be decided, too: on SQL `NOT coalesce(..., false)`,
+so `NOT attributes.badge = "gold"` matches a row with no badge, as a
+`must_not` does on OpenSearch. (Hasura's `_not` leaves NULL rows out, as
+PostgreSQL's plain `NOT` does.) Invalid filter/order input is
 rejected with `filterx.ErrInvalid` — translate it to your invalid-argument
 error (e.g. gRPC `InvalidArgument`) with `errors.Is`.
 
@@ -550,8 +561,9 @@ one as a string. `(store.v1.query).json_keys` declares hot paths with a type
 (`{path: "seats", type: JSON_KEY_TYPE_INT64}`): a declared path validates its
 value, compares as its kind, and on OpenSearch is indexed typed under
 `<column>_typed`. Path segments may only hold letters, digits, `_` and `-`, so
-a path never carries syntax into a query. The filter grammar has no `OR`;
-alternatives are typed conditions (`filterx.Or(...)` in `ListInput.Where` /
+a path never carries syntax into a query. Alternatives can be written in the
+filter (`attributes.badge = "gold" OR attributes.seats = 1`) or built as
+typed conditions (`filterx.Or(...)` in `ListInput.Where` /
 `SearchInput.Where`).
 
 **Tags on Hasura.** A `repeated string` (`text[]`) field filters with `:`
@@ -1017,12 +1029,27 @@ page, next, err := ix.Search(ctx, c, repox.SearchInput{Range: ..., Filter: ..., 
 m, found, err := ix.Get(ctx, c, &pb.RoomDay{Room: r, Day: d}, mask)
 n, err := ix.Count(ctx, c, in)
 facets, err := ix.Facets(ctx, c, in, []string{"kinds", "occupancy", "attributes.seats"}, 20)
-for m, err := range ix.Iterate(ctx, c, in) { ... }       // PIT + search_after over every match
+for m, err := range ix.Iterate(ctx, c, in) { ... }       // PIT + search_after over every match; PIT deleted however the loop ends
 res, err := ix.Reindex(ctx, c, ix.Source(ctx, pgConn), osx.ReindexOptions{})
 ```
 
-Search pages read one point in time (`PageKeepAlive`, default 1m; negative
-pages the live index) and continue with `search_after`; the key breaks ties.
+Search pages continue with `search_after` after the last hit's sort values;
+the key breaks ties. **No first page opens a point in time**, so no rate of
+searches can exhaust the cluster's `search.max_open_pit_context` (300 by
+default). By default (`PageKeepAlive` zero) no page does: every page is a
+plain search of the live index, which is keyset paging with the Postgres
+search's guarantees: a document whose sort values do not change between pages
+comes back exactly once, while one written, deleted or re-sorted across the
+page boundary in between may be missed or seen twice. A positive
+`PageKeepAlive` reads pages 2 and later through one point in time: following
+the first page's token opens it, later tokens carry it, the last page deletes
+it. A query holds at most one, but one abandoned after page 2 holds it until
+`PageKeepAlive` runs out, so keep it short, and the snapshot starts at page 2,
+not page 1. When the cluster refuses a point in time for its limit, `Search`
+(page 2+ with `PageKeepAlive`), `Iterate`, an undeclared-path facet and
+`Reindex` fail with `osx.ErrPointInTimeLimit`, which wraps OpenSearch's 429
+and is not `repox.ErrInvalidArgument`, so a caller can fall back or retry. A
+token whose point in time expired is `repox.ErrInvalidArgument`.
 The range is a `date_range` `contains` query; adjacent free spans are merged
 before indexing, as a multirange merges them. Facets are `terms` aggregations;
 an undeclared JSON path (which `flat_object` cannot aggregate) is counted from

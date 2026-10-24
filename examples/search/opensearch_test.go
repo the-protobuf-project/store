@@ -5,18 +5,23 @@ package search_test
 
 // opensearch_test.go runs the RoomDay projection's OpenSearch copy against
 // the cluster STORE_TEST_OPENSEARCH_URL names (a throwaway one), fed by the
-// Postgres repositories: the same searches answer alike on both, pages read
-// one point in time, facets come from terms aggregations, stale changes lose
-// to external versions, and Reindex rebuilds the copy behind the alias.
+// Postgres repositories: the same searches answer alike on both, pages
+// continue with search_after (on the live index, or through one point in
+// time opened for the second page), facets come from terms aggregations,
+// stale changes lose to external versions, and Reindex rebuilds the copy
+// behind the alias.
 //
 //	STORE_TEST_OPENSEARCH_URL=http://localhost:19201 STORE_TEST_POSTGRES_DSN=... go test ./search/
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -121,8 +126,9 @@ func TestOpenSearchPagesFacetsGet(t *testing.T) {
 	ix, c := testIndex(t)
 	f := newFixture(t, freshDB(t), ix.Indexer(c, osx.IndexerOptions{Refresh: "true"}))
 
-	// Pages of 4 over floor desc, day, through one point in time: a write
-	// after the first page does not show in the next.
+	// Pages of 4 over floor desc, day, on the live index: a write after the
+	// first page sorting after it shows in a later one, and no row comes
+	// twice. No point in time is opened.
 	in := repox.SearchInput{OrderBy: "floor desc, day", PageSize: 4}
 	var all []*searchdemov1.RoomDay
 	for page := 0; ; page++ {
@@ -139,18 +145,45 @@ func TestOpenSearchPagesFacetsGet(t *testing.T) {
 		}
 		in.PageToken = next
 	}
-	if len(all) != 9 || all[0].GetFloor() != 3 || all[8].GetFloor() != 1 {
-		t.Errorf("paged %d rows; first floor %d", len(all), all[0].GetFloor())
+	if len(all) != 12 || all[0].GetFloor() != 3 || all[11].GetFloor() != 0 || len(names(all)) != 4 {
+		t.Errorf("paged %d rows over %d rooms; first floor %d", len(all), len(names(all)), all[0].GetFloor())
 	}
-	if n, _ := ix.Count(ctx, c, repox.SearchInput{}); n != 12 {
-		t.Errorf("Count after the late room = %d, want 12", n)
+	if n := openPITs(t); n != 0 {
+		t.Errorf("live paging left %d points in time open", n)
 	}
-	// Without a point in time pages see the live index.
-	live := *ix
-	live.PageKeepAlive = -1
-	rows, next, err := live.Search(ctx, c, repox.SearchInput{OrderBy: "floor", PageSize: 5})
-	if err != nil || len(rows) != 5 || next == "" {
-		t.Fatalf("live page = %d rows, next %q, %v", len(rows), next, err)
+
+	// With PageKeepAlive, the pages after the first read one point in time,
+	// opened for page 2: a write after it does not show in page 3, and the
+	// last page deletes it.
+	snap := *ix
+	snap.PageKeepAlive = 30 * time.Second
+	in = repox.SearchInput{OrderBy: "floor desc, day", PageSize: 4}
+	all = nil
+	for page := 0; ; page++ {
+		rows, next, err := snap.Search(ctx, c, in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		all = append(all, rows...)
+		if want := min(page, 1); next != "" && openPITs(t) != want {
+			t.Errorf("after page %d: %d points in time open, want %d", page+1, openPITs(t), want)
+		}
+		if page == 1 {
+			mustRoom(t, f.repos, "Later room", -1, nil, map[string]any{})
+		}
+		if next == "" {
+			break
+		}
+		in.PageToken = next
+	}
+	if len(all) != 12 || all[11].GetFloor() != 0 {
+		t.Errorf("snapshot paged %d rows; last floor %d", len(all), all[len(all)-1].GetFloor())
+	}
+	if n := openPITs(t); n != 0 {
+		t.Errorf("snapshot paging left %d points in time open", n)
+	}
+	if n, _ := ix.Count(ctx, c, repox.SearchInput{}); n != 15 {
+		t.Errorf("Count after the late rooms = %d, want 15", n)
 	}
 
 	facets, err := ix.Facets(ctx, c, repox.SearchInput{Filter: "floor > 0"}, []string{"kinds", "occupancy", "attributes.badge", "attributes.seats", "day"}, 0)
@@ -275,4 +308,21 @@ func TestOpenSearchVersionsAndReindex(t *testing.T) {
 	if got := osSearch(t, ix, c, repox.SearchInput{Filter: `room = "` + f.a.GetName() + `"`}); len(got) != 3 {
 		t.Errorf("A's days after Reindex = %d, want 3", len(got))
 	}
+}
+
+// openPITs is how many points in time the cluster holds open.
+func openPITs(t *testing.T) int {
+	t.Helper()
+	resp, err := http.Get(strings.TrimRight(os.Getenv("STORE_TEST_OPENSEARCH_URL"), "/") + "/_search/point_in_time/_all")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var out struct {
+		Pits []json.RawMessage `json:"pits"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	return len(out.Pits)
 }

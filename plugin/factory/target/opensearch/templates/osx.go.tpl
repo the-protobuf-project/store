@@ -14,8 +14,9 @@
 // Searches take the same repox.SearchInput as the Postgres search: an
 // AIP-160 filter translated by the filterx OpenSearch engine (JSON attribute
 // paths included), the time window as a date_range "contains" query, an
-// AIP-132 order_by, and page tokens carrying a point in time and the
-// search_after values of the page's last hit.
+// AIP-132 order_by, and page tokens carrying the search_after values of the
+// page's last hit (and, when Index.PageKeepAlive asks for one, a point in
+// time).
 package osx
 
 import (
@@ -61,10 +62,41 @@ type Index[T proto.Message] struct {
 	// Projection is the Postgres projection the documents copy.
 	Projection *repox.Projection[T]
 	Spec       IndexSpec
-	// PageKeepAlive is how long a search's point in time lives between its
-	// pages: 0 is one minute; a negative value pages the live index with
-	// search_after alone, so pages may see writes made between them.
+	// PageKeepAlive, when positive, reads a search's second and later pages
+	// through one point in time, kept alive this long between them. The first
+	// page never opens one: following its token opens it, the later tokens
+	// carry it, and reading the last page deletes it, so a query holds at most
+	// one, and only while it is paged past its first page. A query abandoned
+	// part way holds its point in time until it expires, so keep this short.
+	//
+	// Zero or negative (the default) never opens a point in time: every page
+	// is a plain search of the live index continuing with search_after after
+	// the last hit's sort values, the key breaking ties. That is keyset
+	// paging, as on Postgres: a document whose sort values do not change is
+	// returned exactly once, but one written, deleted or moved across the page
+	// boundary between two pages may be missed or seen twice.
 	PageKeepAlive time.Duration
+}
+
+// ErrPointInTimeLimit is what a search, Iterate, an undeclared-path facet
+// or Reindex returns, wrapping OpenSearch's own error, when the cluster
+// refuses another point in time because search.max_open_pit_context (300 by
+// default) are already open. It is not a repox.ErrInvalidArgument: the
+// request is fine and the same one can succeed once points in time expire,
+// so a caller can retry it or serve it from Postgres.
+var ErrPointInTimeLimit = errors.New("osx: OpenSearch refused to open a point in time: search.max_open_pit_context reached")
+
+// pitErr is err as ErrPointInTimeLimit when OpenSearch refused a point in
+// time for its limit, and err otherwise.
+func pitErr(err error) error {
+	var oe *opensearch.Error
+	if err == nil || !errors.As(err, &oe) {
+		return err
+	}
+	if bytes.Contains(oe.Body, []byte("max_open_pit_context")) || strings.Contains(oe.Reason, "max_open_pit_context") {
+		return fmt.Errorf("%w: %w", ErrPointInTimeLimit, err)
+	}
+	return err
 }
 
 // NewIndex returns the index copying p.
@@ -677,7 +709,7 @@ func (ix *Index[T]) Reindex(ctx context.Context, c *opensearch.Client, source fu
 	now := time.Now().UnixMicro()
 	for hit, err := range c.Iterate(ctx, &opensearch.PageOptions{Source: false, Size: 5000}, res.Index) {
 		if err != nil {
-			return res, err
+			return res, pitErr(err)
 		}
 		if hit.ID == nil {
 			continue
@@ -753,8 +785,9 @@ func (ix *Index[T]) query(in repox.SearchInput) (map[string]any, error) {
 	return map[string]any{"bool": map[string]any{"filter": []any{q, rq}}}, nil
 }
 
-// pageToken is what a search page token carries: the point in time the
-// pages read, and the sort values of the last hit returned.
+// pageToken is what a search page token carries: the sort values of the
+// last hit returned and, when the pages read a point in time
+// (Index.PageKeepAlive), its id.
 type pageToken struct {
 	PIT   string            `json:"p,omitempty"`
 	After []json.RawMessage `json:"a"`
@@ -775,9 +808,11 @@ type searchResponse struct {
 // Search returns one page of documents matching in -- the range as a
 // date_range contains query, the filter through the filterx OpenSearch
 // engine -- in in.OrderBy order (the key breaking ties), and the next page's
-// token. Pages read one point in time (see PageKeepAlive) and continue with
-// search_after; a token outliving its point in time fails with
-// repox.ErrInvalidArgument.
+// token. Pages continue with search_after; the first page is always a plain
+// search, and the later ones read the live index or, with a positive
+// PageKeepAlive, one point in time (see PageKeepAlive for the trade-off). A
+// token outliving its point in time fails with repox.ErrInvalidArgument; a
+// cluster out of points in time fails with ErrPointInTimeLimit.
 func (ix *Index[T]) Search(ctx context.Context, c *opensearch.Client, in repox.SearchInput) ([]T, string, error) {
 	if err := repox.CheckReadMask(ix.Projection.New(), in.ReadMask); err != nil {
 		return nil, "", err
@@ -793,7 +828,7 @@ func (ix *Index[T]) Search(ctx context.Context, c *opensearch.Client, in repox.S
 	var tok pageToken
 	if in.PageToken != "" {
 		raw, err := base64.RawURLEncoding.DecodeString(in.PageToken)
-		if err != nil || json.Unmarshal(raw, &tok) != nil {
+		if err != nil || json.Unmarshal(raw, &tok) != nil || tok.After == nil {
 			return nil, "", fmt.Errorf("%w: malformed page token", repox.ErrInvalidArgument)
 		}
 	}
@@ -805,44 +840,45 @@ func (ix *Index[T]) Search(ctx context.Context, c *opensearch.Client, in repox.S
 	if src := ix.sourceFilter(in.ReadMask); src != nil {
 		body["_source"] = src
 	}
-	keepAlive := ix.PageKeepAlive
-	if keepAlive == 0 {
-		keepAlive = time.Minute
-	}
 	path := "/" + url.PathEscape(ix.Spec.Alias) + "/_search"
-	opened := false
-	if keepAlive > 0 {
-		if tok.PIT == "" {
-			if tok.PIT, err = openPIT(ctx, c, ix.Spec.Alias, keepAlive); err != nil {
-				return nil, "", err
+	// Only a page after the first reads a point in time: a first page, which
+	// most searches never go past, holds nothing open. A token minted
+	// without one (or before PageKeepAlive changed) opens it here.
+	pit, opened := "", false
+	if ix.PageKeepAlive > 0 && in.PageToken != "" {
+		if pit = tok.PIT; pit == "" {
+			if pit, err = openPIT(ctx, c, ix.Spec.Alias, ix.PageKeepAlive); err != nil {
+				return nil, "", pitErr(err)
 			}
 			opened = true
 		}
-		body["pit"] = map[string]any{"id": tok.PIT, "keep_alive": keepAliveText(keepAlive)}
+		body["pit"] = map[string]any{"id": pit, "keep_alive": keepAliveText(ix.PageKeepAlive)}
 		path = "/_search"
 	}
+	// keep is set once the point in time is handed on in the next token;
+	// every other way out of here deletes it.
+	keep := false
+	defer func() {
+		if pit != "" && !keep {
+			closePIT(ctx, c, pit)
+		}
+	}()
 	var res searchResponse
 	if err := do(ctx, c, http.MethodPost, path, nil, mustJSON(body), "application/json", &res); err != nil {
 		var oe *opensearch.Error
-		if !opened && tok.PIT != "" && errors.As(err, &oe) && (oe.StatusCode == http.StatusNotFound || strings.Contains(string(oe.Body), "search_context_missing")) {
+		if pit != "" && !opened && errors.As(err, &oe) && (oe.StatusCode == http.StatusNotFound || strings.Contains(string(oe.Body), "search_context_missing")) {
+			pit = "" // gone already
 			return nil, "", fmt.Errorf("%w: the page token expired; search again", repox.ErrInvalidArgument)
 		}
-		return nil, "", err
+		return nil, "", pitErr(err)
+	}
+	if pit != "" && res.PitID != "" {
+		pit = res.PitID
 	}
 	hits := res.Hits.Hits
-	next := ""
-	if len(hits) > limit {
+	more := len(hits) > limit
+	if more {
 		hits = hits[:limit]
-		nt := pageToken{After: hits[len(hits)-1].Sort}
-		if keepAlive > 0 {
-			nt.PIT = tok.PIT
-			if res.PitID != "" {
-				nt.PIT = res.PitID
-			}
-		}
-		next = base64.RawURLEncoding.EncodeToString(mustJSON(nt))
-	} else if keepAlive > 0 {
-		closePIT(ctx, c, tok.PIT)
 	}
 	out := make([]T, 0, len(hits))
 	for _, h := range hits {
@@ -852,6 +888,12 @@ func (ix *Index[T]) Search(ctx context.Context, c *opensearch.Client, in repox.S
 		}
 		ix.Projection.Narrow(m, in.ReadMask)
 		out = append(out, m)
+	}
+	next := ""
+	if more {
+		nt := pageToken{PIT: pit, After: hits[len(hits)-1].Sort}
+		next = base64.RawURLEncoding.EncodeToString(mustJSON(nt))
+		keep = pit != ""
 	}
 	return out, next, nil
 }
@@ -872,7 +914,9 @@ func (ix *Index[T]) sourceFilter(mask []string) any {
 }
 
 // Iterate yields every document matching in (its page fields ignored), in
-// key order, through one point in time and search_after.
+// key order, through one point in time and search_after. The point in time
+// is deleted when the loop ends, however it ends; a cluster out of them fails
+// with ErrPointInTimeLimit.
 func (ix *Index[T]) Iterate(ctx context.Context, c *opensearch.Client, in repox.SearchInput) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
 		var zero T
@@ -886,9 +930,11 @@ func (ix *Index[T]) Iterate(ctx context.Context, c *opensearch.Client, in repox.
 			yield(zero, repox.MapFilterxErr(err))
 			return
 		}
+		// c.Iterate deletes its point in time however the loop ends: done,
+		// failed, or stopped early by the caller.
 		for hit, err := range c.Iterate(ctx, &opensearch.PageOptions{Query: q, Sort: sort, Size: 1000}, ix.Spec.Alias) {
 			if err != nil {
-				yield(zero, err)
+				yield(zero, pitErr(err))
 				return
 			}
 			var src []byte
@@ -1025,7 +1071,7 @@ func (ix *Index[T]) scanFacet(ctx context.Context, c *opensearch.Client, q map[s
 	read := 0
 	for hit, err := range c.Iterate(ctx, &opensearch.PageOptions{Query: query, Source: []string{p.Field.Column}, Size: 1000}, ix.Spec.Alias) {
 		if err != nil {
-			return nil, err
+			return nil, pitErr(err)
 		}
 		if read++; read > FacetScanLimit {
 			return nil, fmt.Errorf("%w: more than %d documents to scan for a facet on %q; declare it in json_keys", repox.ErrInvalidArgument, FacetScanLimit, field)
