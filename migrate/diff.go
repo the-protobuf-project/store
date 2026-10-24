@@ -129,7 +129,7 @@ func (m *migrator) check(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(tmp)
+	defer func() { _ = os.RemoveAll(tmp) }()
 	if err := os.CopyFS(tmp, os.DirFS(m.cfg.Dir)); err != nil {
 		return err
 	}
@@ -182,14 +182,14 @@ func (m *migrator) validate(ctx context.Context, into string) error {
 		}
 		stmts := validateStatements(pending, history)
 		if len(stmts) == 0 {
-			fmt.Fprintln(m.out, "every foreign key is validated already: nothing to write")
+			_, _ = fmt.Fprintln(m.out, "every foreign key is validated already: nothing to write")
 			return nil
 		}
 		file := now().UTC().Format("20060102150405") + "_validate_foreign_keys.sql"
 		if err := m.write(filepath.Join(into, file), strings.Join(stmts, "\n")); err != nil {
 			return err
 		}
-		fmt.Fprintf(m.out, "wrote %s (%d foreign keys)\n", file, len(stmts))
+		_, _ = fmt.Fprintf(m.out, "wrote %s (%d foreign keys)\n", file, len(stmts))
 		return m.hash(ctx, into)
 	})
 }
