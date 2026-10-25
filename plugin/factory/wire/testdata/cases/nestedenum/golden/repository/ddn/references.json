@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "mutations": [
+    {
+      "field": "deleteHooksV1DeliveriesById",
+      "kind": "delete",
+      "resourceType": "hooks.v1/Delivery",
+      "pattern": "webhooks/{webhook}/deliveries/{delivery}",
+      "keyArgument": "keyId",
+      "byIdQuery": "hooksV1DeliveriesById"
+    },
+    {
+      "field": "deleteHooksV1WebhooksById",
+      "kind": "delete",
+      "resourceType": "hooks.v1/Webhook",
+      "pattern": "webhooks/{webhook}",
+      "keyArgument": "keyId",
+      "byIdQuery": "hooksV1WebhooksById"
+    }
+  ]
+}

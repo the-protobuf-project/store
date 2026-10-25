@@ -3,7 +3,7 @@ module github.com/the-protobuf-project/store
 go 1.26.4
 
 require (
-	github.com/the-protobuf-project/protokit v1.3.4
+	github.com/the-protobuf-project/protokit v1.3.5
 	google.golang.org/genproto/googleapis/api v0.0.0-20261019180522-ce908d29299b
 	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.12

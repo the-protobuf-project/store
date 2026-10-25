@@ -23,6 +23,7 @@ import (
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
 	"github.com/the-protobuf-project/store/plugin/factory/facets"
+	"github.com/the-protobuf-project/store/plugin/factory/target/types"
 	"github.com/the-protobuf-project/store/plugin/pb/storepbv1"
 )
 
@@ -119,7 +120,7 @@ func buildFilterTable(db *schema.Database, s *schema.Schema, t *schema.Table, fx
 		if filterable {
 			ff := filterFieldView{Field: field, Column: c.Name, Kind: kind}
 			if kind == "KindEnum" && c.Enum != nil {
-				ff.EnumPrefix = naming.ScreamingSnake(c.Enum.LocalName) + "_"
+				ff.EnumPrefix = types.EnumValuePrefix(c)
 			}
 			if kind == "KindEnum" && c.Enum == nil && c.Source.Enum() != nil {
 				// A projection stores an enum as its value name.
@@ -205,7 +206,7 @@ func buildFilterTable(db *schema.Database, s *schema.Schema, t *schema.Table, fx
 				ViaTable: fmt.Sprintf("%q.%q", ts.Name, tgt.Name), ViaKey: key, ViaColumn: vc.Name,
 			}
 			if kind == "KindEnum" && vc.Enum != nil {
-				ff.EnumPrefix = naming.ScreamingSnake(vc.Enum.LocalName) + "_"
+				ff.EnumPrefix = types.EnumValuePrefix(vc)
 			}
 			v.Fields = append(v.Fields, ff)
 		}

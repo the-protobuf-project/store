@@ -18,6 +18,7 @@ import (
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
 	"github.com/the-protobuf-project/store/plugin/factory/target/dtzone"
+	"github.com/the-protobuf-project/store/plugin/factory/target/types"
 )
 
 // gqlResourceView is the graphql-adapter view of one resource.
@@ -466,7 +467,7 @@ func gqlColumnFragments(pb *pbIndex, db *schema.Database, resources map[*schema.
 		}
 		// Stored OUTPUT_ONLY columns (e.g. a state enum) still render out.
 		if c.Type == schema.TypeEnum && c.Enum != nil {
-			prefix := naming.ScreamingSnake(c.Enum.LocalName) + "_"
+			prefix := types.EnumValuePrefix(c)
 			pbT, ok := pbEnumType(pb, c)
 			if !ok {
 				continue
@@ -639,7 +640,7 @@ func gqlScalarFragments(pb *pbIndex, c *schema.Column, rowField string) (inputs,
 			return nil, nil, nil, needs, false
 		}
 		needs.Enum = true
-		prefix := naming.ScreamingSnake(c.Enum.LocalName) + "_"
+		prefix := types.EnumValuePrefix(c)
 		pbT, okT := pbEnumType(pb, c)
 		if !okT {
 			return nil, nil, nil, needs, false

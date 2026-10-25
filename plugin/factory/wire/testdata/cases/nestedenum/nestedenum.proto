@@ -1,0 +1,93 @@
+syntax = "proto3";
+
+package hooks.v1;
+
+import "entity/v1/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "example.com/test/gen;hooksv1";
+option java_multiple_files = true;
+option java_outer_classname = "NestedenumProto";
+option java_package = "com.hooks.v1";
+
+// A webhook subscription. Its nested State shares the simple name "State" with
+// Delivery.State in the one schema both land in, so every target names them
+// apart by their enclosing message: WebhookState / webhook_state and
+// DeliveryState / delivery_state. Their values keep the proto's own "STATE_"
+// prefix stripped, and the filters and the GraphQL converters strip "STATE_",
+// not "WEBHOOK_STATE_".
+message Webhook {
+  option (google.api.resource) = {
+    type: "hooks.v1/Webhook"
+    pattern: "webhooks/{webhook}"
+    singular: "webhook"
+    plural: "webhooks"
+  };
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
+
+  // State of a webhook.
+  enum State {
+    // Not set.
+    STATE_UNSPECIFIED = 0;
+    // Deliveries are sent.
+    STATE_ACTIVE = 1;
+    // Deliveries are held.
+    STATE_PAUSED = 2;
+  }
+
+  // The webhook's resource name.
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  // Where deliveries are posted.
+  string uri = 2 [(google.api.field_behavior) = REQUIRED];
+
+  // Whether the webhook is sending.
+  State state = 3 [(google.api.field_behavior) = REQUIRED];
+
+  // Optimistic-concurrency token.
+  string etag = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // When the webhook was created.
+  google.protobuf.Timestamp create_time = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// One delivery attempt of a webhook, with a State of its own.
+message Delivery {
+  option (google.api.resource) = {
+    type: "hooks.v1/Delivery"
+    pattern: "webhooks/{webhook}/deliveries/{delivery}"
+    singular: "delivery"
+    plural: "deliveries"
+  };
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
+
+  // State of a delivery.
+  enum State {
+    // Not set.
+    STATE_UNSPECIFIED = 0;
+    // Not yet attempted.
+    STATE_PENDING = 1;
+    // The receiver accepted it.
+    STATE_SUCCEEDED = 2;
+    // Every attempt failed.
+    STATE_FAILED = 3;
+  }
+
+  // The delivery's resource name.
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  // Server-owned progress of the delivery.
+  State state = 2 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // The webhook's state when the delivery was made: the same enum as
+  // Webhook.state, so it shares WebhookState rather than gaining a third type.
+  Webhook.State webhook_state = 3 [(google.api.field_behavior) = OPTIONAL];
+
+  // Optimistic-concurrency token.
+  string etag = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // When the delivery was created.
+  google.protobuf.Timestamp create_time = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
