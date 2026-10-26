@@ -25,6 +25,10 @@ func apply{{.Model}}Mask(merged, in *{{.PB}}, paths []string) {
 	if repox.GroupTouched(paths, "{{.Path}}") {
 		merged.{{.GoField}} = in.Get{{.GoField}}()
 	}
+	{{- else if .Presence}}
+	if repox.InMask(paths, "{{.Path}}") {
+		merged.{{.GoField}} = in.{{.GoField}}
+	}
 	{{- else}}
 	if repox.InMask(paths, "{{.Path}}") {
 		merged.{{.GoField}} = in.Get{{.GoField}}()

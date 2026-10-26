@@ -1,0 +1,4 @@
+# Documents: every vocab.v1 message is stored whole, as JSONB, wherever a
+# field holds one -- no table for Stay, Guest or Address.
+documents:
+  - match: "vocab.v1.**"

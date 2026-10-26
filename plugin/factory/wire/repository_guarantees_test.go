@@ -196,8 +196,14 @@ func TestNestedResourcesAreKeyedByName(t *testing.T) {
 	if body, _ := funcBody(gormSrc, "func (r *GormPageRepository) linkParents("); !strings.Contains(body, "repox.RowKey(") {
 		t.Error("GormPageRepository does not resolve its book by name")
 	}
-	if body, _ := funcBody(gqlSrc, "func (r *GraphQLPageRepository) linkParents("); !strings.Contains(body, "booksql.Name.Eq(n)") {
+	// The book's lookup lives in its schema's parent file, the one file that
+	// imports the book's client package.
+	parentSrc := readGolden(t, dir, "graphql_parent_catalog.go")
+	if body, _ := funcBody(gqlSrc, "func (r *GraphQLPageRepository) linkParents("); !strings.Contains(body, "catalogBooksKey(ctx, r.Svc, n)") {
 		t.Error("GraphQLPageRepository does not resolve its book by name")
+	}
+	if body, _ := funcBody(parentSrc, "func catalogBooksKey("); !strings.Contains(body, "booksql.Name.Eq(name)") {
+		t.Error("catalogBooksKey does not find the book by its name")
 	}
 	if body, _ := funcBody(gqlSrc, "func (r *GraphQLPageRepository) List("); !strings.Contains(body, "pagesql.BookId.In(") {
 		t.Error("GraphQLPageRepository.List does not scope by the book rows found by name")

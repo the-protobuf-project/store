@@ -8,6 +8,8 @@ package prisma
 // and the name-deduplication used to keep relation fields from colliding.
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"strings"
 
 	"github.com/the-protobuf-project/protokit/naming"
@@ -24,8 +26,9 @@ func scalarFieldName(col *schema.Column) string {
 
 // fieldDecl renders one column declaration: name, type, and attributes. dsName is
 // the Prisma datasource block name, used to prefix native-type attributes
-// (@<dsName>.Timestamptz(6)).
-func fieldDecl(col *schema.Column, provider types.Provider, dsName string, typeOf types.TypeOf) string {
+// (@<dsName>.Timestamptz(6)); names names the column's primary key or unique
+// constraint where Prisma's default would not do (see namer).
+func fieldDecl(col *schema.Column, provider types.Provider, dsName string, typeOf types.TypeOf, names namer) string {
 	var b strings.Builder
 	b.WriteString(scalarFieldName(col))
 	b.WriteByte(' ')
@@ -43,9 +46,15 @@ func fieldDecl(col *schema.Column, provider types.Provider, dsName string, typeO
 	}
 	if col.PrimaryKey {
 		b.WriteString(" @id")
+		if name, ok := names.name(nil, "_pkey"); ok {
+			b.WriteString(`(map: "` + name + `")`)
+		}
 	}
 	if col.Unique {
 		b.WriteString(" @unique")
+		if name, ok := names.name([]string{col.Name}, "_key"); ok {
+			b.WriteString(`(map: "` + name + `")`)
+		}
 	}
 	switch {
 	case col.Generated != "":
@@ -127,4 +136,43 @@ func commentOr(comment, fallback string) string {
 		return comment
 	}
 	return fallback
+}
+
+// maxConstraintName is Postgres's identifier limit, which Prisma enforces on
+// every name it is given.
+const maxConstraintName = 63
+
+// namer names one table's constraints. Prisma derives each name from the table
+// alone -- <table>_pkey, <table>_<cols>_key, _idx, _fkey -- requires primary
+// keys, indexes and unique constraints to be unique across the database, and
+// cuts a default name at 63 bytes. Two cases need a name of their own:
+//
+//   - prefix is set: another schema has a table of the same name, so the name
+//     is qualified by the schema (constraintPrefix);
+//   - the default would be cut: two long names sharing their first 63 bytes
+//     would become one, so an over-long name is shortened with a hash of the
+//     whole instead.
+//
+// Every other constraint keeps Prisma's default, so a schema with short,
+// distinct table names generates exactly what it did.
+type namer struct {
+	table, prefix string
+}
+
+// name returns the name of the constraint on cols with suffix, and whether it
+// must be given explicitly (map:).
+func (n namer) name(cols []string, suffix string) (string, bool) {
+	base := n.table
+	if n.prefix != "" {
+		base = n.prefix
+	}
+	if len(cols) > 0 {
+		base += "_" + strings.Join(cols, "_")
+	}
+	if len(base)+len(suffix) <= maxConstraintName {
+		return base + suffix, n.prefix != ""
+	}
+	sum := sha1.Sum([]byte(base + suffix))
+	tag := "_" + hex.EncodeToString(sum[:])[:8]
+	return base[:maxConstraintName-len(tag)-len(suffix)] + tag + suffix, true
 }

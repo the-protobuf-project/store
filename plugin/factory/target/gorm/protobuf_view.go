@@ -154,6 +154,8 @@ type convModel struct {
 // repeated-enum ↔ comma-joined-names codec.
 type helperNeeds struct {
 	Ptr, Ts, Date, Tod, Dur, JSON    bool
+	Doc                              bool // a document column <-> its message, as protojson
+	Dec                              bool // google.type.Decimal <-> NUMERIC, as its decimal string
 	DT                               bool // google.type.DateTime <-> TIMESTAMPTZ
 	Interval                         bool // google.type.Interval <-> TEXT "start/end"
 	DateVal, TodVal, DurVal, EnumCSV bool
@@ -167,7 +169,7 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 	emittedEnums := map[string]string{} // enum ProtoName -> model LocalName
 
 	var enums []convEnum
-	for _, e := range s.Enums {
+	for _, e := range schemaEnums(s) {
 		pbEnum := idx.enums[protoreflect.FullName(e.ProtoName)]
 		if pbEnum == nil {
 			continue
@@ -404,6 +406,23 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 				}
 				continue
 			case schema.TypeJSON:
+				if col.Document && f.Message != nil {
+					// A document: the message whole, as its JSON form; an
+					// array of them for a repeated field.
+					needs.Doc = true
+					imports.add("google.golang.org/protobuf/encoding/protojson")
+					imports.add("google.golang.org/protobuf/proto")
+					imports.addStd("encoding/json")
+					pbType := imports.add(string(f.Message.GoIdent.GoImportPath)) + "." + f.Message.GoIdent.GoName
+					if f.Desc.IsList() {
+						cm.FromLines = append(cm.FromLines, mField+" = docsToJSON("+getter+")")
+						cm.ToLines = append(cm.ToLines, assignPB("jsonToDocs["+pbType+"]("+mField+")", "nil")...)
+					} else {
+						cm.FromLines = append(cm.FromLines, mField+" = docToJSON("+getter+")")
+						cm.ToLines = append(cm.ToLines, assignPB("jsonToDoc["+pbType+"]("+mField+")", "nil")...)
+					}
+					continue
+				}
 				if fullNameOf(f) != "google.protobuf.Struct" {
 					toSkips, fromSkips = skipBoth(toSkips, fromSkips, col)
 					continue
@@ -439,7 +458,24 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 					cm.ToLines = append(cm.ToLines, assignPB("goToInterval("+mField+")", "nil")...)
 				}
 				continue
-			case schema.TypeText, schema.TypeDecimal, schema.TypeLatLng:
+			case schema.TypeDecimal:
+				// A google.type.Decimal is its decimal string, stored in the
+				// NUMERIC column as written: no float in between to round it.
+				if fullNameOf(f) != "google.type.Decimal" {
+					toSkips, fromSkips = skipBoth(toSkips, fromSkips, col)
+					continue
+				}
+				needs.Dec = true
+				imports.add("google.golang.org/genproto/googleapis/type/decimal")
+				if goType(col, typeOf) == "*string" {
+					cm.FromLines = append(cm.FromLines, mField+" = decToGo("+getter+")")
+					cm.ToLines = append(cm.ToLines, assignPB("goToDec("+mField+")", "nil")...)
+				} else {
+					cm.FromLines = append(cm.FromLines, mField+" = "+getter+".GetValue()")
+					cm.ToLines = append(cm.ToLines, assignPB("goValToDec("+mField+")", "nil")...)
+				}
+				continue
+			case schema.TypeText, schema.TypeLatLng:
 				toSkips, fromSkips = skipBoth(toSkips, fromSkips, col)
 				continue
 			}
@@ -668,13 +704,13 @@ func skipBoth(to, from []string, col *schema.Column) ([]string, []string) {
 }
 
 // matchEnumValue pairs a protokit enum value with its protogen counterpart by
-// recomputing the exact stored MapName protokit derives (the enum-name prefix
-// stripped, SCREAMING_SNAKE) — suffix heuristics would mispair values that are
+// recomputing the exact stored MapName protokit derives (naming.EnumLabel: the
+// enum-name prefix stripped, SCREAMING_SNAKE, fitted to 63 bytes) — suffix heuristics would mispair values that are
 // suffixes of one another (SMOKING vs NON_SMOKING).
 func matchEnumValue(pbEnum *protogen.Enum, ev *schema.EnumValue) *protogen.EnumValue {
 	enumName := string(pbEnum.Desc.Name())
 	for _, pv := range pbEnum.Values {
-		mapName := naming.ScreamingSnake(naming.EnumValueName(enumName, string(pv.Desc.Name())))
+		mapName := naming.EnumLabel(enumName, string(pv.Desc.Name()))
 		if mapName == ev.MapName {
 			return pv
 		}

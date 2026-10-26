@@ -29,10 +29,10 @@ enum OrderStatus {
 /// Money is the order-side resource sharing the simple name "Money" with the cart-side one. See cart.proto for how each target renders the collision.
 model OrderMoney {
   /// Unique identifier for the record.
-  id String @id @default(ulid()) @map("id")
+  id String @id(map: "shop_order_v1_moneys_pkey") @default(ulid()) @map("id")
 
   /// Resource name; the AIP identifier.
-  name String @unique @map("name")
+  name String @unique(map: "shop_order_v1_moneys_name_key") @map("name")
 
   /// Amount in minor units.
   amount BigInt @map("amount")

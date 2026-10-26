@@ -39,7 +39,7 @@ func fragmentView(db *schema.Database, g fragmentGroup, provider types.Provider,
 	dsName := naming.DatasourceName(db.Name)
 	models := make([]modelView, 0, len(g.tables))
 	for _, t := range g.tables {
-		models = append(models, modelViewOf(t, provider, dsName, typeOf, fx))
+		models = append(models, modelViewOf(t, provider, dsName, typeOf, fx, constraintPrefix(db, t)))
 	}
 	srcProto := g.sourceProto
 	if srcProto == "" {
@@ -81,9 +81,34 @@ func fragmentSchemas(g fragmentGroup) []string {
 	return out
 }
 
+// constraintPrefix is the prefix t's constraint names take, or "" for Prisma's
+// defaults. Prisma derives a primary key, index or unique constraint's name from
+// the table alone (<table>_pkey, <table>_<cols>_idx) and requires every one to be
+// unique across the database, while Postgres scopes them to a schema. So a table
+// whose name another schema of the database also uses names its constraints
+// explicitly, qualified by its schema ("<schema>_<table>"); every other table
+// keeps the default names, so existing migrations see no change.
+func constraintPrefix(db *schema.Database, t *schema.Table) string {
+	n := 0
+	for _, s := range db.Schemas {
+		for _, o := range s.Tables {
+			if o.Name == t.Name {
+				n++
+			}
+		}
+	}
+	if n < 2 || t.PgSchema == "" {
+		return ""
+	}
+	return t.PgSchema + "_" + t.Name
+}
+
 // modelViewOf renders one table into template-ready field and index lines.
-// dsName is the Prisma datasource block name, used to prefix native-type attributes.
-func modelViewOf(t *schema.Table, provider types.Provider, dsName string, typeOf types.TypeOf, fx facets.Set) modelView {
+// dsName is the Prisma datasource block name, used to prefix native-type
+// attributes; prefix, when set, qualifies the table's constraint names
+// (constraintPrefix, namer).
+func modelViewOf(t *schema.Table, provider types.Provider, dsName string, typeOf types.TypeOf, fx facets.Set, prefix string) modelView {
+	names := namer{table: t.Name, prefix: prefix}
 	fkByCol := map[string]*schema.ForeignKey{}
 	for _, fk := range t.ForeignKeys {
 		fkByCol[fk.Column] = fk
@@ -101,7 +126,7 @@ func modelViewOf(t *schema.Table, provider types.Provider, dsName string, typeOf
 	}
 
 	for _, col := range t.Columns {
-		m.Fields = append(m.Fields, fieldLine{Doc: fieldDoc(col), Decl: fieldDecl(col, provider, dsName, typeOf)})
+		m.Fields = append(m.Fields, fieldLine{Doc: fieldDoc(col), Decl: fieldDecl(col, provider, dsName, typeOf, names)})
 
 		// BelongsTo relation — emitted immediately after the FK column. The field
 		// name is derived from the FK column (minus _id) so two FKs to the same
@@ -123,6 +148,9 @@ func modelViewOf(t *schema.Table, provider types.Provider, dsName string, typeOf
 			}
 			if a := prismaAction(fk.OnUpdate); a != "" {
 				args += ", onUpdate: " + a
+			}
+			if name, ok := names.name([]string{col.Name}, "_fkey"); ok {
+				args += `, map: "` + name + `"`
 			}
 			field := naming.Unique(naming.Camel(naming.StripIDSuffix(col.Name)), used)
 			m.Fields = append(m.Fields, fieldLine{
@@ -158,16 +186,20 @@ func modelViewOf(t *schema.Table, provider types.Provider, dsName string, typeOf
 				cols[i] = naming.Camel(c)
 			}
 		}
-		directive, label := "@@index", "Index"
+		directive, label, suffix := "@@index", "Index", "_idx"
 		if len(idx.Columns) > 1 {
 			label = "Composite index"
 		}
 		if idx.Unique {
-			directive, label = "@@unique", "Unique constraint"
+			directive, label, suffix = "@@unique", "Unique constraint", "_key"
+		}
+		mapArg := ""
+		if name, ok := names.name(idx.Columns, suffix); ok {
+			mapArg = `, map: "` + name + `"`
 		}
 		m.Indexes = append(m.Indexes, fieldLine{
 			Doc:  label + " on [" + strings.Join(idx.Columns, ", ") + "].",
-			Decl: directive + "([" + strings.Join(cols, ", ") + "])",
+			Decl: directive + "([" + strings.Join(cols, ", ") + "]" + mapArg + ")",
 		})
 	}
 

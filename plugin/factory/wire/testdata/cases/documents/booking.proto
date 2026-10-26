@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package stay.v1;
+
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "google/type/decimal.proto";
+import "vocab.proto";
+
+// A booking, written in an imported vocabulary.
+message Booking {
+  option (google.api.resource) = {
+    type: "stay.v1/Booking"
+    pattern: "bookings/{booking}"
+  };
+
+  // The booking name.
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+  // A column of the booking's own.
+  string state = 2 [(google.api.field_behavior) = OPTIONAL];
+  // One document.
+  vocab.v1.Stay stay = 3 [(google.api.field_behavior) = OPTIONAL];
+  // A document array.
+  repeated vocab.v1.Guest guests = 4 [(google.api.field_behavior) = OPTIONAL];
+  // A required document.
+  vocab.v1.Address address = 5 [(google.api.field_behavior) = REQUIRED];
+  // A message of the booking's own package: normalized, as before.
+  Note note = 6 [(google.api.field_behavior) = OPTIONAL];
+  // A decimal: its string, in a NUMERIC column.
+  google.type.Decimal exchange_rate = 7 [(google.api.field_behavior) = OPTIONAL];
+  // A decimal arm of a oneof.
+  oneof adjustment {
+    // A percentage.
+    google.type.Decimal percent = 8;
+    // A flat amount, in minor units.
+    int64 amount = 9;
+  }
+}
+
+// A note of the booking's own package.
+message Note {
+  // The note.
+  string text = 1;
+}

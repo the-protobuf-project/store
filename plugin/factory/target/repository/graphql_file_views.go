@@ -9,6 +9,7 @@ package repository
 import (
 	"github.com/the-protobuf-project/protokit/schema"
 	"slices"
+	"sort"
 	"strings"
 )
 
@@ -85,6 +86,44 @@ func graphqlFileView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg str
 	}
 }
 
+// graphqlParentViews prepares graphql_parent_<schema>.go for each schema whose
+// rows the resources of s look up as nested ancestors (gqlParentLookup), keyed
+// by file name.
+func graphqlParentViews(db *schema.Database, s *schema.Schema, pkg string, rs []gqlResourceView) map[string]map[string]any {
+	client := dbGraphQLModule(db)
+	bySchema := map[string][]gqlParentLookup{}
+	seen := map[string]bool{}
+	for _, r := range rs {
+		for _, lk := range r.ParentLookups {
+			if seen[lk.Func] {
+				continue
+			}
+			seen[lk.Func] = true
+			bySchema[lk.DomPkg] = append(bySchema[lk.DomPkg], lk)
+		}
+	}
+	out := map[string]map[string]any{}
+	for dom, lks := range bySchema {
+		sort.Slice(lks, func(i, j int) bool { return lks[i].Func < lks[j].Func })
+		imports := map[string]string{
+			"context":                       "",
+			dbGoModule(db) + "/" + repoxPkg: "",
+			client:                          clientPkgName(client),
+		}
+		for _, lk := range lks {
+			imports[client+"/"+lk.DomPkg+"/"+lk.ResPkg] = lk.ResPkg
+		}
+		out["graphql_parent_"+strings.TrimSuffix(dom, "ql")+".go"] = map[string]any{
+			"Header":    fileHeader(db, s, "Lookups of nested ancestors' rows in schema "+strings.TrimSuffix(dom, "ql")+", by name."),
+			"Package":   pkg,
+			"ClientPkg": clientPkgName(client),
+			"Imports":   renderImports(imports),
+			"Lookups":   lks,
+		}
+	}
+	return out
+}
+
 // graphqlConvertView prepares graphql_convert.go: converters + scalar helpers.
 func graphqlConvertView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg string, rs []gqlResourceView, voConvs []gqlVOConv, needs helperNeeds) map[string]any {
 	client := dbGraphQLModule(db)
@@ -149,8 +188,26 @@ func graphqlConvertView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg 
 	if needs.Enum {
 		imports["strings"] = ""
 	}
+	if needs.GormEnums {
+		addGormModelsImport(pb, db, s, pkg, imports)
+	}
+	if needs.DecimalMsg {
+		imports["google.golang.org/genproto/googleapis/type/decimal"] = ""
+	}
+	if needs.Doc {
+		imports["encoding/json"] = ""
+		imports["google.golang.org/protobuf/encoding/protojson"] = ""
+		imports["google.golang.org/protobuf/proto"] = ""
+		for _, p := range needs.DocPaths {
+			imports[p] = pb.names.Of(p)
+		}
+	}
 	addPBImports(pb, s, imports)
-	addPBEnumImports(pb, s, imports)
+	if needs.Enum {
+		// The proto enum types are named only by conversions outside the
+		// gorm mappers (an enum of another schema).
+		addPBEnumImports(pb, s, imports)
+	}
 	return map[string]any{
 		"Header":    fileHeader(db, s, "Proto↔row/input converters for the GraphQL adapters, with the shared scalar codecs."),
 		"Package":   pkg,

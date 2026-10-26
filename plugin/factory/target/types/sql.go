@@ -182,8 +182,22 @@ var prismaNativeType = map[string]string{
 // mapping already matches. The caller prefixes it with the datasource block name
 // to form the attribute (@<datasource>.Timestamptz(6)). Postgres-only; Mongo has
 // no native-type attributes.
+//
+// A NUMERIC column is always pinned, because Prisma's own default for Decimal
+// is DECIMAL(65,30), which pads every value to thirty places: unconstrained,
+// it is @db.Decimal, keeping the scale a value was written with; with a
+// precision and scale, those.
 func PrismaNativeType(pgType string) string {
 	base, _ := BaseType(pgType)
+	if base == "NUMERIC" || base == "DECIMAL" {
+		t := strings.ToUpper(strings.TrimSpace(pgType))
+		if i := strings.IndexByte(t, '('); i >= 0 {
+			if j := strings.IndexByte(t[i:], ')'); j >= 0 {
+				return "Decimal" + strings.ReplaceAll(t[i:i+j+1], " ", "")
+			}
+		}
+		return "Decimal"
+	}
 	return prismaNativeType[base]
 }
 

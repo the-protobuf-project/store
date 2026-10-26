@@ -339,7 +339,7 @@ func gqlVOConvs(pb *pbIndex, db *schema.Database, s *schema.Schema, resources ma
 				if c.Source == nil || c.Generated != "" {
 					continue
 				}
-				in, _, row, n, ok := gqlScalarFragments(pb, c, "row."+export(camel(c.Name)))
+				in, _, row, n, ok := gqlScalarFragments(pb, gormScopeOf(pb, s), c, "row."+export(camel(c.Name)))
 				if !ok {
 					conv.InputAssigns = append(conv.InputAssigns, "// not mapped here: "+c.Name+" (unsupported scalar shape)")
 					continue

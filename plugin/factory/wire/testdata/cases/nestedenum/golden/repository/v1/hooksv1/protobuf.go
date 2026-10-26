@@ -20,9 +20,9 @@ import (
 	"example.com/test/gen/repox"
 	"example.com/test/genql/hooksv1ql/deliveriesql"
 	"example.com/test/genql/hooksv1ql/webhooksql"
+	hooksv1gorm "example.com/test/gormdb/v1/hooksv1"
 	"github.com/the-protobuf-project/runtime-go/network/graphql"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"strings"
 	"time"
 )
 
@@ -53,10 +53,10 @@ func deliveryToCreateInput(in *hooksv1.Delivery) deliveriesql.CreateInput {
 	var ci deliveriesql.CreateInput
 	ci.Name = in.GetName()
 	if v := in.GetWebhookState(); v != 0 {
-		ci.WebhookState = strings.TrimPrefix(in.GetWebhookState().String(), "STATE_")
+		ci.WebhookState = string(hooksv1gorm.WebhookStateFromProto(v))
 	}
 	if v := in.GetState(); v != 0 {
-		ci.State = strings.TrimPrefix(in.GetState().String(), "STATE_")
+		ci.State = string(hooksv1gorm.DeliveryStateFromProto(v))
 	}
 	return ci
 }
@@ -67,7 +67,7 @@ func deliveryToCreateInput(in *hooksv1.Delivery) deliveriesql.CreateInput {
 func deliveryToUpdatePatch(merged *hooksv1.Delivery) deliveriesql.UpdateInput {
 	var patch deliveriesql.UpdateInput
 	patch.Name = graphql.Value(merged.GetName())
-	if v := strings.TrimPrefix(merged.GetWebhookState().String(), "STATE_"); v != "UNSPECIFIED" {
+	if v := string(hooksv1gorm.WebhookStateFromProto(merged.GetWebhookState())); v != "" {
 		patch.WebhookState = graphql.Value(v)
 	} else {
 		patch.WebhookState = graphql.Null[string]()
@@ -87,7 +87,7 @@ func deliveryToOutputPatch(merged *hooksv1.Delivery, paths []string) deliveriesq
 // patch, for UpdateWithOutputOnly: an update patch carrying them too.
 func deliveryAddOutputPatch(patch *deliveriesql.UpdateInput, merged *hooksv1.Delivery, paths []string) {
 	if repox.InMask(paths, "state") {
-		if v := strings.TrimPrefix(merged.GetState().String(), "STATE_"); v != "UNSPECIFIED" {
+		if v := string(hooksv1gorm.DeliveryStateFromProto(merged.GetState())); v != "" {
 			patch.State = graphql.Value(v)
 		} else {
 			patch.State = graphql.Null[string]()
@@ -103,10 +103,10 @@ func deliveryFromRow(row *deliveriesql.HooksV1Deliveries) *hooksv1.Delivery {
 	}
 	out := &hooksv1.Delivery{}
 	out.Name = row.Name
-	out.WebhookState = hooksv1.Webhook_State(hooksv1.Webhook_State_value["STATE_"+repox.Deref(row.WebhookState)])
+	out.WebhookState = hooksv1gorm.WebhookStateToProto(hooksv1gorm.WebhookState(repox.Deref(row.WebhookState)))
 	out.Etag = repox.Deref(row.Etag)
 	out.CreateTime = strToTs(row.CreateTime)
-	out.State = hooksv1.Delivery_State(hooksv1.Delivery_State_value["STATE_"+repox.Deref(row.State)])
+	out.State = hooksv1gorm.DeliveryStateToProto(hooksv1gorm.DeliveryState(repox.Deref(row.State)))
 	return out
 }
 
@@ -118,7 +118,7 @@ func webhookToCreateInput(in *hooksv1.Webhook) webhooksql.CreateInput {
 	ci.Name = in.GetName()
 	ci.Uri = in.GetUri()
 	if v := in.GetState(); v != 0 {
-		ci.State = strings.TrimPrefix(in.GetState().String(), "STATE_")
+		ci.State = string(hooksv1gorm.WebhookStateFromProto(v))
 	}
 	return ci
 }
@@ -130,7 +130,7 @@ func webhookToUpdatePatch(merged *hooksv1.Webhook) webhooksql.UpdateInput {
 	var patch webhooksql.UpdateInput
 	patch.Name = graphql.Value(merged.GetName())
 	patch.Uri = graphql.Value(merged.GetUri())
-	patch.State = graphql.Value(strings.TrimPrefix(merged.GetState().String(), "STATE_"))
+	patch.State = graphql.Value(string(hooksv1gorm.WebhookStateFromProto(merged.GetState())))
 	return patch
 }
 
@@ -143,7 +143,7 @@ func webhookFromRow(row *webhooksql.HooksV1Webhooks) *hooksv1.Webhook {
 	out := &hooksv1.Webhook{}
 	out.Name = row.Name
 	out.Uri = row.Uri
-	out.State = hooksv1.Webhook_State(hooksv1.Webhook_State_value["STATE_"+row.State])
+	out.State = hooksv1gorm.WebhookStateToProto(hooksv1gorm.WebhookState(row.State))
 	out.Etag = repox.Deref(row.Etag)
 	out.CreateTime = strToTs(row.CreateTime)
 	return out

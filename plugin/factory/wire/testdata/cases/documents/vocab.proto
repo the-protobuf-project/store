@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package vocab.v1;
+
+// A stay, with guests nested three levels down.
+message Stay {
+  string arrival = 1;
+  repeated Guest guests = 2;
+}
+
+// A guest.
+message Guest {
+  string surname = 1;
+  Address address = 2;
+}
+
+// An address.
+message Address {
+  string city = 1;
+}

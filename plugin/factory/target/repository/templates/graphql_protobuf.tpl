@@ -175,6 +175,98 @@ func jsonToStruct(r *json.RawMessage) *structpb.Struct {
 	return s
 }
 {{- end}}
+{{- if .Needs.DecimalMsg}}
+
+// decToBig is a google.type.Decimal as the client sends it; empty, and so
+// omitted, when it is unset.
+func decToBig(d *decimal.Decimal) graphql.Bigdecimal {
+	return graphql.Bigdecimal(d.GetValue())
+}
+
+// bigToDec reads a bigdecimal column back, nil when it is empty.
+func bigToDec(b graphql.Bigdecimal) *decimal.Decimal {
+	if b == "" {
+		return nil
+	}
+	return &decimal.Decimal{Value: string(b)}
+}
+{{- end}}
+{{- if .Needs.Doc}}
+
+// docToJSON is a document field as stored: the message's JSON form, nil when
+// it is unset.
+func docToJSON[P proto.Message](m P) json.RawMessage {
+	if !m.ProtoReflect().IsValid() {
+		return nil
+	}
+	b, err := protojson.Marshal(m)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+// jsonToDoc reads a stored document back into its message, nil for an empty
+// column. Fields this build does not know are skipped, so a document written
+// by a newer schema still reads.
+func jsonToDoc[T any, P interface {
+	*T
+	proto.Message
+}](r *json.RawMessage) P {
+	if r == nil || len(*r) == 0 || string(*r) == "null" {
+		return nil
+	}
+	m := P(new(T))
+	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(*r, m); err != nil {
+		return nil
+	}
+	return m
+}
+
+// docsToJSON is a repeated document field as stored: a JSON array of the
+// messages' JSON forms, nil when it is empty.
+func docsToJSON[P proto.Message](ms []P) json.RawMessage {
+	if len(ms) == 0 {
+		return nil
+	}
+	items := make([]json.RawMessage, 0, len(ms))
+	for _, m := range ms {
+		b, err := protojson.Marshal(m)
+		if err != nil {
+			return nil
+		}
+		items = append(items, b)
+	}
+	b, err := json.Marshal(items)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+// jsonToDocs reads a stored document array back into its messages.
+func jsonToDocs[T any, P interface {
+	*T
+	proto.Message
+}](r *json.RawMessage) []P {
+	if r == nil || len(*r) == 0 || string(*r) == "null" {
+		return nil
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal(*r, &items); err != nil {
+		return nil
+	}
+	out := make([]P, 0, len(items))
+	for _, it := range items {
+		m := P(new(T))
+		if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(it, m); err != nil {
+			return nil
+		}
+		out = append(out, m)
+	}
+	return out
+}
+{{- end}}
 {{- if .Needs.Bytes}}
 
 // bytesToRaw / rawToBytes cross the bytea boundary in Postgres hex form

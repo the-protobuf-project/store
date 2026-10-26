@@ -308,17 +308,9 @@ func (r *GraphQL{{.Model}}Repository) List(ctx context.Context, parent string, i
 	}
 	{{- if .ParentRows}}
 	// The parent is nested, so its row is found by name.
-	match := {{.ParentRows.NamePred}}.Eq(parent)
-	if p, wild := repox.NamePattern(parent); wild {
-		match = {{.ParentRows.NamePred}}.Like(p)
-	}
-	parents, err := r.Svc.Query.{{.ParentRows.Domain}}.{{.ParentRows.Resource}}.List(ctx, {{.ParentRows.ResPkg}}.List().Where(match))
+	keys, err := {{.ParentRows.Func}}Keys(ctx, r.Svc, parent)
 	if err != nil {
-		return nil, "", mapGraphQLErr(err)
-	}
-	keys := make([]string, 0, len(parents))
-	for i := range parents {
-		keys = append(keys, parents[i].{{.ParentRows.KeyField}})
+		return nil, "", err
 	}
 	return r.list(ctx, in, {{.ParentPred}}.In(keys...))
 	{{- else}}

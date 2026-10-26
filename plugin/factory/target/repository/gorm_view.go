@@ -123,6 +123,10 @@ type maskFieldView struct {
 	// Paths lists every arm's proto field name when Oneof is set: touching any
 	// arm replaces the whole oneof, because it holds at most one member.
 	Paths []string
+	// Presence marks a proto3 `optional` scalar: protoc-gen-go gives it a
+	// pointer field, so the mask copies the field itself (nil included) rather
+	// than its getter's dereferenced value.
+	Presence bool
 }
 
 // gormResourceViews builds the adapter views for schema s in table order.
@@ -341,6 +345,7 @@ func mutableFragments(pb *pbIndex, db *schema.Database, resources map[*schema.Ta
 			Message: isMessageField(c),
 			Oneof:   pbOneofField(pb, c),
 		}
+		mv.Presence = mv.Oneof == "" && !mv.Message && c.Source != nil && c.Source.HasOptionalKeyword() && !c.Source.IsList()
 		if mv.Oneof != "" {
 			// One entry per oneof, not per member: the assignment replaces the
 			// whole oneof, so emitting it for each arm would repeat the same

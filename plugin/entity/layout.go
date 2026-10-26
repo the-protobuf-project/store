@@ -58,6 +58,21 @@ type LayoutConfig struct {
 	// table is renamed to a generic word ("resource", then "entity"/…). Only the
 	// generated table name changes; proto/model names are untouched.
 	DedupeSchemaTable bool `yaml:"dedupe_schema_table"`
+
+	// Documents names message types stored whole: a field of a matching type
+	// is one JSONB column holding the message's JSON form (an array, for a
+	// repeated field) instead of a table of its own. For a vocabulary imported
+	// as it is -- a schema module's deep value objects, read and written as a
+	// unit -- where normalizing every nested type would make a table of each.
+	Documents []DocumentRule `yaml:"documents"`
+}
+
+// DocumentRule names message types stored as documents. Match is a dotted
+// glob over a message's full name, as a datasource rule's is over a package:
+// "protobuf.opentravel.**" matches every OpenTravel message, nested ones
+// included; "acme.v1.Address" matches one.
+type DocumentRule struct {
+	Match string `yaml:"match"`
 }
 
 // DatasourceRule assigns every proto package matching Match to a database and
@@ -95,7 +110,10 @@ func Layout(cfg *LayoutConfig) protokit.LayoutResolver { return layout{cfg: cfg}
 // protokit.Build as a schema.LayoutResolver and never names the type.
 type layout struct{ cfg *LayoutConfig }
 
-var _ schema.LayoutResolver = layout{}
+var (
+	_ schema.LayoutResolver   = layout{}
+	_ schema.DocumentResolver = layout{}
+)
 
 // ResolveDatasource maps a proto package to its database and schema under the
 // first matching rule.
@@ -109,6 +127,21 @@ func (l layout) ResolveDatasource(pkg string) (database, schemaName string, stri
 	}
 	db, s, strip := l.cfg.resolve(pkg)
 	return db, s, strip, true
+}
+
+// Document reports whether a field of message type fullName is stored as a
+// document: whether a documents rule matches it (schema.DocumentResolver).
+func (l layout) Document(fullName string) bool {
+	if l.cfg == nil {
+		return false
+	}
+	segs := strings.Split(fullName, ".")
+	for _, r := range l.cfg.Documents {
+		if matchPackage(r.Match, segs) {
+			return true
+		}
+	}
+	return false
 }
 
 // DedupeSchemaTable reports the config's dedupe_schema_table policy (false when no

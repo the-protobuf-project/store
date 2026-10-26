@@ -634,10 +634,10 @@ func (r *GraphQLPageRepository) linkParents(ctx context.Context, ci *pagesql.Cre
 		n := "shelves/" + ids[0] + "/books/" + ids[1]
 		if k, ok := known[n]; ok {
 			ci.BookId = k
-		} else if row, err := r.Svc.Query.Catalog.Books.Find(ctx, booksql.List().Where(booksql.Name.Eq(n))); err != nil {
-			return mapGraphQLErr(err)
-		} else if row != nil {
-			ci.BookId = row.Id
+		} else if k, found, err := catalogBooksKey(ctx, r.Svc, n); err != nil {
+			return err
+		} else if found {
+			ci.BookId = k
 		}
 	}
 	return nil
@@ -715,17 +715,9 @@ func (r *GraphQLPageRepository) List(ctx context.Context, parent string, in repo
 		return r.list(ctx, in)
 	}
 	// The parent is nested, so its row is found by name.
-	match := booksql.Name.Eq(parent)
-	if p, wild := repox.NamePattern(parent); wild {
-		match = booksql.Name.Like(p)
-	}
-	parents, err := r.Svc.Query.Catalog.Books.List(ctx, booksql.List().Where(match))
+	keys, err := catalogBooksKeys(ctx, r.Svc, parent)
 	if err != nil {
-		return nil, "", mapGraphQLErr(err)
-	}
-	keys := make([]string, 0, len(parents))
-	for i := range parents {
-		keys = append(keys, parents[i].Id)
+		return nil, "", err
 	}
 	return r.list(ctx, in, pagesql.BookId.In(keys...))
 }

@@ -33,10 +33,14 @@ type gqlResourceView struct {
 	// NamePred is the name column's predicate field, e.g. "booksql.Name",
 	// which finds a nested resource's row (NameKeyed only).
 	NamePred string
-	// ParentRows is the client of a nested parent's rows, whose keys a List
+	// ParentRows is the lookup of a nested parent's rows, whose keys a List
 	// under it is scoped to: the parent is found by name. Nil when the parent
 	// is keyed by its bare id.
-	ParentRows *gqlParentRows
+	ParentRows *gqlParentLookup
+	// ParentLookups are the lookups of every nested ancestor this resource
+	// names (ParentRows and GQLParentLinks), rendered into a file per
+	// ancestor's schema (graphql_parent.go.tpl).
+	ParentLookups []gqlParentLookup
 	// GQLParentLinks re-point the CreateInput's columns for nested ancestors
 	// at their rows (linkParents); empty when every ancestor is keyed by its
 	// bare id.
@@ -96,11 +100,29 @@ type gqlResourceView struct {
 	DeepPBImports       []string // proto packages of oneof wrappers
 }
 
-// gqlParentRows addresses a nested parent's rows on the client.
-type gqlParentRows struct {
+// gqlParentLookup finds a nested ancestor's rows by name on the client. Its
+// functions live in a file of their own per ancestor schema
+// (graphql_parent_<schema>.go), the only file importing that schema's client
+// package: every schema's primary table can carry one name (dedupe_schema_table
+// names it "resource"), so the child's own client package and its parent's
+// would otherwise declare one package name in one file -- which only an import
+// alias could resolve.
+type gqlParentLookup struct {
 	Domain, Resource, ResPkg string
-	NamePred                 string // e.g. "booksql.Name"
+	DomPkg                   string // the ancestor schema's client package, e.g. "rateplanql"
+	NameField                string // the name column's predicate field, e.g. "Name"
 	KeyField                 string // the row's key field, e.g. "Id"
+	Func                     string // the lookups' base name, e.g. "rateplanResource"
+}
+
+// parentLookupOf is the lookup of nested ancestor table t.
+func parentLookupOf(t *schema.Table, nameCol, keyCol string) gqlParentLookup {
+	nm := gqlNamesOf(t)
+	return gqlParentLookup{
+		Domain: nm.Domain, Resource: nm.Resource, ResPkg: nm.ResPkg, DomPkg: nm.DomPkg,
+		NameField: export(camel(nameCol)), KeyField: export(camel(keyCol)),
+		Func: naming.CamelFirst(nm.Domain + nm.Resource),
+	}
 }
 
 // helperNeeds tracks which scalar helpers graphql_convert.go must include.
@@ -109,6 +131,42 @@ type helperNeeds struct {
 	Ts, Date, Struct, Bytes, Duration, StrSlice, Decimal, Enum, Wrappers bool
 	Interval                                                             bool // google.type.Interval
 	DT                                                                   bool // google.type.DateTime
+	// GormEnums marks an enum converted through the schema's gorm models
+	// package (gormScope): the converter file imports it.
+	GormEnums bool
+	// Doc marks a document column (schema.Column.Document), converted as its
+	// message's JSON form; DocPaths are the Go packages of those messages, which
+	// the converter file imports.
+	Doc      bool
+	DocPaths []string
+	// DecimalMsg marks a google.type.Decimal field (the decimal package and
+	// its bigdecimal helpers); Decimal is a float field's.
+	DecimalMsg bool
+}
+
+// gormScope is the schema a GraphQL converter is generated for, and the
+// qualifier its gorm models package is imported under. An enum column of that
+// schema -- its own enum or another schema's -- converts through the gorm package's <Enum>FromProto / <Enum>ToProto,
+// which pair each proto value with its stored label (naming.EnumLabel: fitted
+// to Postgres's 63 bytes), rather than rebuilding the proto name from the
+// label, which a fitted label no longer spells.
+type gormScope struct {
+	Schema, Qual string
+}
+
+// gormScopeOf is the gormScope of schema s.
+func gormScopeOf(pb *pbIndex, s *schema.Schema) gormScope {
+	return gormScope{Schema: s.Name, Qual: gormModelsQual(pb, s, naming.GoPackage(s.Name))}
+}
+
+// gormScopeNamed is the gormScope of db's schema named name.
+func gormScopeNamed(pb *pbIndex, db *schema.Database, name string) gormScope {
+	for _, s := range db.Schemas {
+		if s.Name == name {
+			return gormScopeOf(pb, s)
+		}
+	}
+	return gormScope{}
 }
 
 func (h *helperNeeds) or(o helperNeeds) {
@@ -123,6 +181,10 @@ func (h *helperNeeds) or(o helperNeeds) {
 	h.Enum = h.Enum || o.Enum
 	h.Wrappers = h.Wrappers || o.Wrappers
 	h.Interval = h.Interval || o.Interval
+	h.GormEnums = h.GormEnums || o.GormEnums
+	h.Doc = h.Doc || o.Doc
+	h.DecimalMsg = h.DecimalMsg || o.DecimalMsg
+	h.DocPaths = append(h.DocPaths, o.DocPaths...)
 }
 
 // export uppercases the first letter of each underscore part without Go
@@ -171,23 +233,18 @@ func gqlResourceViews(pb *pbIndex, db *schema.Database, s *schema.Schema, resour
 				v.GQLParentAssigns = append(v.GQLParentAssigns,
 					fmt.Sprintf("ci.%s = parentIDs[%d]", export(camel(a.Column)), a.Index))
 				if a.Nested != nil {
-					nm := gqlNamesOf(a.Nested.Table)
-					v.DeepPkgs = append(v.DeepPkgs, nm.DomPkg+"/"+nm.ResPkg)
+					lk := parentLookupOf(a.Nested.Table, a.Nested.Cols.NameKey.Name, a.Nested.Cols.PK.Name)
+					v.ParentLookups = append(v.ParentLookups, lk)
 					field := export(camel(a.Column))
 					v.GQLParentLinks = append(v.GQLParentLinks, fmt.Sprintf(
-						"{\n\t\tn := %s\n\t\tif k, ok := known[n]; ok {\n\t\t\tci.%s = k\n\t\t} else if row, err := r.Svc.Query.%s.%s.Find(ctx, %s.List().Where(%s.%s.Eq(n))); err != nil {\n\t\t\treturn mapGraphQLErr(err)\n\t\t} else if row != nil {\n\t\t\tci.%s = row.%s\n\t\t}\n\t}",
-						nameExpr(r.Segments[:a.Index+1], "ids"), field, nm.Domain, nm.Resource, nm.ResPkg,
-						nm.ResPkg, export(camel(a.Nested.Cols.NameKey.Name)), field, export(camel(a.Nested.Cols.PK.Name))))
+						"{\n\t\tn := %s\n\t\tif k, ok := known[n]; ok {\n\t\t\tci.%s = k\n\t\t} else if k, found, err := %sKey(ctx, r.Svc, n); err != nil {\n\t\t\treturn err\n\t\t} else if found {\n\t\t\tci.%s = k\n\t\t}\n\t}",
+						nameExpr(r.Segments[:a.Index+1], "ids"), field, lk.Func, field))
 				}
 			}
 			if p := r.Parent; p != nil && p.nameKeyed() && r.ParentFK != "" {
-				nm := gqlNamesOf(p.Table)
-				v.DeepPkgs = append(v.DeepPkgs, nm.DomPkg+"/"+nm.ResPkg)
-				v.ParentRows = &gqlParentRows{
-					Domain: nm.Domain, Resource: nm.Resource, ResPkg: nm.ResPkg,
-					NamePred: nm.ResPkg + "." + export(camel(p.Cols.NameKey.Name)),
-					KeyField: export(camel(p.Cols.PK.Name)),
-				}
+				lk := parentLookupOf(p.Table, p.Cols.NameKey.Name, p.Cols.PK.Name)
+				v.ParentLookups = append(v.ParentLookups, lk)
+				v.ParentRows = &lk
 			}
 		}
 		if v.NameKeyed {
@@ -221,7 +278,7 @@ func gqlResourceViews(pb *pbIndex, db *schema.Database, s *schema.Schema, resour
 		// writes every column: a service creating a record sets its state or
 		// expiry there, and an API create has already cleared them.
 		for _, c := range serverOwned(r) {
-			in, patch, _, n, ok := gqlScalarFragments(pb, c, "row."+export(camel(c.Name)))
+			in, patch, _, n, ok := gqlScalarFragments(pb, gormScopeOf(pb, s), c, "row."+export(camel(c.Name)))
 			if !ok {
 				continue
 			}
@@ -323,12 +380,14 @@ func gqlNodeConvs(pb *pbIndex, db *schema.Database, s *schema.Schema, resources 
 						if c.Source == nil || (c.Generated != "") {
 							continue
 						}
-						in, _, row, n, ok := gqlScalarFragments(pb, c, "row."+export(camel(c.Name)))
+						in, _, row, n, ok := gqlScalarFragments(pb, gormScopeOf(pb, s), c, "row."+export(camel(c.Name)))
 						if !ok {
 							conv.InputAssigns = append(conv.InputAssigns, "// not mapped here: "+c.Name+" (unsupported scalar shape)")
 							continue
 						}
-						if f := pbFieldOf(pb, c); f != nil && f.Enum != nil {
+						// Only a conversion outside the gorm mappers names the
+						// proto enum type.
+						if f := pbFieldOf(pb, c); f != nil && f.Enum != nil && n.Enum {
 							conv.EnumPaths = append(conv.EnumPaths, string(f.Enum.GoIdent.GoImportPath))
 						}
 						needs.or(n)
@@ -388,6 +447,7 @@ func camel(snake string) string {
 // the target's collection prefix on the way out (root-resource refs only, like
 // the gorm side). Unsupported scalar shapes are skipped with a marker comment.
 func gqlColumnFragments(pb *pbIndex, db *schema.Database, resources map[*schema.Table]*resource, r *resource) (inputs, patches, rows []string, needs helperNeeds) {
+	gs := gormScopeNamed(pb, db, r.Table.PgSchema)
 	addRow := func(line string) { rows = append(rows, line) }
 
 	// name: stored verbatim, read back verbatim.
@@ -433,7 +493,7 @@ func gqlColumnFragments(pb *pbIndex, db *schema.Database, resources map[*schema.
 			}
 			continue
 		}
-		in, patch, row, n, ok := gqlScalarFragments(pb, c, rowField)
+		in, patch, row, n, ok := gqlScalarFragments(pb, gs, c, rowField)
 		if !ok {
 			inputs = append(inputs, "// not mapped here: "+c.Name+" (unsupported scalar shape)")
 			continue
@@ -465,25 +525,11 @@ func gqlColumnFragments(pb *pbIndex, db *schema.Database, resources map[*schema.
 		if c.Source == nil || c.FKModel != "" || !outputOnly(c) {
 			continue
 		}
-		// Stored OUTPUT_ONLY columns (e.g. a state enum) still render out.
-		if c.Type == schema.TypeEnum && c.Enum != nil {
-			prefix := types.EnumValuePrefix(c)
-			pbT, ok := pbEnumType(pb, c)
-			if !ok {
-				continue
-			}
-			f := "row." + export(camel(c.Name))
-			v := f
-			if c.Optional {
-				v = "repox.Deref(" + f + ")"
-			}
-			addRow(fmt.Sprintf("out.%s = %s(%s_value[%q+%s])", pbGoField(pb, c), pbT, pbT, prefix, v))
-			continue
-		}
-		// Any other stored scalar (a delete_time, a server-computed count) is
-		// read back the way a mutable column of its type is, and never
+		// Stored OUTPUT_ONLY columns (a state enum, a delete_time, a
+		// server-computed count) are read back the way a mutable column of
+		// their type is -- a oneof member boxed in its wrapper -- and never
 		// written: only the row fragment is kept.
-		_, _, row, n, ok := gqlScalarFragments(pb, c, "row."+export(camel(c.Name)))
+		_, _, row, n, ok := gqlScalarFragments(pb, gs, c, "row."+export(camel(c.Name)))
 		if !ok {
 			continue
 		}
@@ -557,7 +603,7 @@ func gqlOneofOut(pb *pbIndex, c *schema.Column) (oneofField, wrapper string, ok 
 }
 
 // gqlScalarFragments renders the three fragments for one plain scalar column.
-func gqlScalarFragments(pb *pbIndex, c *schema.Column, rowField string) (inputs, patches, rows []string, needs helperNeeds, ok bool) {
+func gqlScalarFragments(pb *pbIndex, gs gormScope, c *schema.Column, rowField string) (inputs, patches, rows []string, needs helperNeeds, ok bool) {
 	field := export(camel(c.Name))
 	gof := pbGoField(pb, c)
 	acc := "in.Get" + gof + "()"
@@ -620,7 +666,9 @@ func gqlScalarFragments(pb *pbIndex, c *schema.Column, rowField string) (inputs,
 		rows = append(rows, assignRow(rowExpr))
 	}
 
-	if c.List {
+	// A repeated document is one JSON array, not a list column: it is
+	// converted with the documents below.
+	if c.List && !c.Document {
 		if c.Type == schema.TypeString {
 			needs.StrSlice = true
 			// The client represents text[] with nullable elements ([]*string).
@@ -639,12 +687,23 @@ func gqlScalarFragments(pb *pbIndex, c *schema.Column, rowField string) (inputs,
 		if c.Enum == nil {
 			return nil, nil, nil, needs, false
 		}
-		needs.Enum = true
 		prefix := types.EnumValuePrefix(c)
 		pbT, okT := pbEnumType(pb, c)
 		if !okT {
 			return nil, nil, nil, needs, false
 		}
+		// Every enum a schema's columns use has mappers in its gorm package
+		// (gorm's schemaEnums), wherever the enum is declared.
+		if gs.Qual != "" {
+			// Through the gorm mappers, which know each value's stored label.
+			needs.GormEnums = true
+			from := gs.Qual + "." + c.Enum.LocalName + "FromProto"
+			inputs = append(inputs, fmt.Sprintf("if v := %s; v != 0 {\n\t\tci.%s = string(%s(v))\n\t}", acc, field, from))
+			patches = append(patches, patch(fmt.Sprintf("string(%s(%s))", from, mAcc), `""`))
+			rows = append(rows, assignRow(fmt.Sprintf("%s.%sToProto(%s.%s(%s))", gs.Qual, c.Enum.LocalName, gs.Qual, c.Enum.LocalName, rowVal)))
+			break
+		}
+		needs.Enum = true
 		toStr := func(a string) string {
 			return fmt.Sprintf("strings.TrimPrefix(%s.String(), %q)", a, prefix)
 		}
@@ -671,6 +730,18 @@ func gqlScalarFragments(pb *pbIndex, c *schema.Column, rowField string) (inputs,
 	case schema.TypeFloat, schema.TypeDouble:
 		set(acc, mAcc, rowVal, "0.0")
 	case schema.TypeDecimal:
+		if f := pbFieldOf(pb, c); f != nil && f.Message != nil {
+			// A google.type.Decimal is its decimal string, sent and read as
+			// the column's bigdecimal without a float in between.
+			if string(f.Message.Desc.FullName()) != "google.type.Decimal" {
+				return nil, nil, nil, needs, false
+			}
+			needs.DecimalMsg = true
+			inputs = append(inputs, fmt.Sprintf("ci.%s = decToBig(%s)", field, acc))
+			patches = append(patches, patch(fmt.Sprintf("decToBig(%s)", mAcc), `graphql.Bigdecimal("")`))
+			rows = append(rows, assignRow(fmt.Sprintf("bigToDec(%s)", rowVal)))
+			break
+		}
 		needs.Decimal = true
 		inputs = append(inputs, fmt.Sprintf("ci.%s = bigdec(%s)", field, acc))
 		patches = append(patches, patch(fmt.Sprintf("bigdec(%s)", mAcc), `graphql.Bigdecimal("")`))
@@ -741,6 +812,28 @@ func gqlScalarFragments(pb *pbIndex, c *schema.Column, rowField string) (inputs,
 		patches = append(patches, patch(fmt.Sprintf("durToStr(%s)", mAcc), `""`))
 		rows = append(rows, assignRow(fmt.Sprintf("strToDur(%s)", rowVal)))
 	case schema.TypeJSON:
+		if f := pbFieldOf(pb, c); c.Document && f != nil && f.Message != nil {
+			// A document: the message whole, as its JSON form; an array of
+			// them for a repeated field.
+			needs.Doc = true
+			path := string(f.Message.GoIdent.GoImportPath)
+			needs.DocPaths = append(needs.DocPaths, path)
+			msgT := pb.names.Of(path) + "." + f.Message.GoIdent.GoName
+			to, from := "docToJSON", "jsonToDoc"
+			if f.Desc.IsList() {
+				to, from = "docsToJSON", "jsonToDocs"
+			}
+			// A nullable jsonb column reads back as a pointer; a required
+			// one as the value, whose address the helper takes.
+			row := rowField
+			if !c.Optional {
+				row = "&" + rowField
+			}
+			inputs = append(inputs, fmt.Sprintf("ci.%s = %s(%s)", field, to, acc))
+			patches = append(patches, fmt.Sprintf("patch.%s = graphql.Value(%s(%s))", field, to, mAcc))
+			rows = append(rows, assignRow(fmt.Sprintf("%s[%s](%s)", from, msgT, row)))
+			break
+		}
 		// TypeJSON also covers a proto map field, which is a distinct Go type
 		// (map[string]*T, not *structpb.Struct). Same guard as above.
 		if f := pbFieldOf(pb, c); f != nil && f.Message != nil && string(f.Message.Desc.FullName()) != "google.protobuf.Struct" {

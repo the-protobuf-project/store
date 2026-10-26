@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "mutations": [
+    {
+      "field": "deleteStayV1BookingsById",
+      "kind": "delete",
+      "resourceType": "stay.v1/Booking",
+      "pattern": "bookings/{booking}",
+      "keyArgument": "keyId",
+      "byIdQuery": "stayV1BookingsById"
+    }
+  ]
+}

@@ -25,12 +25,12 @@ import (
 	"example.com/test/genql/orgv1ql/organisationsql"
 	"example.com/test/genql/orgv1ql/timewindowsql"
 	"example.com/test/genql/orgv1ql/usersql"
+	orgv1gorm "example.com/test/gormdb/v1/orgv1"
 	"github.com/the-protobuf-project/runtime-go/network/graphql"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
-	"strings"
 	"time"
 )
 
@@ -110,7 +110,7 @@ func memberToCreateInput(in *orgv1.Member) membersql.CreateInput {
 		ci.Inviter = repox.LastSegment(v)
 	}
 	if v := in.GetRole(); v != 0 {
-		ci.Role = strings.TrimPrefix(in.GetRole().String(), "MEMBER_ROLE_")
+		ci.Role = string(orgv1gorm.MemberRoleFromProto(v))
 	}
 	if v := durToStr(in.GetDuration()); v != "" {
 		ci.Duration = v
@@ -139,7 +139,7 @@ func memberToUpdatePatch(merged *orgv1.Member) membersql.UpdateInput {
 	} else {
 		patch.Inviter = graphql.Null[string]()
 	}
-	patch.Role = graphql.Value(strings.TrimPrefix(merged.GetRole().String(), "MEMBER_ROLE_"))
+	patch.Role = graphql.Value(string(orgv1gorm.MemberRoleFromProto(merged.GetRole())))
 	if v := durToStr(merged.GetDuration()); v != "" {
 		patch.Duration = graphql.Value(v)
 	} else {
@@ -173,7 +173,7 @@ func memberFromRow(row *membersql.OrgV1Members) *orgv1.Member {
 	if v := repox.Deref(row.Inviter); v != "" {
 		out.Inviter = "users/" + v
 	}
-	out.Role = orgv1.MemberRole(orgv1.MemberRole_value["MEMBER_ROLE_"+row.Role])
+	out.Role = orgv1gorm.MemberRoleToProto(orgv1gorm.MemberRole(row.Role))
 	if v := strToDur(repox.Deref(row.Duration)); v != nil {
 		out.Span = &orgv1.Member_Duration{Duration: v}
 	}
@@ -193,7 +193,7 @@ func organisationToCreateInput(in *orgv1.Organisation) organisationsql.CreateInp
 	ci.Slug = in.GetSlug()
 	ci.Settings = structToJSON(in.GetSettings())
 	if v := in.GetState(); v != 0 {
-		ci.State = strings.TrimPrefix(in.GetState().String(), "ORG_STATE_")
+		ci.State = string(orgv1gorm.OrgStateFromProto(v))
 	}
 	return ci
 }
@@ -226,7 +226,7 @@ func organisationToOutputPatch(merged *orgv1.Organisation, paths []string) organ
 // patch, for UpdateWithOutputOnly: an update patch carrying them too.
 func organisationAddOutputPatch(patch *organisationsql.UpdateInput, merged *orgv1.Organisation, paths []string) {
 	if repox.InMask(paths, "state") {
-		if v := strings.TrimPrefix(merged.GetState().String(), "ORG_STATE_"); v != "UNSPECIFIED" {
+		if v := string(orgv1gorm.OrgStateFromProto(merged.GetState())); v != "" {
 			patch.State = graphql.Value(v)
 		} else {
 			patch.State = graphql.Null[string]()
@@ -248,7 +248,7 @@ func organisationFromRow(row *organisationsql.OrgV1Organisations) *orgv1.Organis
 	out.Etag = repox.Deref(row.Etag)
 	out.CreateTime = strToTs(row.CreateTime)
 	out.UpdateTime = strToTs(row.UpdateTime)
-	out.State = orgv1.OrgState(orgv1.OrgState_value["ORG_STATE_"+repox.Deref(row.State)])
+	out.State = orgv1gorm.OrgStateToProto(orgv1gorm.OrgState(repox.Deref(row.State)))
 	return out
 }
 

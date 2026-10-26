@@ -167,7 +167,7 @@ func packageView(db *schema.Database, s *schema.Schema, pkg string, typeOf types
 // it, so the global-collision prefix Prisma needs would be redundant here.
 func enumViews(s *schema.Schema) []enumView {
 	var out []enumView
-	for _, e := range s.Enums {
+	for _, e := range schemaEnums(s) {
 		ev := enumView{
 			Comment: commentOr(e.Comment, e.LocalName+" enumerates the "+e.LocalSQLName+" values."),
 			Name:    e.LocalName,
@@ -181,6 +181,33 @@ func enumViews(s *schema.Schema) []enumView {
 			})
 		}
 		out = append(out, ev)
+	}
+	return out
+}
+
+// schemaEnums is every enum schema s's Go package declares: its own, then
+// those its columns use that are declared in another schema. Prisma keeps one
+// definition of an enum shared by several schemas, in the schema that first
+// used it (protokit's dedupeEnums), but a GORM package names its enum types
+// bare and stores the values as strings, so each package that uses an enum
+// declares its own Go type for it, and its own proto mappers.
+func schemaEnums(s *schema.Schema) []*schema.Enum {
+	seen := map[string]bool{}
+	var out []*schema.Enum
+	add := func(e *schema.Enum) {
+		if e == nil || seen[e.ProtoName] {
+			return
+		}
+		seen[e.ProtoName] = true
+		out = append(out, e)
+	}
+	for _, e := range s.Enums {
+		add(e)
+	}
+	for _, t := range s.Tables {
+		for _, c := range t.Columns {
+			add(c.Enum)
+		}
 	}
 	return out
 }
