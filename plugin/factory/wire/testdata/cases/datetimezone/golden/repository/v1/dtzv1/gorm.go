@@ -42,11 +42,24 @@ type GormSessionRepository struct {
 	// ListOverrides substitute the generated dispatch for single filter fields
 	// (e.g. a derived state computed via subqueries).
 	ListOverrides map[string]filterx.SQLHandler
+	// Store, when set, builds the store the adapter writes and reads
+	// through over db -- DB, or the transaction a write runs in: a decorator
+	// (a read-through cache, an instrumented store) over
+	// dtzv1gorm.NewSessionStore(db). Nil uses that store as it is.
+	Store func(db *gorm.DB) dtzv1gorm.SessionStoreIface
 }
 
 // NewGormSessionRepository returns the GORM adapter bound to db.
 func NewGormSessionRepository(db *gorm.DB) *GormSessionRepository {
 	return &GormSessionRepository{DB: db}
+}
+
+// store is the store over db the adapter goes through (see Store).
+func (r *GormSessionRepository) store(db *gorm.DB) dtzv1gorm.SessionStoreIface {
+	if r.Store != nil {
+		return r.Store(db)
+	}
+	return dtzv1gorm.NewSessionStore(db)
 }
 
 // Create persists in and returns the stored record.
@@ -70,7 +83,7 @@ func (r *GormSessionRepository) Create(ctx context.Context, in *dtzv1.Session) (
 	m.ID = id
 	m.Name = in.GetName()
 	m.Etag = repox.Ptr(repox.NewULID())
-	if err := dtzv1gorm.NewSessionStore(r.DB).Create(ctx, m); err != nil {
+	if err := r.store(r.DB).Create(ctx, m); err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	return r.get(ctx, id)
@@ -97,6 +110,15 @@ func (r *GormSessionRepository) rowKey(name string) (string, error) {
 // get loads by row key (rowKey) — the private read every generated method
 // re-reads through, so Tier-2 overrides of Get never re-enter generated writes.
 func (r *GormSessionRepository) get(ctx context.Context, key string) (*dtzv1.Session, error) {
+	if r.Store != nil {
+		// One row: read through the store, so a decorator (a read-through
+		// cache) serves it.
+		m, err := r.Store(r.DB).GetByID(ctx, key)
+		if err != nil {
+			return nil, repox.MapGormErr(err)
+		}
+		return r.toProto(ctx, m)
+	}
 	var m dtzv1gorm.Session
 	if err := r.DB.WithContext(ctx).First(&m, "id = ?", key).Error; err != nil {
 		return nil, repox.MapGormErr(err)
@@ -119,6 +141,62 @@ func (r *GormSessionRepository) toProto(ctx context.Context, m *dtzv1gorm.Sessio
 // List returns one page of records.
 func (r *GormSessionRepository) List(ctx context.Context, in repox.ListInput) ([]*dtzv1.Session, string, error) {
 	return r.list(ctx, r.DB, in)
+}
+
+// Count returns how many records match in; its page fields are ignored.
+func (r *GormSessionRepository) Count(ctx context.Context, in repox.ListInput) (int64, error) {
+	return r.count(ctx, r.DB, in)
+}
+
+// Facet counts the records matching in by the values of field; see
+// repox.FacetExpr for the fields it takes.
+func (r *GormSessionRepository) Facet(ctx context.Context, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	return r.facet(ctx, r.DB, in, field, limit)
+}
+
+// filtered narrows scope to the records in's filter (and ShowDeleted)
+// selects, unpaged: what Count and Facet read.
+func (r *GormSessionRepository) filtered(ctx context.Context, scope *gorm.DB, in repox.ListInput) (*gorm.DB, error) {
+	conds, err := filterx.Parse(in.Filter)
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	eng := filterx.Gorm[dtzv1gorm.Session](dtzv1gorm.SessionFilterSpec)
+	for f, h := range r.ListOverrides {
+		eng.Override(f, h)
+	}
+	where, args, err := eng.Where(append(conds, in.Where...))
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	q := scope.WithContext(ctx).Model(&dtzv1gorm.Session{})
+	if where != "" {
+		q = q.Where(where, args...)
+	}
+	return q, nil
+}
+
+// count is Count over scope.
+func (r *GormSessionRepository) count(ctx context.Context, scope *gorm.DB, in repox.ListInput) (int64, error) {
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	return n, repox.MapGormErr(q.Count(&n).Error)
+}
+
+// facet is Facet over scope.
+func (r *GormSessionRepository) facet(ctx context.Context, scope *gorm.DB, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	expr, err := repox.FacetExpr(dtzv1gorm.SessionFilterSpec, field)
+	if err != nil {
+		return nil, err
+	}
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return nil, err
+	}
+	return repox.FacetGorm(ctx, q, expr, limit)
 }
 
 func (r *GormSessionRepository) list(ctx context.Context, scope *gorm.DB, in repox.ListInput) ([]*dtzv1.Session, string, error) {
@@ -241,7 +319,7 @@ func (r *GormSessionRepository) updateTx(ctx context.Context, tx *gorm.DB, key s
 		}
 	}
 	existing.Etag = repox.Ptr(repox.NewULID())
-	return dtzv1gorm.NewSessionStore(tx).Update(ctx, &existing)
+	return r.store(tx).Update(ctx, &existing)
 }
 
 // UpdateOutputOnly persists the server-owned fields of in that paths names, in
@@ -284,7 +362,7 @@ func (r *GormSessionRepository) updateOutputOnlyTx(ctx context.Context, tx *gorm
 			existing.CheckedZone = next.CheckedZone
 		}
 		existing.Etag = repox.Ptr(repox.NewULID())
-		return dtzv1gorm.NewSessionStore(tx).Update(ctx, &existing)
+		return r.store(tx).Update(ctx, &existing)
 	}
 }
 
@@ -323,7 +401,7 @@ func (r *GormSessionRepository) Delete(ctx context.Context, name string) error {
 	if err := r.DB.WithContext(ctx).First(&existing, "id = ?", key).Error; err != nil {
 		return repox.MapGormErr(err)
 	}
-	return repox.MapGormErr(dtzv1gorm.NewSessionStore(r.DB).DeleteByID(ctx, existing.ID))
+	return repox.MapGormErr(r.store(r.DB).DeleteByID(ctx, existing.ID))
 }
 
 // ListByKeys reads every record whose filter field field is one of keys; see
@@ -340,8 +418,9 @@ var _ SessionRepository = (*GormSessionRepository)(nil)
 // gormBatch is Batch on GORM: queued writes run in the Unit's transaction on
 // Commit.
 type gormBatch struct {
-	u  *repox.Unit
-	db *gorm.DB
+	u      *repox.Unit
+	db     *gorm.DB
+	stores storeFuncs
 }
 
 // Commit applies the Unit's writes; see repox.Unit.Commit.
@@ -349,7 +428,7 @@ func (b *gormBatch) Commit(ctx context.Context) error { return b.u.Commit(ctx) }
 
 // CreateSession queues a create and returns the name the record will have.
 func (b *gormBatch) CreateSession(in *dtzv1.Session) (string, error) {
-	r := &GormSessionRepository{DB: b.db}
+	r := &GormSessionRepository{DB: b.db, Store: b.stores.session}
 	m, named, err := r.newRow(in)
 	if err != nil {
 		return "", err
@@ -360,7 +439,7 @@ func (b *gormBatch) CreateSession(in *dtzv1.Session) (string, error) {
 	}
 	queueSessionReferences(b.u, named, nil)
 	b.u.QueueGorm(locks, func(ctx context.Context, tx *gorm.DB) error {
-		return dtzv1gorm.NewSessionStore(tx).Create(ctx, m)
+		return r.store(tx).Create(ctx, m)
 	})
 	b.u.Record(repox.Change{Type: "dtz.v1/Session", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
@@ -369,7 +448,7 @@ func (b *gormBatch) CreateSession(in *dtzv1.Session) (string, error) {
 // UpdateSession queues Update; in.Etag, when set, guards it, and a guard
 // that fails rolls the whole batch back.
 func (b *gormBatch) UpdateSession(in *dtzv1.Session, paths []string) {
-	r := &GormSessionRepository{DB: b.db}
+	r := &GormSessionRepository{DB: b.db, Store: b.stores.session}
 	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
@@ -385,7 +464,7 @@ func (b *gormBatch) UpdateSession(in *dtzv1.Session, paths []string) {
 // UpdateSessionWithOutputOnly queues UpdateWithOutputOnly; in.Etag, when
 // set, guards it, and a guard that fails rolls the whole batch back.
 func (b *gormBatch) UpdateSessionWithOutputOnly(in *dtzv1.Session, paths, outputPaths []string) {
-	r := &GormSessionRepository{DB: b.db}
+	r := &GormSessionRepository{DB: b.db, Store: b.stores.session}
 	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
@@ -400,7 +479,7 @@ func (b *gormBatch) UpdateSessionWithOutputOnly(in *dtzv1.Session, paths, output
 
 // UpdateSessionOutputOnly queues UpdateOutputOnly; in.Etag, when set, guards it.
 func (b *gormBatch) UpdateSessionOutputOnly(in *dtzv1.Session, paths []string) {
-	r := &GormSessionRepository{DB: b.db}
+	r := &GormSessionRepository{DB: b.db, Store: b.stores.session}
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.updateOutputOnlyTx(ctx, tx, in, paths)
 	})
@@ -411,7 +490,7 @@ func (b *gormBatch) UpdateSessionOutputOnly(in *dtzv1.Session, paths []string) {
 // gone is not an error: two batches clearing the same row must not fail each
 // other.
 func (b *gormBatch) DeleteSession(name string) {
-	r := &GormSessionRepository{DB: b.db}
+	r := &GormSessionRepository{DB: b.db, Store: b.stores.session}
 	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)

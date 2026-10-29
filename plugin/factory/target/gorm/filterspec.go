@@ -37,6 +37,9 @@ type filterFieldView struct {
 	// row's reference to the object, these name the object's table, key and
 	// value column. Empty for a field of the row itself.
 	ViaTable, ViaKey, ViaColumn string
+	// ViaMany marks a repeated reference kept in a join table: Column is the
+	// row's key, ViaKey the join's column holding it, ViaColumn the element.
+	ViaMany bool
 	// JSONKeys are a KindJSON field's declared hot paths
 	// ((store.v1.query).json_keys), sorted by path.
 	JSONKeys []jsonKeyView
@@ -211,10 +214,38 @@ func buildFilterTable(db *schema.Database, s *schema.Schema, t *schema.Table, fx
 			v.Fields = append(v.Fields, ff)
 		}
 	}
+	v.Fields = append(v.Fields, joinFilterFields(db, t, taken)...)
 	sort.Slice(v.Fields, func(i, j int) bool { return v.Fields[i].Field < v.Fields[j].Field })
 	sort.Slice(v.Sort, func(i, j int) bool { return v.Sort[i].Field < v.Sort[j].Field })
 	sort.Strings(v.Search)
 	return v, len(v.Fields) > 0 || len(v.Sort) > 0
+}
+
+// joinFilterFields are t's repeated references kept in join tables
+// (schema.Table.Join), each matched through its join: by the element's full
+// name when the join keeps it, else by the target's id.
+func joinFilterFields(db *schema.Database, t *schema.Table, taken map[string]bool) []filterFieldView {
+	key := keyColumn(t)
+	if t.Source == nil || key == "" {
+		return nil
+	}
+	var out []filterFieldView
+	for _, s := range db.Schemas {
+		for _, jt := range s.Tables {
+			j := jt.Join
+			if j == nil || j.OwnerProto != t.ProtoMessage || taken[j.Field] {
+				continue
+			}
+			taken[j.Field] = true
+			ff := filterFieldView{Field: j.Field, Column: key, Kind: "KindRef",
+				ViaTable: fmt.Sprintf("%q.%q", s.Name, jt.Name), ViaKey: j.OwnerColumn, ViaColumn: j.TargetColumn, ViaMany: true}
+			if j.NameColumn != "" {
+				ff.Kind, ff.ViaColumn = "KindText", j.NameColumn
+			}
+			out = append(out, ff)
+		}
+	}
+	return out
 }
 
 // classifyFilterColumn maps a column's neutral type onto a filterx kind and the

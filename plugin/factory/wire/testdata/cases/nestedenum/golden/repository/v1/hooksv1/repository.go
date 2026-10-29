@@ -21,6 +21,7 @@ import (
 	"example.com/test/gen/repox"
 	"example.com/test/genql"
 	"example.com/test/gormdb/filterx"
+	hooksv1gorm "example.com/test/gormdb/v1/hooksv1"
 	"gorm.io/gorm"
 )
 
@@ -35,6 +36,16 @@ type DeliveryRepository interface {
 	Get(ctx context.Context, name string) (*hooksv1.Delivery, error)
 	// List returns one page of records under parent.
 	List(ctx context.Context, parent string, in repox.ListInput) ([]*hooksv1.Delivery, string, error)
+	// Count returns how many records under parent match in (its filter and
+	// ShowDeleted; its page fields are ignored).
+	Count(ctx context.Context, parent string, in repox.ListInput) (int64, error)
+	// Facet counts the records under parent matching in by the values of
+	// field -- a filter field (a column, each element of a repeated one, a
+	// value object's or a join table's), or a JSON path -- most frequent
+	// first, at most limit values (all when limit is not positive). On
+	// GraphQL it is answered from the rows, at most repox.GraphQLScanLimit
+	// of them, and takes no field reached through another table.
+	Facet(ctx context.Context, parent string, in repox.ListInput, field string, limit int) ([]repox.Bucket, error)
 	// ListByKeys reads every record whose filter field field is one of keys
 	// -- a batched read by name, by parent, by any text, enum or reference
 	// field -- in statements of at most repox.KeysPerRead keys, at most
@@ -89,6 +100,16 @@ type WebhookRepository interface {
 	Get(ctx context.Context, name string) (*hooksv1.Webhook, error)
 	// List returns one page of records.
 	List(ctx context.Context, in repox.ListInput) ([]*hooksv1.Webhook, string, error)
+	// Count returns how many records match in (its filter and ShowDeleted;
+	// its page fields are ignored).
+	Count(ctx context.Context, in repox.ListInput) (int64, error)
+	// Facet counts the records matching in by the values of field -- a
+	// filter field (a column, each element of a repeated one, a value
+	// object's or a join table's), or a JSON path -- most frequent first, at
+	// most limit values (all when limit is not positive). On GraphQL it is
+	// answered from the rows, at most repox.GraphQLScanLimit of them, and
+	// takes no field reached through another table.
+	Facet(ctx context.Context, in repox.ListInput, field string, limit int) ([]repox.Bucket, error)
 	// ListByKeys reads every record whose filter field field is one of keys
 	// -- a batched read by name, by parent, by any text, enum or reference
 	// field -- in statements of at most repox.KeysPerRead keys, at most
@@ -184,7 +205,14 @@ func NewBatchIn(u *repox.Unit, opts ...Option) Batch {
 	if svc := u.Conn().GraphQL; svc != nil {
 		return &graphQLBatch{u: u, svc: svc}
 	}
-	return &gormBatch{u: u, db: u.Conn().Gorm}
+	return &gormBatch{u: u, db: u.Conn().Gorm, stores: o.stores}
+}
+
+// storeFuncs holds the store decorators With<Model>Store installs, by
+// resource.
+type storeFuncs struct {
+	delivery func(db *gorm.DB) hooksv1gorm.DeliveryStoreIface
+	webhook  func(db *gorm.DB) hooksv1gorm.WebhookStoreIface
 }
 
 // options collects the per-resource customizations the factories thread into
@@ -192,6 +220,7 @@ func NewBatchIn(u *repox.Unit, opts ...Option) Batch {
 type options struct {
 	references           *repox.References
 	projections          *repox.Projections
+	stores               storeFuncs
 	deliveryHooks        DeliveryHooks
 	deliveryOverrides    map[string]filterx.SQLHandler
 	webhookHooks         WebhookHooks
@@ -224,6 +253,17 @@ func WithDeliveryHooks(h DeliveryHooks) Option {
 	return func(o *options) { o.deliveryHooks = h }
 }
 
+// WithDeliveryStore has the GORM adapters go through the store f builds
+// over a handle -- the repository's, or the transaction a write runs in --
+// instead of hooksv1gorm.NewDeliveryStore's: a decorator over that one,
+// such as a protoc-gen-cache read-through cache or an instrumented store
+// (NewDeliveryStore(db).WithTelemetry(t)). A one-row read goes through it
+// too, so a cache serves Get. f runs for every write and read, so it should
+// be cheap.
+func WithDeliveryStore(f func(db *gorm.DB) hooksv1gorm.DeliveryStoreIface) Option {
+	return func(o *options) { o.stores.delivery = f }
+}
+
 // WithDeliveryListOverride substitutes the generated filter dispatch for one
 // Delivery filter field (e.g. a derived state computed via subqueries).
 func WithDeliveryListOverride(field string, h filterx.SQLHandler) Option {
@@ -238,6 +278,17 @@ func WithDeliveryListOverride(field string, h filterx.SQLHandler) Option {
 // WithWebhookHooks installs h on the Webhook adapters.
 func WithWebhookHooks(h WebhookHooks) Option {
 	return func(o *options) { o.webhookHooks = h }
+}
+
+// WithWebhookStore has the GORM adapters go through the store f builds
+// over a handle -- the repository's, or the transaction a write runs in --
+// instead of hooksv1gorm.NewWebhookStore's: a decorator over that one,
+// such as a protoc-gen-cache read-through cache or an instrumented store
+// (NewWebhookStore(db).WithTelemetry(t)). A one-row read goes through it
+// too, so a cache serves Get. f runs for every write and read, so it should
+// be cheap.
+func WithWebhookStore(f func(db *gorm.DB) hooksv1gorm.WebhookStoreIface) Option {
+	return func(o *options) { o.stores.webhook = f }
 }
 
 // WithWebhookListOverride substitutes the generated filter dispatch for one
@@ -328,8 +379,8 @@ func NewGorm(db *gorm.DB, opts ...Option) Repositories {
 		opt(&o)
 	}
 	repos := Repositories{
-		Deliveries: &GormDeliveryRepository{DB: db, Hooks: o.deliveryHooks, Refs: o.references, ListOverrides: o.deliveryOverrides},
-		Webhooks:   &GormWebhookRepository{DB: db, Hooks: o.webhookHooks, Refs: o.references, ListOverrides: o.webhookOverrides},
+		Deliveries: &GormDeliveryRepository{DB: db, Hooks: o.deliveryHooks, Refs: o.references, ListOverrides: o.deliveryOverrides, Store: o.stores.delivery},
+		Webhooks:   &GormWebhookRepository{DB: db, Hooks: o.webhookHooks, Refs: o.references, ListOverrides: o.webhookOverrides, Store: o.stores.webhook},
 	}
 	if p := o.projections; p != nil {
 		if p.Watches("hooks.v1/Delivery") {

@@ -42,11 +42,24 @@ type GormDeliveryRepository struct {
 	// ListOverrides substitute the generated dispatch for single filter fields
 	// (e.g. a derived state computed via subqueries).
 	ListOverrides map[string]filterx.SQLHandler
+	// Store, when set, builds the store the adapter writes and reads
+	// through over db -- DB, or the transaction a write runs in: a decorator
+	// (a read-through cache, an instrumented store) over
+	// hooksv1gorm.NewDeliveryStore(db). Nil uses that store as it is.
+	Store func(db *gorm.DB) hooksv1gorm.DeliveryStoreIface
 }
 
 // NewGormDeliveryRepository returns the GORM adapter bound to db.
 func NewGormDeliveryRepository(db *gorm.DB) *GormDeliveryRepository {
 	return &GormDeliveryRepository{DB: db}
+}
+
+// store is the store over db the adapter goes through (see Store).
+func (r *GormDeliveryRepository) store(db *gorm.DB) hooksv1gorm.DeliveryStoreIface {
+	if r.Store != nil {
+		return r.Store(db)
+	}
+	return hooksv1gorm.NewDeliveryStore(db)
 }
 
 // Create persists in under parent and returns the stored record.
@@ -84,7 +97,7 @@ func (r *GormDeliveryRepository) Create(ctx context.Context, parent string, in *
 	m.Name = in.GetName()
 	m.WebhookID = parentIDs[0]
 	m.Etag = repox.Ptr(repox.NewULID())
-	if err := hooksv1gorm.NewDeliveryStore(r.DB).Create(ctx, m); err != nil {
+	if err := r.store(r.DB).Create(ctx, m); err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	return r.get(ctx, m.Name)
@@ -111,6 +124,15 @@ func (r *GormDeliveryRepository) rowKey(name string) (string, error) {
 // get loads by row key (rowKey) — the private read every generated method
 // re-reads through, so Tier-2 overrides of Get never re-enter generated writes.
 func (r *GormDeliveryRepository) get(ctx context.Context, key string) (*hooksv1.Delivery, error) {
+	if r.Store != nil {
+		// One row: read through the store, so a decorator (a read-through
+		// cache) serves it.
+		m, err := r.Store(r.DB).GetByName(ctx, key)
+		if err != nil {
+			return nil, repox.MapGormErr(err)
+		}
+		return r.toProto(ctx, m)
+	}
 	var m hooksv1gorm.Delivery
 	if err := r.DB.WithContext(ctx).First(&m, "name = ?", key).Error; err != nil {
 		return nil, repox.MapGormErr(err)
@@ -132,17 +154,96 @@ func (r *GormDeliveryRepository) toProto(ctx context.Context, m *hooksv1gorm.Del
 
 // List returns one page of records under parent.
 func (r *GormDeliveryRepository) List(ctx context.Context, parent string, in repox.ListInput) ([]*hooksv1.Delivery, string, error) {
-	parentIDs, err := repox.SplitName(parent, "webhooks")
+	scope, err := r.parentScope(parent)
 	if err != nil {
 		return nil, "", err
 	}
-	// AIP-159: "-" for the parent reads across every parent; narrow with a
-	// Where on the parent field instead.
-	if parentIDs[len(parentIDs)-1] == "-" {
-		return r.list(ctx, r.DB, in)
-	}
-	scope := r.DB.Where("webhook_id = ?", parentIDs[len(parentIDs)-1])
 	return r.list(ctx, scope, in)
+}
+
+// Count returns how many records under parent match in; its page fields are
+// ignored.
+func (r *GormDeliveryRepository) Count(ctx context.Context, parent string, in repox.ListInput) (int64, error) {
+	scope, err := r.parentScope(parent)
+	if err != nil {
+		return 0, err
+	}
+	return r.count(ctx, scope, in)
+}
+
+// Facet counts the records under parent matching in by the values of field;
+// see repox.FacetExpr for the fields it takes.
+func (r *GormDeliveryRepository) Facet(ctx context.Context, parent string, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	scope, err := r.parentScope(parent)
+	if err != nil {
+		return nil, err
+	}
+	return r.facet(ctx, scope, in, field, limit)
+}
+
+// parentScope is the query of the records under parent.
+func (r *GormDeliveryRepository) parentScope(parent string) (*gorm.DB, error) {
+	parentIDs, err := repox.SplitName(parent, "webhooks")
+	if err != nil {
+		return nil, err
+	}
+	// AIP-159: "-" for the parent reads across every parent; narrow with a
+	// Where on the parent field instead. A "-" widens only its own segment:
+	// under a parent naming some of its ancestors ("a/1/b/-"), the records'
+	// own names are matched, so they stay under those.
+	if parentIDs[len(parentIDs)-1] == "-" {
+		if repox.AllWild(parentIDs) {
+			return r.DB, nil
+		}
+		op, arg := repox.NameMatch(parent + "/deliveries/-")
+		return r.DB.Where(`"hooks_v1"."deliveries"."name" `+op, arg), nil
+	}
+	return r.DB.Where("webhook_id = ?", parentIDs[len(parentIDs)-1]), nil
+}
+
+// filtered narrows scope to the records in's filter (and ShowDeleted)
+// selects, unpaged: what Count and Facet read.
+func (r *GormDeliveryRepository) filtered(ctx context.Context, scope *gorm.DB, in repox.ListInput) (*gorm.DB, error) {
+	conds, err := filterx.Parse(in.Filter)
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	eng := filterx.Gorm[hooksv1gorm.Delivery](hooksv1gorm.DeliveryFilterSpec)
+	for f, h := range r.ListOverrides {
+		eng.Override(f, h)
+	}
+	where, args, err := eng.Where(append(conds, in.Where...))
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	q := scope.WithContext(ctx).Model(&hooksv1gorm.Delivery{})
+	if where != "" {
+		q = q.Where(where, args...)
+	}
+	return q, nil
+}
+
+// count is Count over scope.
+func (r *GormDeliveryRepository) count(ctx context.Context, scope *gorm.DB, in repox.ListInput) (int64, error) {
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	return n, repox.MapGormErr(q.Count(&n).Error)
+}
+
+// facet is Facet over scope.
+func (r *GormDeliveryRepository) facet(ctx context.Context, scope *gorm.DB, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	expr, err := repox.FacetExpr(hooksv1gorm.DeliveryFilterSpec, field)
+	if err != nil {
+		return nil, err
+	}
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return nil, err
+	}
+	return repox.FacetGorm(ctx, q, expr, limit)
 }
 
 func (r *GormDeliveryRepository) list(ctx context.Context, scope *gorm.DB, in repox.ListInput) ([]*hooksv1.Delivery, string, error) {
@@ -264,7 +365,7 @@ func (r *GormDeliveryRepository) updateTx(ctx context.Context, tx *gorm.DB, key 
 		}
 	}
 	existing.Etag = repox.Ptr(repox.NewULID())
-	return hooksv1gorm.NewDeliveryStore(tx).Update(ctx, &existing)
+	return r.store(tx).Update(ctx, &existing)
 }
 
 // UpdateOutputOnly persists the server-owned fields of in that paths names, in
@@ -306,7 +407,7 @@ func (r *GormDeliveryRepository) updateOutputOnlyTx(ctx context.Context, tx *gor
 			existing.State = next.State
 		}
 		existing.Etag = repox.Ptr(repox.NewULID())
-		return hooksv1gorm.NewDeliveryStore(tx).Update(ctx, &existing)
+		return r.store(tx).Update(ctx, &existing)
 	}
 }
 
@@ -357,7 +458,7 @@ func (r *GormDeliveryRepository) Delete(ctx context.Context, name string) error 
 	if err := r.DB.WithContext(ctx).First(&existing, "name = ?", key).Error; err != nil {
 		return repox.MapGormErr(err)
 	}
-	return repox.MapGormErr(hooksv1gorm.NewDeliveryStore(r.DB).DeleteByID(ctx, existing.ID))
+	return repox.MapGormErr(r.store(r.DB).DeleteByID(ctx, existing.ID))
 }
 
 // ListByKeys reads every record whose filter field field is one of keys; see
@@ -386,11 +487,24 @@ type GormWebhookRepository struct {
 	// ListOverrides substitute the generated dispatch for single filter fields
 	// (e.g. a derived state computed via subqueries).
 	ListOverrides map[string]filterx.SQLHandler
+	// Store, when set, builds the store the adapter writes and reads
+	// through over db -- DB, or the transaction a write runs in: a decorator
+	// (a read-through cache, an instrumented store) over
+	// hooksv1gorm.NewWebhookStore(db). Nil uses that store as it is.
+	Store func(db *gorm.DB) hooksv1gorm.WebhookStoreIface
 }
 
 // NewGormWebhookRepository returns the GORM adapter bound to db.
 func NewGormWebhookRepository(db *gorm.DB) *GormWebhookRepository {
 	return &GormWebhookRepository{DB: db}
+}
+
+// store is the store over db the adapter goes through (see Store).
+func (r *GormWebhookRepository) store(db *gorm.DB) hooksv1gorm.WebhookStoreIface {
+	if r.Store != nil {
+		return r.Store(db)
+	}
+	return hooksv1gorm.NewWebhookStore(db)
 }
 
 // Create persists in and returns the stored record.
@@ -414,7 +528,7 @@ func (r *GormWebhookRepository) Create(ctx context.Context, in *hooksv1.Webhook)
 	m.ID = id
 	m.Name = in.GetName()
 	m.Etag = repox.Ptr(repox.NewULID())
-	if err := hooksv1gorm.NewWebhookStore(r.DB).Create(ctx, m); err != nil {
+	if err := r.store(r.DB).Create(ctx, m); err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	return r.get(ctx, id)
@@ -441,6 +555,15 @@ func (r *GormWebhookRepository) rowKey(name string) (string, error) {
 // get loads by row key (rowKey) — the private read every generated method
 // re-reads through, so Tier-2 overrides of Get never re-enter generated writes.
 func (r *GormWebhookRepository) get(ctx context.Context, key string) (*hooksv1.Webhook, error) {
+	if r.Store != nil {
+		// One row: read through the store, so a decorator (a read-through
+		// cache) serves it.
+		m, err := r.Store(r.DB).GetByID(ctx, key)
+		if err != nil {
+			return nil, repox.MapGormErr(err)
+		}
+		return r.toProto(ctx, m)
+	}
 	var m hooksv1gorm.Webhook
 	if err := r.DB.WithContext(ctx).First(&m, "id = ?", key).Error; err != nil {
 		return nil, repox.MapGormErr(err)
@@ -463,6 +586,62 @@ func (r *GormWebhookRepository) toProto(ctx context.Context, m *hooksv1gorm.Webh
 // List returns one page of records.
 func (r *GormWebhookRepository) List(ctx context.Context, in repox.ListInput) ([]*hooksv1.Webhook, string, error) {
 	return r.list(ctx, r.DB, in)
+}
+
+// Count returns how many records match in; its page fields are ignored.
+func (r *GormWebhookRepository) Count(ctx context.Context, in repox.ListInput) (int64, error) {
+	return r.count(ctx, r.DB, in)
+}
+
+// Facet counts the records matching in by the values of field; see
+// repox.FacetExpr for the fields it takes.
+func (r *GormWebhookRepository) Facet(ctx context.Context, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	return r.facet(ctx, r.DB, in, field, limit)
+}
+
+// filtered narrows scope to the records in's filter (and ShowDeleted)
+// selects, unpaged: what Count and Facet read.
+func (r *GormWebhookRepository) filtered(ctx context.Context, scope *gorm.DB, in repox.ListInput) (*gorm.DB, error) {
+	conds, err := filterx.Parse(in.Filter)
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	eng := filterx.Gorm[hooksv1gorm.Webhook](hooksv1gorm.WebhookFilterSpec)
+	for f, h := range r.ListOverrides {
+		eng.Override(f, h)
+	}
+	where, args, err := eng.Where(append(conds, in.Where...))
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	q := scope.WithContext(ctx).Model(&hooksv1gorm.Webhook{})
+	if where != "" {
+		q = q.Where(where, args...)
+	}
+	return q, nil
+}
+
+// count is Count over scope.
+func (r *GormWebhookRepository) count(ctx context.Context, scope *gorm.DB, in repox.ListInput) (int64, error) {
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	return n, repox.MapGormErr(q.Count(&n).Error)
+}
+
+// facet is Facet over scope.
+func (r *GormWebhookRepository) facet(ctx context.Context, scope *gorm.DB, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	expr, err := repox.FacetExpr(hooksv1gorm.WebhookFilterSpec, field)
+	if err != nil {
+		return nil, err
+	}
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return nil, err
+	}
+	return repox.FacetGorm(ctx, q, expr, limit)
 }
 
 func (r *GormWebhookRepository) list(ctx context.Context, scope *gorm.DB, in repox.ListInput) ([]*hooksv1.Webhook, string, error) {
@@ -564,7 +743,7 @@ func (r *GormWebhookRepository) updateTx(ctx context.Context, tx *gorm.DB, key s
 	existing.URI = next.URI
 	existing.State = next.State
 	existing.Etag = repox.Ptr(repox.NewULID())
-	return hooksv1gorm.NewWebhookStore(tx).Update(ctx, &existing)
+	return r.store(tx).Update(ctx, &existing)
 }
 
 // newRow builds the row a Batch inserts for in, and the
@@ -602,7 +781,7 @@ func (r *GormWebhookRepository) Delete(ctx context.Context, name string) error {
 	if err := r.DB.WithContext(ctx).First(&existing, "id = ?", key).Error; err != nil {
 		return repox.MapGormErr(err)
 	}
-	return repox.MapGormErr(hooksv1gorm.NewWebhookStore(r.DB).DeleteByID(ctx, existing.ID))
+	return repox.MapGormErr(r.store(r.DB).DeleteByID(ctx, existing.ID))
 }
 
 // ListByKeys reads every record whose filter field field is one of keys; see
@@ -619,8 +798,9 @@ var _ WebhookRepository = (*GormWebhookRepository)(nil)
 // gormBatch is Batch on GORM: queued writes run in the Unit's transaction on
 // Commit.
 type gormBatch struct {
-	u  *repox.Unit
-	db *gorm.DB
+	u      *repox.Unit
+	db     *gorm.DB
+	stores storeFuncs
 }
 
 // Commit applies the Unit's writes; see repox.Unit.Commit.
@@ -628,7 +808,7 @@ func (b *gormBatch) Commit(ctx context.Context) error { return b.u.Commit(ctx) }
 
 // CreateDelivery queues a create and returns the name the record will have.
 func (b *gormBatch) CreateDelivery(parent string, in *hooksv1.Delivery) (string, error) {
-	r := &GormDeliveryRepository{DB: b.db}
+	r := &GormDeliveryRepository{DB: b.db, Store: b.stores.delivery}
 	m, named, err := r.newRow(parent, in)
 	if err != nil {
 		return "", err
@@ -639,7 +819,7 @@ func (b *gormBatch) CreateDelivery(parent string, in *hooksv1.Delivery) (string,
 	}
 	queueDeliveryReferences(b.u, named, nil)
 	b.u.QueueGorm(locks, func(ctx context.Context, tx *gorm.DB) error {
-		return hooksv1gorm.NewDeliveryStore(tx).Create(ctx, m)
+		return r.store(tx).Create(ctx, m)
 	})
 	b.u.Record(repox.Change{Type: "hooks.v1/Delivery", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
@@ -648,7 +828,7 @@ func (b *gormBatch) CreateDelivery(parent string, in *hooksv1.Delivery) (string,
 // UpdateDelivery queues Update; in.Etag, when set, guards it, and a guard
 // that fails rolls the whole batch back.
 func (b *gormBatch) UpdateDelivery(in *hooksv1.Delivery, paths []string) {
-	r := &GormDeliveryRepository{DB: b.db}
+	r := &GormDeliveryRepository{DB: b.db, Store: b.stores.delivery}
 	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
@@ -664,7 +844,7 @@ func (b *gormBatch) UpdateDelivery(in *hooksv1.Delivery, paths []string) {
 // UpdateDeliveryWithOutputOnly queues UpdateWithOutputOnly; in.Etag, when
 // set, guards it, and a guard that fails rolls the whole batch back.
 func (b *gormBatch) UpdateDeliveryWithOutputOnly(in *hooksv1.Delivery, paths, outputPaths []string) {
-	r := &GormDeliveryRepository{DB: b.db}
+	r := &GormDeliveryRepository{DB: b.db, Store: b.stores.delivery}
 	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
@@ -679,7 +859,7 @@ func (b *gormBatch) UpdateDeliveryWithOutputOnly(in *hooksv1.Delivery, paths, ou
 
 // UpdateDeliveryOutputOnly queues UpdateOutputOnly; in.Etag, when set, guards it.
 func (b *gormBatch) UpdateDeliveryOutputOnly(in *hooksv1.Delivery, paths []string) {
-	r := &GormDeliveryRepository{DB: b.db}
+	r := &GormDeliveryRepository{DB: b.db, Store: b.stores.delivery}
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.updateOutputOnlyTx(ctx, tx, in, paths)
 	})
@@ -690,7 +870,7 @@ func (b *gormBatch) UpdateDeliveryOutputOnly(in *hooksv1.Delivery, paths []strin
 // gone is not an error: two batches clearing the same row must not fail each
 // other.
 func (b *gormBatch) DeleteDelivery(name string) {
-	r := &GormDeliveryRepository{DB: b.db}
+	r := &GormDeliveryRepository{DB: b.db, Store: b.stores.delivery}
 	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)
@@ -705,7 +885,7 @@ func (b *gormBatch) DeleteDelivery(name string) {
 
 // CreateWebhook queues a create and returns the name the record will have.
 func (b *gormBatch) CreateWebhook(in *hooksv1.Webhook) (string, error) {
-	r := &GormWebhookRepository{DB: b.db}
+	r := &GormWebhookRepository{DB: b.db, Store: b.stores.webhook}
 	m, named, err := r.newRow(in)
 	if err != nil {
 		return "", err
@@ -716,7 +896,7 @@ func (b *gormBatch) CreateWebhook(in *hooksv1.Webhook) (string, error) {
 	}
 	queueWebhookReferences(b.u, named, nil)
 	b.u.QueueGorm(locks, func(ctx context.Context, tx *gorm.DB) error {
-		return hooksv1gorm.NewWebhookStore(tx).Create(ctx, m)
+		return r.store(tx).Create(ctx, m)
 	})
 	b.u.Record(repox.Change{Type: "hooks.v1/Webhook", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
@@ -725,7 +905,7 @@ func (b *gormBatch) CreateWebhook(in *hooksv1.Webhook) (string, error) {
 // UpdateWebhook queues Update; in.Etag, when set, guards it, and a guard
 // that fails rolls the whole batch back.
 func (b *gormBatch) UpdateWebhook(in *hooksv1.Webhook, paths []string) {
-	r := &GormWebhookRepository{DB: b.db}
+	r := &GormWebhookRepository{DB: b.db, Store: b.stores.webhook}
 	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
@@ -742,7 +922,7 @@ func (b *gormBatch) UpdateWebhook(in *hooksv1.Webhook, paths []string) {
 // gone is not an error: two batches clearing the same row must not fail each
 // other.
 func (b *gormBatch) DeleteWebhook(name string) {
-	r := &GormWebhookRepository{DB: b.db}
+	r := &GormWebhookRepository{DB: b.db, Store: b.stores.webhook}
 	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)

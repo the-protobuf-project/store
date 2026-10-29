@@ -41,6 +41,13 @@ message Shelf {
 
   // When the soft-deleted shelf goes for good.
   google.protobuf.Timestamp expire_time = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // Books on show, of this shelf or another: a repeated reference to a
+  // nested resource, kept in a join table with each book's full name.
+  repeated string featured = 6 [
+    (google.api.field_behavior) = OPTIONAL,
+    (google.api.resource_reference) = {type: "catalog.example.com/Book"}
+  ];
 }
 
 // A book on a shelf: a nested resource, so a reference to it stores its full
@@ -68,6 +75,13 @@ message Book {
 
   // When the soft-deleted book goes for good.
   google.protobuf.Timestamp expire_time = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // Shelves the book is also filed under: a repeated reference to a
+  // top-level resource, kept in a join table by the shelves' ids.
+  repeated string filed_under = 6 [
+    (google.api.field_behavior) = OPTIONAL,
+    (google.api.resource_reference) = {type: "catalog.example.com/Shelf"}
+  ];
 }
 
 // A page of a book: nested two deep, so the row it hangs off is a nested

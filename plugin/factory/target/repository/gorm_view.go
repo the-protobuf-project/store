@@ -64,6 +64,11 @@ type gormResourceView struct {
 	// literal awaiting the name match's operator: the parent's row is found
 	// by name. "" when the parent is keyed by its bare id.
 	ParentScopeSQL string
+	// OwnCollection is the resource's own collection ("events"), and
+	// NameColumnSQL its qualified name column: a List under a parent with a
+	// "-" in it matches the records' names (repox.NameMatch).
+	OwnCollection string
+	NameColumnSQL string
 
 	// Rendered fragments.
 	RefsCreate     []string // set model ref columns from the incoming proto
@@ -93,6 +98,20 @@ type gormResourceView struct {
 	DeepDetach       []string // association clears before the row update
 	DeletePreloads   string   // .Preload chain Delete needs to walk the graph
 	NeedsClause      bool     // fragments use gorm.io/gorm/clause
+
+	// Joins are the repeated references kept in join tables (joins.go);
+	// InTx reports a create that writes more than its row (value objects or
+	// join rows), and so runs in a transaction.
+	Joins []joinView
+	InTx  bool
+
+	// RequiredDocs are the REQUIRED fields stored as document columns, NOT
+	// NULL: a write without one is refused before the database sees it.
+	RequiredDocs []string
+
+	// StoreGet is the store method get reads one row by, through a Store
+	// decorator: GetByName for a resource found by name, else GetByID.
+	StoreGet string
 }
 
 // nameExpr renders the Go expression building the resource name of segs from
@@ -167,6 +186,8 @@ func gormResourceViews(pb *pbIndex, db *schema.Database, s *schema.Schema, resou
 		v.VarList = strings.Join(v.Vars, ", ")
 		v.FormatExpr = strings.Join(formatParts, "+\"/\"+")
 		v.CollectionsExpr = strings.Join(collections, ", ")
+		v.OwnCollection = r.Segments[len(r.Segments)-1].Collection
+		v.NameColumnSQL = qualifiedIdent(r.Schema.Name, r.Table.Name) + "." + quoteIdent(nameColumn(r))
 		if v.Parented {
 			v.ParentCollExpr = strings.Join(collections[:len(collections)-1], ", ")
 			v.ParentVarList = strings.Join(v.Vars[:len(v.Vars)-1], ", ")
@@ -258,9 +279,41 @@ func gormResourceViews(pb *pbIndex, db *schema.Database, s *schema.Schema, resou
 		}
 		v.NeedsClause = gg.NeedsClause
 		v.MaskFields, v.VOMaskLines = mergeOneofMasks(v.MaskFields, v.VOMaskLines, oneofs)
+		v.RequiredDocs = requiredDocs(r)
+		v.StoreGet = "GetByID"
+		if v.NameKeyed {
+			v.StoreGet = "GetBy" + gormFieldName(r.Cols.NameKey.Name, false)
+		}
+		v.Joins = joinViews(r)
+		v.InTx = v.HasVOs || len(v.Joins) > 0
+		for _, j := range v.Joins {
+			v.MaskFields = append(v.MaskFields, maskFieldView{Path: j.Field, GoField: j.GoField})
+		}
 		out = append(out, v)
 	}
 	return out, nil
+}
+
+// requiredDocs returns the proto fields of r's REQUIRED document columns.
+func requiredDocs(r *resource) []string {
+	var out []string
+	for _, c := range r.Table.Columns {
+		if c.Document && c.NotNull && c.Source != nil && c.Source.ContainingMessage().FullName() == r.Table.Source.FullName() {
+			out = append(out, string(c.Source.Name()))
+		}
+	}
+	return out
+}
+
+// nameColumn is the column holding r's full resource name.
+func nameColumn(r *resource) string {
+	switch {
+	case r.Cols.NameKey != nil:
+		return r.Cols.NameKey.Name
+	case r.Cols.Name != nil:
+		return r.Cols.Name.Name
+	}
+	return "name"
 }
 
 // refFragment holds the rendered pieces for one root-resource reference column.

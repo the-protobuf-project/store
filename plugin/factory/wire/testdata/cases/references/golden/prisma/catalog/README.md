@@ -6,7 +6,7 @@ Generated from Protobuf by protoc-gen-store. Source of truth is the `.proto` fil
 
 | Models | Enums |
 | ---: | ---: |
-| 3 | 0 |
+| 5 | 0 |
 
 ## Entity relationships
 
@@ -17,6 +17,11 @@ erDiagram
         string id PK
         string shelf_id FK
     }
+    BookFiledUnder {
+        string id PK
+        string book_id FK
+        string shelf_id FK
+    }
     Page {
         string id PK
         string shelf_id FK
@@ -25,9 +30,18 @@ erDiagram
     Shelf {
         string id PK
     }
+    ShelfFeatured {
+        string id PK
+        string shelf_id FK
+        string book_id FK
+    }
     Book }o--|| Shelf : "shelf_id"
+    BookFiledUnder }o--|| Book : "book_id"
+    BookFiledUnder }o--|| Shelf : "shelf_id"
     Page }o--|| Shelf : "shelf_id"
     Page }o--|| Book : "book_id"
+    ShelfFeatured }o--|| Shelf : "shelf_id"
+    ShelfFeatured }o--|| Book : "book_id"
 ```
 
 ## Subfolders

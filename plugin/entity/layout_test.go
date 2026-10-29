@@ -14,7 +14,11 @@ package entity
 // repository and no way to notice. The cases below are the edges where two
 // independent implementations would have diverged.
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/the-protobuf-project/protokit/schema"
+)
 
 func ptr(b bool) *bool { return &b }
 
@@ -124,4 +128,18 @@ func note(s string) string {
 		return ""
 	}
 	return " — " + s
+}
+
+// TestKeepEponymousTables: keep_eponymous_tables reaches protokit through
+// schema.EponymousTableResolver, off unless the config turns it on.
+func TestKeepEponymousTables(t *testing.T) {
+	if schema.KeepEponymousTables(Layout(nil)) {
+		t.Error("nil config keeps eponymous tables")
+	}
+	if schema.KeepEponymousTables(Layout(&LayoutConfig{DedupeSchemaTable: true})) {
+		t.Error("keep_eponymous_tables defaults on")
+	}
+	if !schema.KeepEponymousTables(Layout(&LayoutConfig{DedupeSchemaTable: true, KeepEponymousTables: true})) {
+		t.Error("keep_eponymous_tables: true is ignored")
+	}
 }

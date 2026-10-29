@@ -95,6 +95,10 @@ func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 			if err := renderGo(pf, "projection_runtime.go.tpl", repoxView(db)); err != nil {
 				return fmt.Errorf("repository: %s/projection.go: %w", repoxPkg, err)
 			}
+			qf := p.NewGeneratedFile(repoxPkg+"/query.go", "")
+			if err := renderGo(qf, "query.go.tpl", repoxView(db)); err != nil {
+				return fmt.Errorf("repository: %s/query.go: %w", repoxPkg, err)
+			}
 			repoxEmitted = true
 			grpcDB = db
 		}

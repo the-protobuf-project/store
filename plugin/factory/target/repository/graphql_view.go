@@ -33,6 +33,10 @@ type gqlResourceView struct {
 	// NamePred is the name column's predicate field, e.g. "booksql.Name",
 	// which finds a nested resource's row (NameKeyed only).
 	NamePred string
+	// NameColPred is the predicate field of the column holding the full
+	// name, every resource's: a List under a parent with a "-" in it matches
+	// it (repox.NamePattern).
+	NameColPred string
 	// ParentRows is the lookup of a nested parent's rows, whose keys a List
 	// under it is scoped to: the parent is found by name. Nil when the parent
 	// is keyed by its bare id.
@@ -250,6 +254,7 @@ func gqlResourceViews(pb *pbIndex, db *schema.Database, s *schema.Schema, resour
 		if v.NameKeyed {
 			v.NamePred = v.ResPkg + "." + export(camel(r.Cols.NameKey.Name))
 		}
+		v.NameColPred = v.ResPkg + "." + export(camel(nameColumn(r)))
 		if c := r.Cols.DeleteTime; c != nil {
 			v.DeleteTimePred = v.ResPkg + "." + export(camel(c.Name))
 			v.DeleteTimeInputField = export(camel(c.Name))
@@ -309,7 +314,7 @@ func gqlResourceViews(pb *pbIndex, db *schema.Database, s *schema.Schema, resour
 		for _, g := range vp.VOs {
 			v.DeepPkgs = append(v.DeepPkgs, g.VODomPkg+"/"+g.VOResPkg) // the queued fragments name its response types
 			v.ViaLookups = append(v.ViaLookups, viaLookup{
-				Field: naming.StripIDSuffix(g.vo.Col.Name), Domain: g.VODomain, Resource: g.VOResource, ResPkg: g.VOResPkg,
+				Field: naming.StripIDSuffix(g.vo.Col.Name), Domain: g.VODomain, Resource: g.VOResource, ResPkg: g.VOResPkg, KeyField: "Id",
 			})
 		}
 		for _, e := range r.Graph {
@@ -318,8 +323,17 @@ func gqlResourceViews(pb *pbIndex, db *schema.Database, s *schema.Schema, resour
 			}
 			nm := gqlNamesOf(e.Child.Table)
 			v.ViaLookups = append(v.ViaLookups, viaLookup{
-				Field: naming.StripIDSuffix(e.FKCol.Name), Domain: nm.Domain, Resource: nm.Resource, ResPkg: nm.ResPkg,
+				Field: naming.StripIDSuffix(e.FKCol.Name), Domain: nm.Domain, Resource: nm.Resource, ResPkg: nm.ResPkg, KeyField: "Id",
 			})
+		}
+		for _, j := range v.Joins {
+			v.DeepPkgs = append(v.DeepPkgs, j.DomPkg+"/"+j.ResPkg)
+			v.ViaLookups = append(v.ViaLookups, viaLookup{
+				Field: j.Field, Domain: j.Domain, Resource: j.Resource, ResPkg: j.ResPkg, KeyField: j.OwnerField,
+			})
+			if j.Lookup != nil {
+				v.ParentLookups = append(v.ParentLookups, *j.Lookup)
+			}
 		}
 		v.PKInputField = export(camel(r.Cols.PK.Name))
 		gg := graphGQLFragments(pb, r)
@@ -956,4 +970,8 @@ type viaLookup struct {
 	Domain   string
 	Resource string
 	ResPkg   string
+	// KeyField is the looked-up table's column the row's keys are matched
+	// against and returned from: its key ("Id"), or a join table's owner
+	// column.
+	KeyField string
 }

@@ -12,6 +12,7 @@ package prisma
 import (
 	"fmt"
 	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -121,14 +122,42 @@ func writeScaffold(p *protogen.Plugin, db *schema.Database, provider types.Provi
 	return nil
 }
 
+// DefaultVersion is the Prisma release package.json pins when the
+// prisma_version opt names none. The dev dependencies beside it are the
+// current majors it supports: TypeScript 5.9 (it needs >= 5.4), Node 24's
+// types (it runs on ^20.19, ^22.12 and >= 24), dotenv 18.
+const DefaultVersion = "7.10.1"
+
+// version is the Prisma release package.json pins (SetVersion).
+var version = DefaultVersion
+
+// SetVersion sets the Prisma release package.json pins, exactly, for prisma
+// and @prisma/client: a semantic version ("7.10.1"), which must be one npm
+// resolves to a single release, so no range. Empty restores DefaultVersion.
+func SetVersion(v string) error {
+	if v == "" {
+		version = DefaultVersion
+		return nil
+	}
+	if !exactVersion.MatchString(v) {
+		return fmt.Errorf("prisma_version %q: want an exact version, e.g. %s", v, DefaultVersion)
+	}
+	version = v
+	return nil
+}
+
+// exactVersion matches a semantic version with an optional prerelease.
+var exactVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`)
+
 // scaffoldView prepares the template data shared by every scaffold file. It
 // deliberately carries no connection URL; the two env views add their own.
 func scaffoldView(db *schema.Database, provider types.Provider) map[string]any {
 	return map[string]any{
-		"Database":    db.Name,
-		"PackageName": strings.ReplaceAll(db.Name, "_", "-") + "-prisma",
-		"EnvVar":      envVar(db),
-		"ProviderExt": provider.FragmentExt(),
+		"Database":      db.Name,
+		"PackageName":   strings.ReplaceAll(db.Name, "_", "-") + "-prisma",
+		"EnvVar":        envVar(db),
+		"ProviderExt":   provider.FragmentExt(),
+		"PrismaVersion": version,
 	}
 }
 

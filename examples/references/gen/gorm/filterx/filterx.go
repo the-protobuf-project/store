@@ -201,10 +201,34 @@ type FieldSpec struct {
 
 // Via locates a value-object field: the row's reference column (FieldSpec's
 // Column) names a key of Table, whose Column holds the value.
+//
+// With Many, Table is a join table keeping a repeated reference, one row per
+// element: Key holds the row's own key (FieldSpec's Column), Column the
+// element. `field:value` (and `=`) then matches a row one of whose elements
+// is value, and `field:*` a row with any.
 type Via struct {
 	Table  string // quoted, schema-qualified value-object table
 	Key    string // its key column
 	Column string // the value column
+	Many   bool   // a join table: many rows per row (see above)
+}
+
+// ManyCondition rewrites c, a condition on a join-table field (Via.Many),
+// into the condition its join rows are matched by: membership (`:`) is
+// equality with an element. present is set for a presence test (`:*`, or a
+// null test, with null reporting which), which matches on whether any join
+// row exists rather than on its value.
+func ManyCondition(c Condition) (inner Condition, present, null bool, err error) {
+	switch {
+	case c.Op == OpNull:
+		null, err = ParseBool(c.Value)
+		return c, true, null, err
+	case IsPresenceTest(c):
+		return c, true, false, nil
+	case c.Op == OpHas:
+		c.Op = OpEq
+	}
+	return c, false, false, nil
 }
 
 // Spec is one table's filter/order surface. Instances are generated per schema

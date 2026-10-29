@@ -39,4 +39,13 @@ func apply{{.Model}}Mask(merged, in *{{.PB}}, paths []string) {
 	{{.}}
 	{{- end}}
 }
+{{- if .RequiredDocs}}
+
+// check{{.Model}}Required refuses, with repox.ErrInvalidArgument, a write of
+// {{.Model}} missing one of its REQUIRED document fields ({{range $i, $f := .RequiredDocs}}{{if $i}}, {{end}}{{$f}}{{end}}),
+// which the database holds NOT NULL.
+func check{{.Model}}Required(m *{{.PB}}) error {
+	return repox.RequireFields(m{{range .RequiredDocs}}, "{{.}}"{{end}})
+}
+{{- end}}
 {{- end}}

@@ -387,6 +387,28 @@ func sqlCondition(spec Spec, c Condition) (string, []any, error) {
 		return sqlJSONCondition(spec.Table+`."`+p.Field.Column+`"`, p, c)
 	}
 	col := spec.Table + `."` + f.Column + `"`
+	if f.Via != nil && f.Via.Many {
+		// A join-table field: the row's key is among the owners of the
+		// matching join rows (any join row, for a presence test).
+		inner, present, null, err := ManyCondition(c)
+		if err != nil {
+			return "", nil, err
+		}
+		owners := `SELECT ` + f.Via.Table + `."` + f.Via.Key + `" FROM ` + f.Via.Table
+		if present {
+			if null {
+				return col + ` NOT IN (` + owners + `)`, nil, nil
+			}
+			return col + ` IN (` + owners + `)`, nil, nil
+		}
+		cl, a, err := sqlCondition(Spec{Table: f.Via.Table, Fields: map[string]FieldSpec{
+			c.Field: {Column: f.Via.Column, Kind: f.Kind, EnumPrefix: f.EnumPrefix},
+		}}, inner)
+		if err != nil {
+			return "", nil, err
+		}
+		return col + ` IN (` + owners + ` WHERE ` + cl + `)`, a, nil
+	}
 	if c.Op == OpNull {
 		null, err := ParseBool(c.Value)
 		if err != nil {

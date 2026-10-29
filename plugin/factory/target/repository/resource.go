@@ -56,6 +56,9 @@ type resource struct {
 	// (see planGraph).
 	Graph []*gEdge
 
+	// Joins are the repeated references kept in join tables (see joins.go).
+	Joins []joinField
+
 	// Type is the AIP resource type ("library.example.com/Book").
 	Type string
 	// ExtRefs are the reference fields no foreign key enforces (see
@@ -198,6 +201,9 @@ func planResources(pb *pbIndex, db *schema.Database) (map[*schema.Table]*resourc
 	for _, r := range byTable {
 		r.VOs = planVOFields(pb, db, r)
 		r.Graph = planGraph(pb, db, r)
+	}
+	for _, r := range byTable {
+		r.Joins = planJoins(pb, db, byTable, r)
 	}
 	return byTable, nil
 }

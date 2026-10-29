@@ -21,6 +21,7 @@ import (
 	"example.com/test/gen/repox"
 	"example.com/test/genql"
 	"example.com/test/gormdb/filterx"
+	projdemov1gorm "example.com/test/gormdb/v1/projdemov1"
 	"gorm.io/gorm"
 )
 
@@ -35,6 +36,16 @@ type BookingRepository interface {
 	Get(ctx context.Context, name string) (*projdemov1.Booking, error)
 	// List returns one page of records.
 	List(ctx context.Context, in repox.ListInput) ([]*projdemov1.Booking, string, error)
+	// Count returns how many records match in (its filter and ShowDeleted;
+	// its page fields are ignored).
+	Count(ctx context.Context, in repox.ListInput) (int64, error)
+	// Facet counts the records matching in by the values of field -- a
+	// filter field (a column, each element of a repeated one, a value
+	// object's or a join table's), or a JSON path -- most frequent first, at
+	// most limit values (all when limit is not positive). On GraphQL it is
+	// answered from the rows, at most repox.GraphQLScanLimit of them, and
+	// takes no field reached through another table.
+	Facet(ctx context.Context, in repox.ListInput, field string, limit int) ([]repox.Bucket, error)
 	// ListByKeys reads every record whose filter field field is one of keys
 	// -- a batched read by name, by parent, by any text, enum or reference
 	// field -- in statements of at most repox.KeysPerRead keys, at most
@@ -78,6 +89,16 @@ type RoomRepository interface {
 	Get(ctx context.Context, name string) (*projdemov1.Room, error)
 	// List returns one page of records.
 	List(ctx context.Context, in repox.ListInput) ([]*projdemov1.Room, string, error)
+	// Count returns how many records match in (its filter and ShowDeleted;
+	// its page fields are ignored).
+	Count(ctx context.Context, in repox.ListInput) (int64, error)
+	// Facet counts the records matching in by the values of field -- a
+	// filter field (a column, each element of a repeated one, a value
+	// object's or a join table's), or a JSON path -- most frequent first, at
+	// most limit values (all when limit is not positive). On GraphQL it is
+	// answered from the rows, at most repox.GraphQLScanLimit of them, and
+	// takes no field reached through another table.
+	Facet(ctx context.Context, in repox.ListInput, field string, limit int) ([]repox.Bucket, error)
 	// ListByKeys reads every record whose filter field field is one of keys
 	// -- a batched read by name, by parent, by any text, enum or reference
 	// field -- in statements of at most repox.KeysPerRead keys, at most
@@ -167,7 +188,14 @@ func NewBatchIn(u *repox.Unit, opts ...Option) Batch {
 	if svc := u.Conn().GraphQL; svc != nil {
 		return &graphQLBatch{u: u, svc: svc}
 	}
-	return &gormBatch{u: u, db: u.Conn().Gorm}
+	return &gormBatch{u: u, db: u.Conn().Gorm, stores: o.stores}
+}
+
+// storeFuncs holds the store decorators With<Model>Store installs, by
+// resource.
+type storeFuncs struct {
+	booking func(db *gorm.DB) projdemov1gorm.BookingStoreIface
+	room    func(db *gorm.DB) projdemov1gorm.RoomStoreIface
 }
 
 // options collects the per-resource customizations the factories thread into
@@ -175,6 +203,7 @@ func NewBatchIn(u *repox.Unit, opts ...Option) Batch {
 type options struct {
 	references          *repox.References
 	projections         *repox.Projections
+	stores              storeFuncs
 	bookingHooks        BookingHooks
 	bookingOverrides    map[string]filterx.SQLHandler
 	roomHooks           RoomHooks
@@ -207,6 +236,17 @@ func WithBookingHooks(h BookingHooks) Option {
 	return func(o *options) { o.bookingHooks = h }
 }
 
+// WithBookingStore has the GORM adapters go through the store f builds
+// over a handle -- the repository's, or the transaction a write runs in --
+// instead of projdemov1gorm.NewBookingStore's: a decorator over that one,
+// such as a protoc-gen-cache read-through cache or an instrumented store
+// (NewBookingStore(db).WithTelemetry(t)). A one-row read goes through it
+// too, so a cache serves Get. f runs for every write and read, so it should
+// be cheap.
+func WithBookingStore(f func(db *gorm.DB) projdemov1gorm.BookingStoreIface) Option {
+	return func(o *options) { o.stores.booking = f }
+}
+
 // WithBookingListOverride substitutes the generated filter dispatch for one
 // Booking filter field (e.g. a derived state computed via subqueries).
 func WithBookingListOverride(field string, h filterx.SQLHandler) Option {
@@ -221,6 +261,17 @@ func WithBookingListOverride(field string, h filterx.SQLHandler) Option {
 // WithRoomHooks installs h on the Room adapters.
 func WithRoomHooks(h RoomHooks) Option {
 	return func(o *options) { o.roomHooks = h }
+}
+
+// WithRoomStore has the GORM adapters go through the store f builds
+// over a handle -- the repository's, or the transaction a write runs in --
+// instead of projdemov1gorm.NewRoomStore's: a decorator over that one,
+// such as a protoc-gen-cache read-through cache or an instrumented store
+// (NewRoomStore(db).WithTelemetry(t)). A one-row read goes through it
+// too, so a cache serves Get. f runs for every write and read, so it should
+// be cheap.
+func WithRoomStore(f func(db *gorm.DB) projdemov1gorm.RoomStoreIface) Option {
+	return func(o *options) { o.stores.room = f }
 }
 
 // WithRoomListOverride substitutes the generated filter dispatch for one
@@ -311,8 +362,8 @@ func NewGorm(db *gorm.DB, opts ...Option) Repositories {
 		opt(&o)
 	}
 	repos := Repositories{
-		Bookings: &GormBookingRepository{DB: db, Hooks: o.bookingHooks, Refs: o.references, ListOverrides: o.bookingOverrides},
-		Rooms:    &GormRoomRepository{DB: db, Hooks: o.roomHooks, Refs: o.references, ListOverrides: o.roomOverrides},
+		Bookings: &GormBookingRepository{DB: db, Hooks: o.bookingHooks, Refs: o.references, ListOverrides: o.bookingOverrides, Store: o.stores.booking},
+		Rooms:    &GormRoomRepository{DB: db, Hooks: o.roomHooks, Refs: o.references, ListOverrides: o.roomOverrides, Store: o.stores.room},
 	}
 	if p := o.projections; p != nil {
 		if p.Watches("projdemo.v1/Booking") {

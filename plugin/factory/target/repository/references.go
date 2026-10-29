@@ -75,7 +75,9 @@ func referrerIndex(dbs []*schema.Database) map[tableKey][]referrerFK {
 					idx[k] = append(idx[k], referrerFK{Schema: s.Name, Table: t.Name, Column: fk.Column, RefColumn: fk.ReferencedColumn})
 				}
 				for _, fk := range t.ForeignKeys {
-					if fk.ReferencedProto == "" { // embed FKs are owned rows, not referrers
+					// Embed FKs are owned rows, not referrers, and so is a join
+					// table's key to its owner (its rows are the owner's field).
+					if fk.ReferencedProto == "" && !joinOwnerFK(t, fk) {
 						add(fk)
 					}
 				}

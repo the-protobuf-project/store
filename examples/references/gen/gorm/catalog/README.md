@@ -8,7 +8,7 @@ Generated from Protobuf by protoc-gen-store. Source of truth is the `.proto` fil
 
 | Models | Enums |
 | ---: | ---: |
-| 3 | 0 |
+| 5 | 0 |
 
 ## Entity relationships
 
@@ -19,6 +19,11 @@ erDiagram
         string id PK
         string shelf_id FK
     }
+    BookFiledUnder {
+        string id PK
+        string book_id FK
+        string shelf_id FK
+    }
     Page {
         string id PK
         string shelf_id FK
@@ -27,9 +32,18 @@ erDiagram
     Shelf {
         string id PK
     }
+    ShelfFeatured {
+        string id PK
+        string shelf_id FK
+        string book_id FK
+    }
     Book }o--|| Shelf : "shelf_id"
+    BookFiledUnder }o--|| Book : "book_id"
+    BookFiledUnder }o--|| Shelf : "shelf_id"
     Page }o--|| Shelf : "shelf_id"
     Page }o--|| Book : "book_id"
+    ShelfFeatured }o--|| Shelf : "shelf_id"
+    ShelfFeatured }o--|| Book : "book_id"
 ```
 
 ## Output
@@ -81,3 +95,24 @@ A page of a book: nested two deep, so the row it hangs off is a nested resource'
 | `text` | `VARCHAR(255)` | nullable |
 | `shelf_id` | `CHAR(26)` | not null |
 | `book_id` | `CHAR(26)` | not null |
+
+### `ShelfFeatured` → `shelf_featured`
+
+Join table for the many-to-many relation Shelf.featured ↔ Book.
+
+| Column | Type | Null |
+| --- | --- | --- |
+| `id` | `CHAR(26)` | not null |
+| `shelf_id` | `CHAR(26)` | not null |
+| `book_id` | `CHAR(26)` | not null |
+| `book_name` | `TEXT` | not null |
+
+### `BookFiledUnder` → `book_filed_under`
+
+Join table for the many-to-many relation Book.filed_under ↔ Shelf.
+
+| Column | Type | Null |
+| --- | --- | --- |
+| `id` | `CHAR(26)` | not null |
+| `book_id` | `CHAR(26)` | not null |
+| `shelf_id` | `CHAR(26)` | not null |

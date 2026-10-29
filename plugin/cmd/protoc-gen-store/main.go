@@ -42,6 +42,7 @@ import (
 	"github.com/the-protobuf-project/store/plugin/factory/config"
 	"github.com/the-protobuf-project/store/plugin/factory/provenance"
 	"github.com/the-protobuf-project/store/plugin/factory/source/proto/backend"
+	"github.com/the-protobuf-project/store/plugin/factory/target/prisma"
 	"github.com/the-protobuf-project/store/plugin/factory/wire"
 	"google.golang.org/protobuf/compiler/protogen"
 	"google.golang.org/protobuf/types/pluginpb"
@@ -57,23 +58,37 @@ var version = "dev"
 // the tag as the main module version, and when store is consumed as a
 // dependency its module entry carries the version. Only genuine local builds
 // (`go build`/`go run`, which report "(devel)") fall back to "dev".
+//
+// Whichever source answers, a version is spelled as Go spells it, with a
+// leading "v" (see canonicalVersion): a release's ldflags carry goreleaser's
+// bare "1.6.7", a `go install` the module's "v1.6.7", and a banner must not
+// flip between the two with whoever regenerates.
 func resolveVersion() string {
 	if version != "dev" {
-		return version
+		return canonicalVersion(version)
 	}
 	bi, ok := debug.ReadBuildInfo()
 	if !ok {
 		return version
 	}
 	if v := bi.Main.Version; v != "" && v != "(devel)" {
-		return v
+		return canonicalVersion(v)
 	}
 	for _, dep := range bi.Deps {
 		if dep.Path == "github.com/the-protobuf-project/store" && dep.Version != "" {
-			return dep.Version
+			return canonicalVersion(dep.Version)
 		}
 	}
 	return version
+}
+
+// canonicalVersion prefixes a numeric version with "v" ("1.6.7" -> "v1.6.7"),
+// leaving one already prefixed, and a non-numeric one ("dev"), as it is.
+func canonicalVersion(v string) string {
+	if v != "" && v[0] >= '0' && v[0] <= '9' {
+		return "v" + v
+	}
+	return v
 }
 
 func main() {
@@ -139,6 +154,10 @@ func main() {
 			"Prisma and TypeScript, \"--\" for SQL). Unset stamps no copyright, since generated "+
 			"code belongs to whoever ran the generator")
 
+	prismaVersion := flags.String("prisma_version", prisma.DefaultVersion,
+		"prisma target only: the Prisma release the generated package.json pins, exactly, "+
+			"for both prisma and @prisma/client (e.g. 7.10.1)")
+
 	protogen.Options{ParamFunc: flags.Set}.Run(func(p *protogen.Plugin) error {
 		// Proto3 `optional` is fully supported (presence is read via field_behavior,
 		// not synthetic oneofs); declare it so buf/protoc don't warn.
@@ -148,6 +167,9 @@ func main() {
 		// protoc passes the opt as one line, so \n in the value is the line break.
 		if *licenseHeader != "" {
 			provenance.SetLicense(strings.ReplaceAll(*licenseHeader, `\n`, "\n"))
+		}
+		if err := prisma.SetVersion(*prismaVersion); err != nil {
+			return err
 		}
 
 		// The graphql target reads a GraphQL endpoint from store.yaml rather than the

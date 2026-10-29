@@ -11,12 +11,12 @@
     "prisma:format": "prisma format --config {{.Database}}.config.ts"
   },
   "dependencies": {
-    "@prisma/client": "^7.0.0"
+    "@prisma/client": "{{.PrismaVersion}}"
   },
   "devDependencies": {
-    "prisma": "^7.0.0",
-    "dotenv": "^16.4.0",
-    "typescript": "^5.6.0",
-    "@types/node": "^22.0.0"
+    "prisma": "{{.PrismaVersion}}",
+    "dotenv": "^18.0.9",
+    "typescript": "^5.9.3",
+    "@types/node": "^24.19.2"
   }
 }

@@ -42,11 +42,24 @@ type GormEventRepository struct {
 	// ListOverrides substitute the generated dispatch for single filter fields
 	// (e.g. a derived state computed via subqueries).
 	ListOverrides map[string]filterx.SQLHandler
+	// Store, when set, builds the store the adapter writes
+	// through over db -- DB, or the transaction a write runs in: a decorator
+	// (a read-through cache, an instrumented store) over
+	// resourcev1gorm.NewEventStore(db). Nil uses that store as it is.
+	Store func(db *gorm.DB) resourcev1gorm.EventStoreIface
 }
 
 // NewGormEventRepository returns the GORM adapter bound to db.
 func NewGormEventRepository(db *gorm.DB) *GormEventRepository {
 	return &GormEventRepository{DB: db}
+}
+
+// store is the store over db the adapter goes through (see Store).
+func (r *GormEventRepository) store(db *gorm.DB) resourcev1gorm.EventStoreIface {
+	if r.Store != nil {
+		return r.Store(db)
+	}
+	return resourcev1gorm.NewEventStore(db)
 }
 
 // Create persists in and returns the stored record.
@@ -118,6 +131,62 @@ func (r *GormEventRepository) toProto(ctx context.Context, m *resourcev1gorm.Eve
 // List returns one page of records.
 func (r *GormEventRepository) List(ctx context.Context, in repox.ListInput) ([]*resourcev1.Event, string, error) {
 	return r.list(ctx, r.DB, in)
+}
+
+// Count returns how many records match in; its page fields are ignored.
+func (r *GormEventRepository) Count(ctx context.Context, in repox.ListInput) (int64, error) {
+	return r.count(ctx, r.DB, in)
+}
+
+// Facet counts the records matching in by the values of field; see
+// repox.FacetExpr for the fields it takes.
+func (r *GormEventRepository) Facet(ctx context.Context, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	return r.facet(ctx, r.DB, in, field, limit)
+}
+
+// filtered narrows scope to the records in's filter (and ShowDeleted)
+// selects, unpaged: what Count and Facet read.
+func (r *GormEventRepository) filtered(ctx context.Context, scope *gorm.DB, in repox.ListInput) (*gorm.DB, error) {
+	conds, err := filterx.Parse(in.Filter)
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	eng := filterx.Gorm[resourcev1gorm.Event](resourcev1gorm.EventFilterSpec)
+	for f, h := range r.ListOverrides {
+		eng.Override(f, h)
+	}
+	where, args, err := eng.Where(append(conds, in.Where...))
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	q := scope.WithContext(ctx).Model(&resourcev1gorm.Event{})
+	if where != "" {
+		q = q.Where(where, args...)
+	}
+	return q, nil
+}
+
+// count is Count over scope.
+func (r *GormEventRepository) count(ctx context.Context, scope *gorm.DB, in repox.ListInput) (int64, error) {
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	return n, repox.MapGormErr(q.Count(&n).Error)
+}
+
+// facet is Facet over scope.
+func (r *GormEventRepository) facet(ctx context.Context, scope *gorm.DB, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	expr, err := repox.FacetExpr(resourcev1gorm.EventFilterSpec, field)
+	if err != nil {
+		return nil, err
+	}
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return nil, err
+	}
+	return repox.FacetGorm(ctx, q, expr, limit)
 }
 
 func (r *GormEventRepository) list(ctx context.Context, scope *gorm.DB, in repox.ListInput) ([]*resourcev1.Event, string, error) {
@@ -232,7 +301,7 @@ func (r *GormEventRepository) updateTx(ctx context.Context, tx *gorm.DB, key str
 			existing.WindowID = repox.Ptr(vo.ID)
 		}
 	}
-	if err := resourcev1gorm.NewEventStore(tx).Update(ctx, &existing); err != nil {
+	if err := r.store(tx).Update(ctx, &existing); err != nil {
 		return err
 	}
 	if staleWindow != "" {
@@ -263,7 +332,7 @@ func (r *GormEventRepository) newRow(in *resourcev1.Event) (*resourcev1gorm.Even
 }
 
 // insertTx writes m inside tx with the value-object rows in carries: those
-// it points at first, then m, then its children.
+// it points at first, then m, then its children and its join rows.
 func (r *GormEventRepository) insertTx(ctx context.Context, tx *gorm.DB, in *resourcev1.Event, m *resourcev1gorm.Event) error {
 	id := m.ID
 	_ = id
@@ -275,7 +344,7 @@ func (r *GormEventRepository) insertTx(ctx context.Context, tx *gorm.DB, in *res
 		}
 		m.WindowID = repox.Ptr(vo.ID)
 	}
-	if err := resourcev1gorm.NewEventStore(tx).Create(ctx, m); err != nil {
+	if err := r.store(tx).Create(ctx, m); err != nil {
 		return err
 	}
 	return nil
@@ -302,7 +371,7 @@ func (r *GormEventRepository) purgeTx(ctx context.Context, tx *gorm.DB, key stri
 	if err := tx.WithContext(ctx).First(&existing, "id = ?", key).Error; err != nil {
 		return err
 	}
-	if err := resourcev1gorm.NewEventStore(tx).DeleteByID(ctx, existing.ID); err != nil {
+	if err := r.store(tx).DeleteByID(ctx, existing.ID); err != nil {
 		return err
 	}
 	if existing.WindowID != nil {
@@ -327,8 +396,9 @@ var _ EventRepository = (*GormEventRepository)(nil)
 // gormBatch is Batch on GORM: queued writes run in the Unit's transaction on
 // Commit.
 type gormBatch struct {
-	u  *repox.Unit
-	db *gorm.DB
+	u      *repox.Unit
+	db     *gorm.DB
+	stores storeFuncs
 }
 
 // Commit applies the Unit's writes; see repox.Unit.Commit.
@@ -336,7 +406,7 @@ func (b *gormBatch) Commit(ctx context.Context) error { return b.u.Commit(ctx) }
 
 // CreateEvent queues a create and returns the name the record will have.
 func (b *gormBatch) CreateEvent(in *resourcev1.Event) (string, error) {
-	r := &GormEventRepository{DB: b.db}
+	r := &GormEventRepository{DB: b.db, Store: b.stores.event}
 	m, named, err := r.newRow(in)
 	if err != nil {
 		return "", err
@@ -356,7 +426,7 @@ func (b *gormBatch) CreateEvent(in *resourcev1.Event) (string, error) {
 // UpdateEvent queues Update; in.Etag, when set, guards it, and a guard
 // that fails rolls the whole batch back.
 func (b *gormBatch) UpdateEvent(in *resourcev1.Event, paths []string) {
-	r := &GormEventRepository{DB: b.db}
+	r := &GormEventRepository{DB: b.db, Store: b.stores.event}
 	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
@@ -373,7 +443,7 @@ func (b *gormBatch) UpdateEvent(in *resourcev1.Event, paths []string) {
 // gone is not an error: two batches clearing the same row must not fail each
 // other.
 func (b *gormBatch) DeleteEvent(name string) {
-	r := &GormEventRepository{DB: b.db}
+	r := &GormEventRepository{DB: b.db, Store: b.stores.event}
 	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)

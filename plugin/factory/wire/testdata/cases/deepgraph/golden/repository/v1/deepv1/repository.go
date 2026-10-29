@@ -21,6 +21,7 @@ import (
 	"example.com/test/gen/repox"
 	"example.com/test/genql"
 	"example.com/test/gormdb/filterx"
+	deepv1gorm "example.com/test/gormdb/v1/deepv1"
 	"gorm.io/gorm"
 )
 
@@ -35,6 +36,16 @@ type AgendaRepository interface {
 	Get(ctx context.Context, name string) (*deepv1.Agenda, error)
 	// List returns one page of records.
 	List(ctx context.Context, in repox.ListInput) ([]*deepv1.Agenda, string, error)
+	// Count returns how many records match in (its filter and ShowDeleted;
+	// its page fields are ignored).
+	Count(ctx context.Context, in repox.ListInput) (int64, error)
+	// Facet counts the records matching in by the values of field -- a
+	// filter field (a column, each element of a repeated one, a value
+	// object's or a join table's), or a JSON path -- most frequent first, at
+	// most limit values (all when limit is not positive). On GraphQL it is
+	// answered from the rows, at most repox.GraphQLScanLimit of them, and
+	// takes no field reached through another table.
+	Facet(ctx context.Context, in repox.ListInput, field string, limit int) ([]repox.Bucket, error)
 	// ListByKeys reads every record whose filter field field is one of keys
 	// -- a batched read by name, by parent, by any text, enum or reference
 	// field -- in statements of at most repox.KeysPerRead keys, at most
@@ -89,6 +100,16 @@ type MeetingRepository interface {
 	Get(ctx context.Context, name string) (*deepv1.Meeting, error)
 	// List returns one page of records under parent.
 	List(ctx context.Context, parent string, in repox.ListInput) ([]*deepv1.Meeting, string, error)
+	// Count returns how many records under parent match in (its filter and
+	// ShowDeleted; its page fields are ignored).
+	Count(ctx context.Context, parent string, in repox.ListInput) (int64, error)
+	// Facet counts the records under parent matching in by the values of
+	// field -- a filter field (a column, each element of a repeated one, a
+	// value object's or a join table's), or a JSON path -- most frequent
+	// first, at most limit values (all when limit is not positive). On
+	// GraphQL it is answered from the rows, at most repox.GraphQLScanLimit
+	// of them, and takes no field reached through another table.
+	Facet(ctx context.Context, parent string, in repox.ListInput, field string, limit int) ([]repox.Bucket, error)
 	// ListByKeys reads every record whose filter field field is one of keys
 	// -- a batched read by name, by parent, by any text, enum or reference
 	// field -- in statements of at most repox.KeysPerRead keys, at most
@@ -181,7 +202,14 @@ func NewBatchIn(u *repox.Unit, opts ...Option) Batch {
 	if svc := u.Conn().GraphQL; svc != nil {
 		return &graphQLBatch{u: u, svc: svc}
 	}
-	return &gormBatch{u: u, db: u.Conn().Gorm}
+	return &gormBatch{u: u, db: u.Conn().Gorm, stores: o.stores}
+}
+
+// storeFuncs holds the store decorators With<Model>Store installs, by
+// resource.
+type storeFuncs struct {
+	agenda  func(db *gorm.DB) deepv1gorm.AgendaStoreIface
+	meeting func(db *gorm.DB) deepv1gorm.MeetingStoreIface
 }
 
 // options collects the per-resource customizations the factories thread into
@@ -189,6 +217,7 @@ func NewBatchIn(u *repox.Unit, opts ...Option) Batch {
 type options struct {
 	references          *repox.References
 	projections         *repox.Projections
+	stores              storeFuncs
 	agendaHooks         AgendaHooks
 	agendaOverrides     map[string]filterx.SQLHandler
 	meetingHooks        MeetingHooks
@@ -221,6 +250,17 @@ func WithAgendaHooks(h AgendaHooks) Option {
 	return func(o *options) { o.agendaHooks = h }
 }
 
+// WithAgendaStore has the GORM adapters go through the store f builds
+// over a handle -- the repository's, or the transaction a write runs in --
+// instead of deepv1gorm.NewAgendaStore's: a decorator over that one,
+// such as a protoc-gen-cache read-through cache or an instrumented store
+// (NewAgendaStore(db).WithTelemetry(t)). A one-row read goes through it
+// too, so a cache serves Get. f runs for every write and read, so it should
+// be cheap.
+func WithAgendaStore(f func(db *gorm.DB) deepv1gorm.AgendaStoreIface) Option {
+	return func(o *options) { o.stores.agenda = f }
+}
+
 // WithAgendaListOverride substitutes the generated filter dispatch for one
 // Agenda filter field (e.g. a derived state computed via subqueries).
 func WithAgendaListOverride(field string, h filterx.SQLHandler) Option {
@@ -235,6 +275,17 @@ func WithAgendaListOverride(field string, h filterx.SQLHandler) Option {
 // WithMeetingHooks installs h on the Meeting adapters.
 func WithMeetingHooks(h MeetingHooks) Option {
 	return func(o *options) { o.meetingHooks = h }
+}
+
+// WithMeetingStore has the GORM adapters go through the store f builds
+// over a handle -- the repository's, or the transaction a write runs in --
+// instead of deepv1gorm.NewMeetingStore's: a decorator over that one,
+// such as a protoc-gen-cache read-through cache or an instrumented store
+// (NewMeetingStore(db).WithTelemetry(t)). A one-row read goes through it
+// too, so a cache serves Get. f runs for every write and read, so it should
+// be cheap.
+func WithMeetingStore(f func(db *gorm.DB) deepv1gorm.MeetingStoreIface) Option {
+	return func(o *options) { o.stores.meeting = f }
 }
 
 // WithMeetingListOverride substitutes the generated filter dispatch for one
@@ -325,8 +376,8 @@ func NewGorm(db *gorm.DB, opts ...Option) Repositories {
 		opt(&o)
 	}
 	repos := Repositories{
-		Agendas:  &GormAgendaRepository{DB: db, Hooks: o.agendaHooks, Refs: o.references, ListOverrides: o.agendaOverrides},
-		Meetings: &GormMeetingRepository{DB: db, Hooks: o.meetingHooks, Refs: o.references, ListOverrides: o.meetingOverrides},
+		Agendas:  &GormAgendaRepository{DB: db, Hooks: o.agendaHooks, Refs: o.references, ListOverrides: o.agendaOverrides, Store: o.stores.agenda},
+		Meetings: &GormMeetingRepository{DB: db, Hooks: o.meetingHooks, Refs: o.references, ListOverrides: o.meetingOverrides, Store: o.stores.meeting},
 	}
 	if p := o.projections; p != nil {
 		if p.Watches("deep.v1/Agenda") {

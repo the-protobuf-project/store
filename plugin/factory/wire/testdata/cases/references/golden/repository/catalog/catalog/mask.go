@@ -32,6 +32,9 @@ func applyBookMask(merged, in *refdemov1.Book, paths []string) {
 	if repox.InMask(paths, "title") {
 		merged.Title = in.GetTitle()
 	}
+	if repox.InMask(paths, "filed_under") {
+		merged.FiledUnder = in.GetFiledUnder()
+	}
 }
 
 // applyPageMask merges the masked fields of in onto merged. An empty
@@ -59,5 +62,8 @@ func applyShelfMask(merged, in *refdemov1.Shelf, paths []string) {
 	}
 	if repox.InMask(paths, "display_name") {
 		merged.DisplayName = in.GetDisplayName()
+	}
+	if repox.InMask(paths, "featured") {
+		merged.Featured = in.GetFeatured()
 	}
 }

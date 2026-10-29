@@ -47,11 +47,24 @@ type GormLoanRepository struct {
 	// Retention is how long a soft-deleted record stays restorable: Delete
 	// sets expire_time that far ahead. Zero leaves it unset.
 	Retention time.Duration
+	// Store, when set, builds the store the adapter writes and reads
+	// through over db -- DB, or the transaction a write runs in: a decorator
+	// (a read-through cache, an instrumented store) over
+	// lending.NewLoanStore(db). Nil uses that store as it is.
+	Store func(db *gorm.DB) lending.LoanStoreIface
 }
 
 // NewGormLoanRepository returns the GORM adapter bound to db.
 func NewGormLoanRepository(db *gorm.DB) *GormLoanRepository {
 	return &GormLoanRepository{DB: db}
+}
+
+// store is the store over db the adapter goes through (see Store).
+func (r *GormLoanRepository) store(db *gorm.DB) lending.LoanStoreIface {
+	if r.Store != nil {
+		return r.Store(db)
+	}
+	return lending.NewLoanStore(db)
 }
 
 // Create persists in and returns the stored record.
@@ -75,7 +88,7 @@ func (r *GormLoanRepository) Create(ctx context.Context, in *refdemov1.Loan) (*r
 	m.ID = id
 	m.Name = in.GetName()
 	m.Etag = repox.Ptr(repox.NewULID())
-	if err := lending.NewLoanStore(r.DB).Create(ctx, m); err != nil {
+	if err := r.store(r.DB).Create(ctx, m); err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	return r.get(ctx, id)
@@ -102,6 +115,15 @@ func (r *GormLoanRepository) rowKey(name string) (string, error) {
 // get loads by row key (rowKey) — the private read every generated method
 // re-reads through, so Tier-2 overrides of Get never re-enter generated writes.
 func (r *GormLoanRepository) get(ctx context.Context, key string) (*refdemov1.Loan, error) {
+	if r.Store != nil {
+		// One row: read through the store, so a decorator (a read-through
+		// cache) serves it.
+		m, err := r.Store(r.DB).GetByID(ctx, key)
+		if err != nil {
+			return nil, repox.MapGormErr(err)
+		}
+		return r.toProto(ctx, m)
+	}
 	var m lending.Loan
 	if err := r.DB.WithContext(ctx).First(&m, "id = ?", key).Error; err != nil {
 		return nil, repox.MapGormErr(err)
@@ -124,6 +146,65 @@ func (r *GormLoanRepository) toProto(ctx context.Context, m *lending.Loan) (*ref
 // List returns one page of records.
 func (r *GormLoanRepository) List(ctx context.Context, in repox.ListInput) ([]*refdemov1.Loan, string, error) {
 	return r.list(ctx, r.DB, in)
+}
+
+// Count returns how many records match in; its page fields are ignored.
+func (r *GormLoanRepository) Count(ctx context.Context, in repox.ListInput) (int64, error) {
+	return r.count(ctx, r.DB, in)
+}
+
+// Facet counts the records matching in by the values of field; see
+// repox.FacetExpr for the fields it takes.
+func (r *GormLoanRepository) Facet(ctx context.Context, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	return r.facet(ctx, r.DB, in, field, limit)
+}
+
+// filtered narrows scope to the records in's filter (and ShowDeleted)
+// selects, unpaged: what Count and Facet read.
+func (r *GormLoanRepository) filtered(ctx context.Context, scope *gorm.DB, in repox.ListInput) (*gorm.DB, error) {
+	if !in.ShowDeleted {
+		scope = scope.Where("delete_time IS NULL")
+	}
+	conds, err := filterx.Parse(in.Filter)
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	eng := filterx.Gorm[lending.Loan](lending.LoanFilterSpec)
+	for f, h := range r.ListOverrides {
+		eng.Override(f, h)
+	}
+	where, args, err := eng.Where(append(conds, in.Where...))
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	q := scope.WithContext(ctx).Model(&lending.Loan{})
+	if where != "" {
+		q = q.Where(where, args...)
+	}
+	return q, nil
+}
+
+// count is Count over scope.
+func (r *GormLoanRepository) count(ctx context.Context, scope *gorm.DB, in repox.ListInput) (int64, error) {
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	return n, repox.MapGormErr(q.Count(&n).Error)
+}
+
+// facet is Facet over scope.
+func (r *GormLoanRepository) facet(ctx context.Context, scope *gorm.DB, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	expr, err := repox.FacetExpr(lending.LoanFilterSpec, field)
+	if err != nil {
+		return nil, err
+	}
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return nil, err
+	}
+	return repox.FacetGorm(ctx, q, expr, limit)
 }
 
 func (r *GormLoanRepository) list(ctx context.Context, scope *gorm.DB, in repox.ListInput) ([]*refdemov1.Loan, string, error) {
@@ -256,7 +337,7 @@ func (r *GormLoanRepository) updateTx(ctx context.Context, tx *gorm.DB, key stri
 		}
 	}
 	existing.Etag = repox.Ptr(repox.NewULID())
-	return lending.NewLoanStore(tx).Update(ctx, &existing)
+	return r.store(tx).Update(ctx, &existing)
 }
 
 // UpdateOutputOnly persists the server-owned fields of in that paths names, in
@@ -301,7 +382,7 @@ func (r *GormLoanRepository) updateOutputOnlyTx(ctx context.Context, tx *gorm.DB
 			existing.ExpireTime = next.ExpireTime
 		}
 		existing.Etag = repox.Ptr(repox.NewULID())
-		return lending.NewLoanStore(tx).Update(ctx, &existing)
+		return r.store(tx).Update(ctx, &existing)
 	}
 }
 
@@ -412,7 +493,7 @@ func (r *GormLoanRepository) purge(ctx context.Context, db *gorm.DB, key, name s
 		if err := tx.First(&existing, "id = ?", key).Error; err != nil {
 			return err
 		}
-		return lending.NewLoanStore(tx).DeleteByID(ctx, existing.ID)
+		return r.store(tx).DeleteByID(ctx, existing.ID)
 	})
 	if repox.IsForeignKeyViolation(err) {
 		r.Refs.Kept(ctx, name, "foreign key")
@@ -479,6 +560,7 @@ var _ LoanRepository = (*GormLoanRepository)(nil)
 type gormBatch struct {
 	u         *repox.Unit
 	db        *gorm.DB
+	stores    storeFuncs
 	retention time.Duration
 }
 
@@ -487,7 +569,7 @@ func (b *gormBatch) Commit(ctx context.Context) error { return b.u.Commit(ctx) }
 
 // CreateLoan queues a create and returns the name the record will have.
 func (b *gormBatch) CreateLoan(in *refdemov1.Loan) (string, error) {
-	r := &GormLoanRepository{DB: b.db}
+	r := &GormLoanRepository{DB: b.db, Store: b.stores.loan}
 	m, named, err := r.newRow(in)
 	if err != nil {
 		return "", err
@@ -498,7 +580,7 @@ func (b *gormBatch) CreateLoan(in *refdemov1.Loan) (string, error) {
 	}
 	queueLoanReferences(b.u, named, nil)
 	b.u.QueueGorm(locks, func(ctx context.Context, tx *gorm.DB) error {
-		return lending.NewLoanStore(tx).Create(ctx, m)
+		return r.store(tx).Create(ctx, m)
 	})
 	b.u.Record(repox.Change{Type: "lending.example.com/Loan", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
@@ -507,7 +589,7 @@ func (b *gormBatch) CreateLoan(in *refdemov1.Loan) (string, error) {
 // UpdateLoan queues Update; in.Etag, when set, guards it, and a guard
 // that fails rolls the whole batch back.
 func (b *gormBatch) UpdateLoan(in *refdemov1.Loan, paths []string) {
-	r := &GormLoanRepository{DB: b.db}
+	r := &GormLoanRepository{DB: b.db, Store: b.stores.loan}
 	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
@@ -523,7 +605,7 @@ func (b *gormBatch) UpdateLoan(in *refdemov1.Loan, paths []string) {
 // UpdateLoanWithOutputOnly queues UpdateWithOutputOnly; in.Etag, when
 // set, guards it, and a guard that fails rolls the whole batch back.
 func (b *gormBatch) UpdateLoanWithOutputOnly(in *refdemov1.Loan, paths, outputPaths []string) {
-	r := &GormLoanRepository{DB: b.db}
+	r := &GormLoanRepository{DB: b.db, Store: b.stores.loan}
 	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
@@ -538,7 +620,7 @@ func (b *gormBatch) UpdateLoanWithOutputOnly(in *refdemov1.Loan, paths, outputPa
 
 // UpdateLoanOutputOnly queues UpdateOutputOnly; in.Etag, when set, guards it.
 func (b *gormBatch) UpdateLoanOutputOnly(in *refdemov1.Loan, paths []string) {
-	r := &GormLoanRepository{DB: b.db}
+	r := &GormLoanRepository{DB: b.db, Store: b.stores.loan}
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.updateOutputOnlyTx(ctx, tx, in, paths)
 	})
@@ -548,7 +630,7 @@ func (b *gormBatch) UpdateLoanOutputOnly(in *refdemov1.Loan, paths []string) {
 // DeleteLoan queues a soft delete. A record already deleted or gone is
 // not an error: two batches deleting the same record must not fail each other.
 func (b *gormBatch) DeleteLoan(name string) {
-	r := &GormLoanRepository{DB: b.db, Retention: b.retention}
+	r := &GormLoanRepository{DB: b.db, Store: b.stores.loan, Retention: b.retention}
 	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)
@@ -566,7 +648,7 @@ func (b *gormBatch) DeleteLoan(name string) {
 // other.
 func (b *gormBatch) PurgeLoan(name string) {
 	// A record something still refers to is kept, as Purge keeps it.
-	r := &GormLoanRepository{DB: b.db, Refs: b.u.Conn().References}
+	r := &GormLoanRepository{DB: b.db, Store: b.stores.loan, Refs: b.u.Conn().References}
 	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)

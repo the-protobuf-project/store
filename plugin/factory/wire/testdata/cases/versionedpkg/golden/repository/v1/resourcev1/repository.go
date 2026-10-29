@@ -20,6 +20,7 @@ import (
 	resourcev1 "example.com/test/gen"
 	"example.com/test/gen/repox"
 	"example.com/test/gormdb/filterx"
+	resourcev1gorm "example.com/test/gormdb/v1/resourcev1"
 	"gorm.io/gorm"
 )
 
@@ -34,6 +35,16 @@ type EventRepository interface {
 	Get(ctx context.Context, name string) (*resourcev1.Event, error)
 	// List returns one page of records.
 	List(ctx context.Context, in repox.ListInput) ([]*resourcev1.Event, string, error)
+	// Count returns how many records match in (its filter and ShowDeleted;
+	// its page fields are ignored).
+	Count(ctx context.Context, in repox.ListInput) (int64, error)
+	// Facet counts the records matching in by the values of field -- a
+	// filter field (a column, each element of a repeated one, a value
+	// object's or a join table's), or a JSON path -- most frequent first, at
+	// most limit values (all when limit is not positive). On GraphQL it is
+	// answered from the rows, at most repox.GraphQLScanLimit of them, and
+	// takes no field reached through another table.
+	Facet(ctx context.Context, in repox.ListInput, field string, limit int) ([]repox.Bucket, error)
 	// ListByKeys reads every record whose filter field field is one of keys
 	// -- a batched read by name, by parent, by any text, enum or reference
 	// field -- in statements of at most repox.KeysPerRead keys, at most
@@ -110,7 +121,13 @@ func NewBatchIn(u *repox.Unit, opts ...Option) Batch {
 		opt(&o)
 	}
 	_ = o
-	return &gormBatch{u: u, db: u.Conn().Gorm}
+	return &gormBatch{u: u, db: u.Conn().Gorm, stores: o.stores}
+}
+
+// storeFuncs holds the store decorators With<Model>Store installs, by
+// resource.
+type storeFuncs struct {
+	event func(db *gorm.DB) resourcev1gorm.EventStoreIface
 }
 
 // options collects the per-resource customizations the factories thread into
@@ -118,6 +135,7 @@ func NewBatchIn(u *repox.Unit, opts ...Option) Batch {
 type options struct {
 	references     *repox.References
 	projections    *repox.Projections
+	stores         storeFuncs
 	eventHooks     EventHooks
 	eventOverrides map[string]filterx.SQLHandler
 }
@@ -144,6 +162,17 @@ func WithReferences(refs *repox.References) Option {
 // WithEventHooks installs h on the Event adapters.
 func WithEventHooks(h EventHooks) Option {
 	return func(o *options) { o.eventHooks = h }
+}
+
+// WithEventStore has the GORM adapters go through the store f builds
+// over a handle -- the repository's, or the transaction a write runs in --
+// instead of resourcev1gorm.NewEventStore's: a decorator over that one,
+// such as a protoc-gen-cache read-through cache or an instrumented store
+// (NewEventStore(db).WithTelemetry(t)). A one-row read goes through it
+// too, so a cache serves Get. f runs for every write and read, so it should
+// be cheap.
+func WithEventStore(f func(db *gorm.DB) resourcev1gorm.EventStoreIface) Option {
+	return func(o *options) { o.stores.event = f }
 }
 
 // WithEventListOverride substitutes the generated filter dispatch for one
@@ -173,7 +202,7 @@ func NewGorm(db *gorm.DB, opts ...Option) Repositories {
 		opt(&o)
 	}
 	repos := Repositories{
-		Events: &GormEventRepository{DB: db, Hooks: o.eventHooks, Refs: o.references, ListOverrides: o.eventOverrides},
+		Events: &GormEventRepository{DB: db, Hooks: o.eventHooks, Refs: o.references, ListOverrides: o.eventOverrides, Store: o.stores.event},
 	}
 	if p := o.projections; p != nil {
 		if p.Watches("resource.v1/Event") {

@@ -21,6 +21,7 @@ import (
 	"example.com/test/gen/repox"
 	"example.com/test/genql"
 	"example.com/test/gormdb/filterx"
+	orgv1gorm "example.com/test/gormdb/v1/orgv1"
 	"gorm.io/gorm"
 )
 
@@ -35,6 +36,16 @@ type MemberRepository interface {
 	Get(ctx context.Context, name string) (*orgv1.Member, error)
 	// List returns one page of records under parent.
 	List(ctx context.Context, parent string, in repox.ListInput) ([]*orgv1.Member, string, error)
+	// Count returns how many records under parent match in (its filter and
+	// ShowDeleted; its page fields are ignored).
+	Count(ctx context.Context, parent string, in repox.ListInput) (int64, error)
+	// Facet counts the records under parent matching in by the values of
+	// field -- a filter field (a column, each element of a repeated one, a
+	// value object's or a join table's), or a JSON path -- most frequent
+	// first, at most limit values (all when limit is not positive). On
+	// GraphQL it is answered from the rows, at most repox.GraphQLScanLimit
+	// of them, and takes no field reached through another table.
+	Facet(ctx context.Context, parent string, in repox.ListInput, field string, limit int) ([]repox.Bucket, error)
 	// ListByKeys reads every record whose filter field field is one of keys
 	// -- a batched read by name, by parent, by any text, enum or reference
 	// field -- in statements of at most repox.KeysPerRead keys, at most
@@ -78,6 +89,16 @@ type OrganisationRepository interface {
 	Get(ctx context.Context, name string) (*orgv1.Organisation, error)
 	// List returns one page of records.
 	List(ctx context.Context, in repox.ListInput) ([]*orgv1.Organisation, string, error)
+	// Count returns how many records match in (its filter and ShowDeleted;
+	// its page fields are ignored).
+	Count(ctx context.Context, in repox.ListInput) (int64, error)
+	// Facet counts the records matching in by the values of field -- a
+	// filter field (a column, each element of a repeated one, a value
+	// object's or a join table's), or a JSON path -- most frequent first, at
+	// most limit values (all when limit is not positive). On GraphQL it is
+	// answered from the rows, at most repox.GraphQLScanLimit of them, and
+	// takes no field reached through another table.
+	Facet(ctx context.Context, in repox.ListInput, field string, limit int) ([]repox.Bucket, error)
 	// ListByKeys reads every record whose filter field field is one of keys
 	// -- a batched read by name, by parent, by any text, enum or reference
 	// field -- in statements of at most repox.KeysPerRead keys, at most
@@ -132,6 +153,16 @@ type UserRepository interface {
 	Get(ctx context.Context, name string) (*orgv1.User, error)
 	// List returns one page of records.
 	List(ctx context.Context, in repox.ListInput) ([]*orgv1.User, string, error)
+	// Count returns how many records match in (its filter and ShowDeleted;
+	// its page fields are ignored).
+	Count(ctx context.Context, in repox.ListInput) (int64, error)
+	// Facet counts the records matching in by the values of field -- a
+	// filter field (a column, each element of a repeated one, a value
+	// object's or a join table's), or a JSON path -- most frequent first, at
+	// most limit values (all when limit is not positive). On GraphQL it is
+	// answered from the rows, at most repox.GraphQLScanLimit of them, and
+	// takes no field reached through another table.
+	Facet(ctx context.Context, in repox.ListInput, field string, limit int) ([]repox.Bucket, error)
 	// ListByKeys reads every record whose filter field field is one of keys
 	// -- a batched read by name, by parent, by any text, enum or reference
 	// field -- in statements of at most repox.KeysPerRead keys, at most
@@ -237,7 +268,15 @@ func NewBatchIn(u *repox.Unit, opts ...Option) Batch {
 	if svc := u.Conn().GraphQL; svc != nil {
 		return &graphQLBatch{u: u, svc: svc}
 	}
-	return &gormBatch{u: u, db: u.Conn().Gorm}
+	return &gormBatch{u: u, db: u.Conn().Gorm, stores: o.stores}
+}
+
+// storeFuncs holds the store decorators With<Model>Store installs, by
+// resource.
+type storeFuncs struct {
+	member       func(db *gorm.DB) orgv1gorm.MemberStoreIface
+	organisation func(db *gorm.DB) orgv1gorm.OrganisationStoreIface
+	user         func(db *gorm.DB) orgv1gorm.UserStoreIface
 }
 
 // options collects the per-resource customizations the factories thread into
@@ -245,6 +284,7 @@ func NewBatchIn(u *repox.Unit, opts ...Option) Batch {
 type options struct {
 	references               *repox.References
 	projections              *repox.Projections
+	stores                   storeFuncs
 	memberHooks              MemberHooks
 	memberOverrides          map[string]filterx.SQLHandler
 	organisationHooks        OrganisationHooks
@@ -280,6 +320,17 @@ func WithMemberHooks(h MemberHooks) Option {
 	return func(o *options) { o.memberHooks = h }
 }
 
+// WithMemberStore has the GORM adapters go through the store f builds
+// over a handle -- the repository's, or the transaction a write runs in --
+// instead of orgv1gorm.NewMemberStore's: a decorator over that one,
+// such as a protoc-gen-cache read-through cache or an instrumented store
+// (NewMemberStore(db).WithTelemetry(t)). A one-row read goes through it
+// too, so a cache serves Get. f runs for every write and read, so it should
+// be cheap.
+func WithMemberStore(f func(db *gorm.DB) orgv1gorm.MemberStoreIface) Option {
+	return func(o *options) { o.stores.member = f }
+}
+
 // WithMemberListOverride substitutes the generated filter dispatch for one
 // Member filter field (e.g. a derived state computed via subqueries).
 func WithMemberListOverride(field string, h filterx.SQLHandler) Option {
@@ -296,6 +347,17 @@ func WithOrganisationHooks(h OrganisationHooks) Option {
 	return func(o *options) { o.organisationHooks = h }
 }
 
+// WithOrganisationStore has the GORM adapters go through the store f builds
+// over a handle -- the repository's, or the transaction a write runs in --
+// instead of orgv1gorm.NewOrganisationStore's: a decorator over that one,
+// such as a protoc-gen-cache read-through cache or an instrumented store
+// (NewOrganisationStore(db).WithTelemetry(t)). A one-row read goes through it
+// too, so a cache serves Get. f runs for every write and read, so it should
+// be cheap.
+func WithOrganisationStore(f func(db *gorm.DB) orgv1gorm.OrganisationStoreIface) Option {
+	return func(o *options) { o.stores.organisation = f }
+}
+
 // WithOrganisationListOverride substitutes the generated filter dispatch for one
 // Organisation filter field (e.g. a derived state computed via subqueries).
 func WithOrganisationListOverride(field string, h filterx.SQLHandler) Option {
@@ -310,6 +372,17 @@ func WithOrganisationListOverride(field string, h filterx.SQLHandler) Option {
 // WithUserHooks installs h on the User adapters.
 func WithUserHooks(h UserHooks) Option {
 	return func(o *options) { o.userHooks = h }
+}
+
+// WithUserStore has the GORM adapters go through the store f builds
+// over a handle -- the repository's, or the transaction a write runs in --
+// instead of orgv1gorm.NewUserStore's: a decorator over that one,
+// such as a protoc-gen-cache read-through cache or an instrumented store
+// (NewUserStore(db).WithTelemetry(t)). A one-row read goes through it
+// too, so a cache serves Get. f runs for every write and read, so it should
+// be cheap.
+func WithUserStore(f func(db *gorm.DB) orgv1gorm.UserStoreIface) Option {
+	return func(o *options) { o.stores.user = f }
 }
 
 // WithUserListOverride substitutes the generated filter dispatch for one
@@ -422,9 +495,9 @@ func NewGorm(db *gorm.DB, opts ...Option) Repositories {
 		opt(&o)
 	}
 	repos := Repositories{
-		Members:       &GormMemberRepository{DB: db, Hooks: o.memberHooks, Refs: o.references, ListOverrides: o.memberOverrides},
-		Organisations: &GormOrganisationRepository{DB: db, Hooks: o.organisationHooks, Refs: o.references, ListOverrides: o.organisationOverrides},
-		Users:         &GormUserRepository{DB: db, Hooks: o.userHooks, Refs: o.references, ListOverrides: o.userOverrides},
+		Members:       &GormMemberRepository{DB: db, Hooks: o.memberHooks, Refs: o.references, ListOverrides: o.memberOverrides, Store: o.stores.member},
+		Organisations: &GormOrganisationRepository{DB: db, Hooks: o.organisationHooks, Refs: o.references, ListOverrides: o.organisationOverrides, Store: o.stores.organisation},
+		Users:         &GormUserRepository{DB: db, Hooks: o.userHooks, Refs: o.references, ListOverrides: o.userOverrides, Store: o.stores.user},
 	}
 	if p := o.projections; p != nil {
 		if p.Watches("org.v1/Member") {

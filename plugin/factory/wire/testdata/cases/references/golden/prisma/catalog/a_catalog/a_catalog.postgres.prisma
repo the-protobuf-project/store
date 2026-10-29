@@ -38,6 +38,12 @@ model Shelf {
   /// Back-relation: Page records that reference this model via shelf_id.
   pages Page[]
 
+  /// Back-relation: ShelfFeatured records that reference this model via shelf_id.
+  shelfFeatured ShelfFeatured[]
+
+  /// Back-relation: BookFiledUnder records that reference this model via shelf_id.
+  bookFiledUnder BookFiledUnder[]
+
   /// Index on [delete_time].
   @@index([deleteTime])
   /// Maps the model to the "shelves" table in the database.
@@ -74,6 +80,12 @@ model Book {
 
   /// Back-relation: Page records that reference this model via book_id.
   pages Page[]
+
+  /// Back-relation: ShelfFeatured records that reference this model via book_id.
+  shelfFeatured ShelfFeatured[]
+
+  /// Back-relation: BookFiledUnder records that reference this model via book_id.
+  bookFiledUnder BookFiledUnder[]
 
   /// Index on [delete_time].
   @@index([deleteTime])
@@ -114,6 +126,63 @@ model Page {
   @@index([shelfID])
   /// Maps the model to the "pages" table in the database.
   @@map("pages")
+  /// Maps the model to the "catalog" schema in the database.
+  @@schema("catalog")
+}
+
+/// Join table for the many-to-many relation Shelf.featured ↔ Book.
+model ShelfFeatured {
+  /// Unique identifier for the record.
+  id String @id @default(ulid()) @map("id")
+
+  /// Foreign key to Shelf.
+  shelfID String @map("shelf_id")
+
+  /// Relation to Shelf via shelf_id.
+  shelf Shelf @relation(fields: [shelfID], references: [id], onDelete: Cascade)
+
+  /// Foreign key to Book.
+  bookID String @map("book_id")
+
+  /// Relation to Book via book_id.
+  book Book @relation(fields: [bookID], references: [id], onDelete: Cascade)
+
+  /// Full resource name of the referenced Book, capturing the parent hierarchy the book_id id alone omits.
+  bookName String @map("book_name")
+
+  /// Unique constraint on [shelf_id, book_id].
+  @@unique([shelfID, bookID])
+  /// Index on [book_id].
+  @@index([bookID])
+  /// Maps the model to the "shelf_featured" table in the database.
+  @@map("shelf_featured")
+  /// Maps the model to the "catalog" schema in the database.
+  @@schema("catalog")
+}
+
+/// Join table for the many-to-many relation Book.filed_under ↔ Shelf.
+model BookFiledUnder {
+  /// Unique identifier for the record.
+  id String @id @default(ulid()) @map("id")
+
+  /// Foreign key to Book.
+  bookID String @map("book_id")
+
+  /// Relation to Book via book_id.
+  book Book @relation(fields: [bookID], references: [id], onDelete: Cascade)
+
+  /// Foreign key to Shelf.
+  shelfID String @map("shelf_id")
+
+  /// Relation to Shelf via shelf_id.
+  shelf Shelf @relation(fields: [shelfID], references: [id], onDelete: Cascade)
+
+  /// Unique constraint on [book_id, shelf_id].
+  @@unique([bookID, shelfID])
+  /// Index on [shelf_id].
+  @@index([shelfID])
+  /// Maps the model to the "book_filed_under" table in the database.
+  @@map("book_filed_under")
   /// Maps the model to the "catalog" schema in the database.
   @@schema("catalog")
 }

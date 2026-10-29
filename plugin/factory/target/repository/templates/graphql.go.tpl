@@ -92,6 +92,11 @@ func (r *GraphQL{{.Model}}Repository) Create(ctx context.Context, parent string,
 			return nil, err
 		}
 	}
+	{{- if .RequiredDocs}}
+	if err := check{{.Model}}Required(in); err != nil {
+		return nil, err
+	}
+	{{- end}}
 	ci := {{.LowerModelV}}ToCreateInput(in)
 	ci.Id = id
 	{{- range .GQLParentAssigns}}
@@ -117,7 +122,7 @@ func (r *GraphQL{{.Model}}Repository) Create(ctx context.Context, parent string,
 	{{- range .GQLVOCreates}}
 	{{.}}
 	{{- end}}
-	{{- if .HasDeep}}
+	{{- if or .HasDeep .Joins}}
 	// One transaction: the graph lands whole or not at all.
 	gtx := r.Svc.Mutation.Tx()
 	{{- range .GQLDeepCreates}}
@@ -126,6 +131,17 @@ func (r *GraphQL{{.Model}}Repository) Create(ctx context.Context, parent string,
 	gtx.Add(r.Svc.Mutation.{{.Domain}}.{{.Resource}}.CreateOp(ci, new({{.InsertResp}})))
 	{{- range .GQLDeepAfterCreates}}
 	{{.}}
+	{{- end}}
+	{{- range .Joins}}
+	{
+		var ops repox.Ops
+		if err := r.{{.Var}}Ops(ctx, &ops, ci.Id, in.Get{{.GoField}}(), false); err != nil {
+			return nil, err
+		}
+		for _, op := range ops {
+			gtx.Add(op)
+		}
+	}
 	{{- end}}
 	if err := gtx.Commit(ctx); err != nil {
 		return nil, mapGraphQLErr(err)
@@ -172,6 +188,11 @@ func (r *GraphQL{{.Model}}Repository) Create(ctx context.Context, in *{{.PB}}) (
 			return nil, err
 		}
 	}
+	{{- if .RequiredDocs}}
+	if err := check{{.Model}}Required(in); err != nil {
+		return nil, err
+	}
+	{{- end}}
 	ci := {{.LowerModelV}}ToCreateInput(in)
 	ci.Id = id
 	{{- if .EtagInputField}}
@@ -189,7 +210,7 @@ func (r *GraphQL{{.Model}}Repository) Create(ctx context.Context, in *{{.PB}}) (
 	{{- range .GQLVOCreates}}
 	{{.}}
 	{{- end}}
-	{{- if .HasDeep}}
+	{{- if or .HasDeep .Joins}}
 	// One transaction: the graph lands whole or not at all.
 	gtx := r.Svc.Mutation.Tx()
 	{{- range .GQLDeepCreates}}
@@ -198,6 +219,17 @@ func (r *GraphQL{{.Model}}Repository) Create(ctx context.Context, in *{{.PB}}) (
 	gtx.Add(r.Svc.Mutation.{{.Domain}}.{{.Resource}}.CreateOp(ci, new({{.InsertResp}})))
 	{{- range .GQLDeepAfterCreates}}
 	{{.}}
+	{{- end}}
+	{{- range .Joins}}
+	{
+		var ops repox.Ops
+		if err := r.{{.Var}}Ops(ctx, &ops, ci.Id, in.Get{{.GoField}}(), false); err != nil {
+			return nil, err
+		}
+		for _, op := range ops {
+			gtx.Add(op)
+		}
+	}
 	{{- end}}
 	if err := gtx.Commit(ctx); err != nil {
 		return nil, mapGraphQLErr(err)
@@ -218,7 +250,7 @@ func (r *GraphQL{{.Model}}Repository) Get(ctx context.Context, name string) (*{{
 	if err != nil {
 		return nil, err
 	}
-	return r.toProto(ctx, row, nil)
+	return r.toProto(ctx, row, nil{{if .Joins}}, nil{{end}})
 	{{- else}}
 	ids, err := repox.SplitName(name, {{.CollectionsExpr}})
 	if err != nil {
@@ -276,16 +308,30 @@ func (r *GraphQL{{.Model}}Repository) get(ctx context.Context, id string) (*{{.P
 	if row == nil {
 		return nil, repox.ErrNotFound
 	}
-	return r.toProto(ctx, row, nil)
+	return r.toProto(ctx, row, nil{{if .Joins}}, nil{{end}})
 }
 
 // toProto converts a loaded row, hydrating the value objects mask reads (all
 // of them for an empty mask) through their stored references, and runs the
 // AfterRead hook.
-func (r *GraphQL{{.Model}}Repository) toProto(ctx context.Context, row *{{.Row}}, mask []string) (*{{.PB}}, error) {
+func (r *GraphQL{{.Model}}Repository) toProto(ctx context.Context, row *{{.Row}}, mask []string{{if .Joins}}, joined repox.Joined{{end}}) (*{{.PB}}, error) {
 	out := {{.LowerModelV}}FromRow(row)
 	{{- range .GQLVOHydrates}}
 	{{.}}
+	{{- end}}
+	{{- if .Joins}}
+	// The fields kept in join tables: from joined, read for row alone when
+	// nil.
+	if joined == nil {
+		var err error
+		if joined, err = r.readJoins(ctx, mask, row.{{.PKInputField}}); err != nil {
+			return nil, err
+		}
+	}
+	{{- $pk := .PKInputField}}
+	{{- range .Joins}}
+	out.{{.GoField}} = joined["{{.Field}}"][row.{{$pk}}]
+	{{- end}}
 	{{- end}}
 	if h := r.Hooks.AfterRead; h != nil {
 		if err := h(ctx, out); err != nil {
@@ -298,23 +344,59 @@ func (r *GraphQL{{.Model}}Repository) toProto(ctx context.Context, row *{{.Row}}
 {{if .Parented}}
 // List returns one page of records under parent.
 func (r *GraphQL{{.Model}}Repository) List(ctx context.Context, parent string, in repox.ListInput) ([]*{{.PB}}, string, error) {
-	parentIDs, err := repox.SplitName(parent, {{.ParentCollExpr}})
+	scope, err := r.parentScope(ctx, parent)
 	if err != nil {
 		return nil, "", err
 	}
-	// AIP-159: "-" for the parent reads across every parent.
+	return r.list(ctx, in, scope...)
+}
+
+// Count returns how many records under parent match in; its page fields are
+// ignored.
+func (r *GraphQL{{.Model}}Repository) Count(ctx context.Context, parent string, in repox.ListInput) (int64, error) {
+	scope, err := r.parentScope(ctx, parent)
+	if err != nil {
+		return 0, err
+	}
+	return r.count(ctx, in, scope...)
+}
+
+// Facet counts the records under parent matching in by the values of field,
+// from the rows (see repox.FacetValues).
+func (r *GraphQL{{.Model}}Repository) Facet(ctx context.Context, parent string, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	scope, err := r.parentScope(ctx, parent)
+	if err != nil {
+		return nil, err
+	}
+	return r.facet(ctx, in, field, limit, scope...)
+}
+
+// parentScope is the predicate of the records under parent.
+func (r *GraphQL{{.Model}}Repository) parentScope(ctx context.Context, parent string) ([]graphql.Predicate, error) {
+	parentIDs, err := repox.SplitName(parent, {{.ParentCollExpr}})
+	if err != nil {
+		return nil, err
+	}
+	// AIP-159: "-" for the parent reads across every parent. A "-" widens
+	// only its own segment: under a parent naming some of its ancestors
+	// ("a/1/b/-"), the records' own names are matched, so they stay under
+	// those.
 	if parentIDs[len(parentIDs)-1] == "-" {
-		return r.list(ctx, in)
+		if repox.AllWild(parentIDs) {
+			return nil, nil
+		}
+		p, _ := repox.NamePattern(parent + "/{{.OwnCollection}}/-")
+		return []graphql.Predicate{ {{- .NameColPred}}.Like(p)}, nil
 	}
 	{{- if .ParentRows}}
 	// The parent is nested, so its row is found by name.
 	keys, err := {{.ParentRows.Func}}Keys(ctx, r.Svc, parent)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
-	return r.list(ctx, in, {{.ParentPred}}.In(keys...))
+	return []graphql.Predicate{ {{- .ParentPred}}.In(keys...)}, nil
 	{{- else}}
-	return r.list(ctx, in, {{.ParentPred}}.Eq(parentIDs[len(parentIDs)-1]))
+	return []graphql.Predicate{ {{- .ParentPred}}.Eq(parentIDs[len(parentIDs)-1])}, nil
 	{{- end}}
 }
 {{else}}
@@ -322,9 +404,22 @@ func (r *GraphQL{{.Model}}Repository) List(ctx context.Context, parent string, i
 func (r *GraphQL{{.Model}}Repository) List(ctx context.Context, in repox.ListInput) ([]*{{.PB}}, string, error) {
 	return r.list(ctx, in)
 }
+
+// Count returns how many records match in; its page fields are ignored.
+func (r *GraphQL{{.Model}}Repository) Count(ctx context.Context, in repox.ListInput) (int64, error) {
+	return r.count(ctx, in)
+}
+
+// Facet counts the records matching in by the values of field, from the rows
+// (see repox.FacetValues).
+func (r *GraphQL{{.Model}}Repository) Facet(ctx context.Context, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	return r.facet(ctx, in, field, limit)
+}
 {{end}}
 
-func (r *GraphQL{{.Model}}Repository) list(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) ([]*{{.PB}}, string, error) {
+// engine is the list engine over the records scope selects (and, unless
+// in.ShowDeleted, not deleted), with in's filter conditions.
+func (r *GraphQL{{.Model}}Repository) engine(in repox.ListInput, scope ...graphql.Predicate) (*filterx.HasuraEngine[{{.Row}}], []filterx.Condition, error) {
 	{{- if .SoftDelete}}
 	if !in.ShowDeleted {
 		scope = append(scope, {{.DeleteTimePred}}.IsNull(true))
@@ -332,26 +427,113 @@ func (r *GraphQL{{.Model}}Repository) list(ctx context.Context, in repox.ListInp
 	{{- end}}
 	conds, err := filterx.Parse(in.Filter)
 	if err != nil {
-		return nil, "", repox.MapFilterxErr(err)
+		return nil, nil, repox.MapFilterxErr(err)
 	}
 	conds = append(conds, in.Where...)
-	if err := repox.CheckReadMask((*{{.PB}})(nil), in.ReadMask); err != nil {
-		return nil, "", err
-	}
 	eng := filterx.Hasura[{{.Row}}]({{$.GormPkg}}.{{.Model}}FilterSpec, r.Svc.Query.{{.Domain}}.{{.Resource}}).Scope(scope...)
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)
 	}
 	{{- range .ViaLookups}}
 	eng.Via("{{.Field}}", func(ctx context.Context, keys []string, where graphql.Predicate) ([]string, error) {
-		rows, err := r.Svc.Query.{{.Domain}}.{{.Resource}}.List(ctx, {{.ResPkg}}.List().Where(graphql.And({{.ResPkg}}.Id.In(keys...), where)))
+		rows, err := r.Svc.Query.{{.Domain}}.{{.Resource}}.List(ctx, {{.ResPkg}}.List().Where(graphql.And({{.ResPkg}}.{{.KeyField}}.In(keys...), where)))
 		ids := make([]string, 0, len(rows))
 		for i := range rows {
-			ids = append(ids, rows[i].Id)
+			ids = append(ids, rows[i].{{.KeyField}})
 		}
 		return ids, err
 	})
 	{{- end}}
+	return eng, conds, nil
+}
+
+// count is Count over scope: one aggregate, unless a condition is matched
+// page by page (one reaching another table, or a hint), when the matching
+// rows are counted, at most repox.GraphQLScanLimit of them.
+func (r *GraphQL{{.Model}}Repository) count(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) (int64, error) {
+	eng, conds, err := r.engine(in, scope...)
+	if err != nil {
+		return 0, err
+	}
+	if repox.ReachesVia({{$.GormPkg}}.{{.Model}}FilterSpec, conds) || repox.AnyHint(conds) {
+		var n int64
+		err := r.scan(ctx, eng, conds, func(*{{.Row}}) { n++ })
+		return n, err
+	}
+	where, has, err := eng.Predicate(conds)
+	if err != nil {
+		return 0, repox.MapFilterxErr(err)
+	}
+	if has {
+		scope = append(scope, where)
+	}
+	req := {{.ResPkg}}.Aggregate()
+	if len(scope) > 0 {
+		req = req.Where(graphql.And(scope...))
+	}
+	agg, err := r.Svc.Query.{{.Domain}}.{{.Resource}}.Aggregate(ctx, req)
+	if err != nil || agg == nil {
+		return 0, mapGraphQLErr(err)
+	}
+	return int64(agg.Count), nil
+}
+
+// facet is Facet over scope, counted from the matching rows, at most
+// repox.GraphQLScanLimit of them.
+func (r *GraphQL{{.Model}}Repository) facet(ctx context.Context, in repox.ListInput, field string, limit int, scope ...graphql.Predicate) ([]repox.Bucket, error) {
+	spec := {{$.GormPkg}}.{{.Model}}FilterSpec
+	if _, err := repox.FacetExpr(spec, field); err != nil {
+		return nil, err
+	}
+	if f, ok := spec.Fields[field]; ok && f.Via != nil {
+		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
+	}
+	eng, conds, err := r.engine(in, scope...)
+	if err != nil {
+		return nil, err
+	}
+	counts := map[string]int64{}
+	if err := r.scan(ctx, eng, conds, func(row *{{.Row}}) {
+		for _, v := range repox.FacetValues(spec, field, repox.RowMap(row)) {
+			counts[v]++
+		}
+	}); err != nil {
+		return nil, err
+	}
+	return repox.SortBuckets(counts, limit), nil
+}
+
+// scan calls f for every row eng matches under conds, failing past
+// repox.GraphQLScanLimit rows.
+func (r *GraphQL{{.Model}}Repository) scan(ctx context.Context, eng *filterx.HasuraEngine[{{.Row}}], conds []filterx.Condition, f func(*{{.Row}})) error {
+	in := filterx.ListInput{PageSize: 1000, Filter: conds}
+	for read := 0; ; {
+		rows, next, err := eng.List(ctx, in)
+		if err != nil {
+			return repox.MapFilterxErr(err)
+		}
+		for i := range rows {
+			f(&rows[i])
+		}
+		read += len(rows)
+		if next == "" {
+			return nil
+		}
+		if read >= repox.GraphQLScanLimit {
+			return fmt.Errorf("%w: more than %d rows to scan on GraphQL; narrow the filter", repox.ErrInvalidArgument, repox.GraphQLScanLimit)
+		}
+		in.PageToken = next
+	}
+}
+
+func (r *GraphQL{{.Model}}Repository) list(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) ([]*{{.PB}}, string, error) {
+	if err := repox.CheckReadMask((*{{.PB}})(nil), in.ReadMask); err != nil {
+		return nil, "", err
+	}
+	eng, conds, err := r.engine(in, scope...)
+	if err != nil {
+		return nil, "", err
+	}
 	rows, next, err := eng.List(ctx, filterx.ListInput{
 		PageSize:  in.PageSize,
 		PageToken: in.PageToken,
@@ -361,9 +543,19 @@ func (r *GraphQL{{.Model}}Repository) list(ctx context.Context, in repox.ListInp
 	if err != nil {
 		return nil, "", repox.MapFilterxErr(err)
 	}
+	{{- if .Joins}}
+	keys := make([]string, len(rows))
+	for i := range rows {
+		keys[i] = rows[i].{{.PKInputField}}
+	}
+	joined, err := r.readJoins(ctx, in.ReadMask, keys...)
+	if err != nil {
+		return nil, "", err
+	}
+	{{- end}}
 	items := make([]*{{.PB}}, 0, len(rows))
 	for i := range rows {
-		out, err := r.toProto(ctx, &rows[i], in.ReadMask)
+		out, err := r.toProto(ctx, &rows[i], in.ReadMask{{if .Joins}}, joined{{end}})
 		if err != nil {
 			return nil, "", err
 		}
@@ -418,6 +610,15 @@ func (r *GraphQL{{.Model}}Repository) update(ctx context.Context, in *{{.PB}}, p
 	{{.}}
 	{{- end}}
 	existingPB := {{.LowerModelV}}FromRow(row)
+	{{- if .Joins}}
+	joined, err := r.readJoins(ctx, nil, id)
+	if err != nil {
+		return nil, err
+	}
+	{{- range .Joins}}
+	existingPB.{{.GoField}} = joined["{{.Field}}"][id]
+	{{- end}}
+	{{- end}}
 	merged := proto.Clone(existingPB).(*{{.PB}})
 	apply{{.Model}}Mask(merged, in, paths)
 	{{- if .OutputOnly}}
@@ -428,6 +629,11 @@ func (r *GraphQL{{.Model}}Repository) update(ctx context.Context, in *{{.PB}}, p
 			return nil, err
 		}
 	}
+	{{- if .RequiredDocs}}
+	if err := check{{.Model}}Required(merged); err != nil {
+		return nil, err
+	}
+	{{- end}}
 	patch := {{.LowerModelV}}ToUpdatePatch(merged)
 	{{- if .OutputOnly}}
 	if len(outputPaths) > 0 {
@@ -469,6 +675,11 @@ func (r *GraphQL{{.Model}}Repository) update(ctx context.Context, in *{{.PB}}, p
 			return nil, mapGraphQLErr(err)
 		}
 		{{- end}}
+		{{- if .Joins}}
+		if err := r.writeJoins(ctx, id, merged, paths); err != nil {
+			return nil, err
+		}
+		{{- end}}
 		return r.get(ctx, id)
 	}
 	{{- end}}
@@ -487,8 +698,107 @@ func (r *GraphQL{{.Model}}Repository) update(ctx context.Context, in *{{.PB}}, p
 		return nil, mapGraphQLErr(err)
 	}
 	{{- end}}
+	{{- if .Joins}}
+	if err := r.writeJoins(ctx, id, merged, paths); err != nil {
+		return nil, err
+	}
+	{{- end}}
 	return r.get(ctx, id)
 }
+{{- if .Joins}}
+
+// writeJoins replaces, in one transaction, the join rows of the fields kept
+// in join tables that paths names (all of them for an empty mask) with in's.
+// It runs after the row update it belongs to.
+func (r *GraphQL{{.Model}}Repository) writeJoins(ctx context.Context, owner string, in *{{.PB}}, paths []string) error {
+	var ops repox.Ops
+	{{- range .Joins}}
+	if repox.InMask(paths, "{{.Field}}") {
+		if err := r.{{.Var}}Ops(ctx, &ops, owner, in.Get{{.GoField}}(), true); err != nil {
+			return err
+		}
+	}
+	{{- end}}
+	if len(ops) == 0 {
+		return nil
+	}
+	tx := r.Svc.Mutation.Tx()
+	for _, op := range ops {
+		tx.Add(op)
+	}
+	return mapGraphQLErr(tx.Commit(ctx))
+}
+
+// readJoins reads the fields kept in join tables of the rows keyed by keys,
+// those of them mask reads (all for an empty mask), by field and then key, in
+// the order they were written.
+func (r *GraphQL{{.Model}}Repository) readJoins(ctx context.Context, mask []string, keys ...string) (repox.Joined, error) {
+	joined := repox.Joined{}
+	if len(keys) == 0 {
+		return joined, nil
+	}
+	{{- range .Joins}}
+	if repox.Reads(mask, "{{.Field}}") {
+		rows, err := r.Svc.Query.{{.Domain}}.{{.Resource}}.List(ctx, {{.ResPkg}}.List().Where({{.ResPkg}}.{{.OwnerField}}.In(keys...)).OrderBy({{.ResPkg}}.{{.KeyField}}.Asc()))
+		if err != nil {
+			return nil, mapGraphQLErr(err)
+		}
+		got := map[string][]string{}
+		for i := range rows {
+			got[rows[i].{{.OwnerField}}] = append(got[rows[i].{{.OwnerField}}], {{if .NameField}}rows[i].{{.NameField}}{{else if .Collection}}"{{.Collection}}/"+rows[i].{{.TargetField}}{{else}}rows[i].{{.TargetField}}{{end}})
+		}
+		joined["{{.Field}}"] = got
+	}
+	{{- end}}
+	return joined, nil
+}
+{{- end}}
+{{- $model := .Model}}
+{{- range .Joins}}
+
+// {{.Var}}Ops queues onto ops the join rows keeping {{.Field}} for the row
+// keyed owner, one per name in order (a repeat keeps its first place), after
+// removing the rows it holds when replace is set. A name no record holds is
+// repox.ErrForeignKey.
+func (r *GraphQL{{$model}}Repository) {{.Var}}Ops(ctx context.Context, ops *repox.Ops, owner string, names []string, replace bool) error {
+	if replace {
+		rows, err := r.Svc.Query.{{.Domain}}.{{.Resource}}.List(ctx, {{.ResPkg}}.List().Where({{.ResPkg}}.{{.OwnerField}}.Eq(owner)))
+		if err != nil {
+			return mapGraphQLErr(err)
+		}
+		for i := range rows {
+			ops.Add(r.Svc.Mutation.{{.Domain}}.{{.Resource}}.DeleteOp(rows[i].{{.KeyField}}, new({{.DeleteResp}})))
+		}
+	}
+	seen := map[string]bool{}
+	for _, n := range names {
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		{{- if .Lookup}}
+		key, found, err := {{.Lookup.Func}}Key(ctx, r.Svc, n)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return fmt.Errorf("%w: {{.Field}}: no record named %q", repox.ErrForeignKey, n)
+		}
+		{{- else}}
+		{{- if .Collection}}
+		if !strings.HasPrefix(n, "{{.Collection}}/") {
+			return fmt.Errorf("%w: {{.Field}}: %q is not a {{.Collection}} name", repox.ErrInvalidArgument, n)
+		}
+		{{- end}}
+		key := repox.LastSegment(n)
+		{{- end}}
+		ops.Add(r.Svc.Mutation.{{.Domain}}.{{.Resource}}.CreateOp({{.ResPkg}}.CreateInput{
+			{{.KeyField}}: repox.NewULID(), {{.OwnerField}}: owner, {{.TargetField}}: key,{{if .NameField}} {{.NameField}}: n,{{end}}
+		}, new({{.InsertResp}})))
+	}
+	return nil
+}
+{{- end}}
 
 
 // newInput builds the insert a Batch queues for in{{if .Parented}} under parent{{end}}, and
@@ -523,6 +833,11 @@ func (r *GraphQL{{.Model}}Repository) newInput({{if .Parented}}parent string, {{
 	in.Name = {{if .Parented}}{{.FormatCallParented}}{{else}}Format{{.Model}}Name(id){{end}}
 	{{- if .NameKeyed}}
 	id = rowID // keyed as Create keys it
+	{{- end}}
+	{{- if .RequiredDocs}}
+	if err := check{{.Model}}Required(in); err != nil {
+		return ci, nil, err
+	}
 	{{- end}}
 	ci = {{.LowerModelV}}ToCreateInput(in)
 	ci.Id = id
@@ -559,6 +874,11 @@ func (r *GraphQL{{.Model}}Repository) insertOps(ctx context.Context, gtx *repox.
 	gtx.Add(r.Svc.Mutation.{{.Domain}}.{{.Resource}}.CreateOp(ci, new({{.InsertResp}})))
 	{{- range .GQLDeepAfterCreates}}
 	{{.}}
+	{{- end}}
+	{{- range .Joins}}
+	if err := r.{{.Var}}Ops(ctx, gtx, ci.Id, in.Get{{.GoField}}(), false); err != nil {
+		return nil, err
+	}
 	{{- end}}
 	return nil, nil
 }
@@ -597,6 +917,11 @@ func (r *GraphQL{{.Model}}Repository) updateOps(ctx context.Context, ops *repox.
 	{{- if .OutputOnly}}
 	repox.CopyFields(merged, in, outputPaths)
 	{{- end}}
+	{{- if .RequiredDocs}}
+	if err := check{{.Model}}Required(merged); err != nil {
+		return nil, err
+	}
+	{{- end}}
 	patch := {{.LowerModelV}}ToUpdatePatch(merged)
 	{{- if .OutputOnly}}
 	if len(outputPaths) > 0 {
@@ -631,6 +956,13 @@ func (r *GraphQL{{.Model}}Repository) updateOps(ctx context.Context, ops *repox.
 	{{- end}}
 	{{- range .GQLQueuedStaleDels}}
 	{{.}}
+	{{- end}}
+	{{- range .Joins}}
+	if repox.InMask(paths, "{{.Field}}") {
+		if err := r.{{.Var}}Ops(ctx, &atx, id, merged.Get{{.GoField}}(), true); err != nil {
+			return nil, err
+		}
+	}
 	{{- end}}
 	*ops = append(*ops, atx...)
 	return func(ctx context.Context, failed error) error {

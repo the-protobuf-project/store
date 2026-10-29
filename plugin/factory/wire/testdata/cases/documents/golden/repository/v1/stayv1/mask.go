@@ -51,3 +51,10 @@ func applyBookingMask(merged, in *gen.Booking, paths []string) {
 		merged.Note = in.GetNote()
 	}
 }
+
+// checkBookingRequired refuses, with repox.ErrInvalidArgument, a write of
+// Booking missing one of its REQUIRED document fields (address),
+// which the database holds NOT NULL.
+func checkBookingRequired(m *gen.Booking) error {
+	return repox.RequireFields(m, "address")
+}

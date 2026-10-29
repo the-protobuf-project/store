@@ -89,6 +89,9 @@ func (r *GraphQLBookingRepository) Create(ctx context.Context, in *gen.Booking) 
 			return nil, err
 		}
 	}
+	if err := checkBookingRequired(in); err != nil {
+		return nil, err
+	}
 	ci := bookingToCreateInput(in)
 	ci.Id = id
 	if v := in.GetNote(); v != nil {
@@ -165,15 +168,25 @@ func (r *GraphQLBookingRepository) List(ctx context.Context, in repox.ListInput)
 	return r.list(ctx, in)
 }
 
-func (r *GraphQLBookingRepository) list(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) ([]*gen.Booking, string, error) {
+// Count returns how many records match in; its page fields are ignored.
+func (r *GraphQLBookingRepository) Count(ctx context.Context, in repox.ListInput) (int64, error) {
+	return r.count(ctx, in)
+}
+
+// Facet counts the records matching in by the values of field, from the rows
+// (see repox.FacetValues).
+func (r *GraphQLBookingRepository) Facet(ctx context.Context, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	return r.facet(ctx, in, field, limit)
+}
+
+// engine is the list engine over the records scope selects (and, unless
+// in.ShowDeleted, not deleted), with in's filter conditions.
+func (r *GraphQLBookingRepository) engine(in repox.ListInput, scope ...graphql.Predicate) (*filterx.HasuraEngine[bookingsql.StayV1Bookings], []filterx.Condition, error) {
 	conds, err := filterx.Parse(in.Filter)
 	if err != nil {
-		return nil, "", repox.MapFilterxErr(err)
+		return nil, nil, repox.MapFilterxErr(err)
 	}
 	conds = append(conds, in.Where...)
-	if err := repox.CheckReadMask((*gen.Booking)(nil), in.ReadMask); err != nil {
-		return nil, "", err
-	}
 	eng := filterx.Hasura[bookingsql.StayV1Bookings](stayv1.BookingFilterSpec, r.Svc.Query.StayV1.Bookings).Scope(scope...)
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)
@@ -186,6 +199,96 @@ func (r *GraphQLBookingRepository) list(ctx context.Context, in repox.ListInput,
 		}
 		return ids, err
 	})
+	return eng, conds, nil
+}
+
+// count is Count over scope: one aggregate, unless a condition is matched
+// page by page (one reaching another table, or a hint), when the matching
+// rows are counted, at most repox.GraphQLScanLimit of them.
+func (r *GraphQLBookingRepository) count(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) (int64, error) {
+	eng, conds, err := r.engine(in, scope...)
+	if err != nil {
+		return 0, err
+	}
+	if repox.ReachesVia(stayv1.BookingFilterSpec, conds) || repox.AnyHint(conds) {
+		var n int64
+		err := r.scan(ctx, eng, conds, func(*bookingsql.StayV1Bookings) { n++ })
+		return n, err
+	}
+	where, has, err := eng.Predicate(conds)
+	if err != nil {
+		return 0, repox.MapFilterxErr(err)
+	}
+	if has {
+		scope = append(scope, where)
+	}
+	req := bookingsql.Aggregate()
+	if len(scope) > 0 {
+		req = req.Where(graphql.And(scope...))
+	}
+	agg, err := r.Svc.Query.StayV1.Bookings.Aggregate(ctx, req)
+	if err != nil || agg == nil {
+		return 0, mapGraphQLErr(err)
+	}
+	return int64(agg.Count), nil
+}
+
+// facet is Facet over scope, counted from the matching rows, at most
+// repox.GraphQLScanLimit of them.
+func (r *GraphQLBookingRepository) facet(ctx context.Context, in repox.ListInput, field string, limit int, scope ...graphql.Predicate) ([]repox.Bucket, error) {
+	spec := stayv1.BookingFilterSpec
+	if _, err := repox.FacetExpr(spec, field); err != nil {
+		return nil, err
+	}
+	if f, ok := spec.Fields[field]; ok && f.Via != nil {
+		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
+	}
+	eng, conds, err := r.engine(in, scope...)
+	if err != nil {
+		return nil, err
+	}
+	counts := map[string]int64{}
+	if err := r.scan(ctx, eng, conds, func(row *bookingsql.StayV1Bookings) {
+		for _, v := range repox.FacetValues(spec, field, repox.RowMap(row)) {
+			counts[v]++
+		}
+	}); err != nil {
+		return nil, err
+	}
+	return repox.SortBuckets(counts, limit), nil
+}
+
+// scan calls f for every row eng matches under conds, failing past
+// repox.GraphQLScanLimit rows.
+func (r *GraphQLBookingRepository) scan(ctx context.Context, eng *filterx.HasuraEngine[bookingsql.StayV1Bookings], conds []filterx.Condition, f func(*bookingsql.StayV1Bookings)) error {
+	in := filterx.ListInput{PageSize: 1000, Filter: conds}
+	for read := 0; ; {
+		rows, next, err := eng.List(ctx, in)
+		if err != nil {
+			return repox.MapFilterxErr(err)
+		}
+		for i := range rows {
+			f(&rows[i])
+		}
+		read += len(rows)
+		if next == "" {
+			return nil
+		}
+		if read >= repox.GraphQLScanLimit {
+			return fmt.Errorf("%w: more than %d rows to scan on GraphQL; narrow the filter", repox.ErrInvalidArgument, repox.GraphQLScanLimit)
+		}
+		in.PageToken = next
+	}
+}
+
+func (r *GraphQLBookingRepository) list(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) ([]*gen.Booking, string, error) {
+	if err := repox.CheckReadMask((*gen.Booking)(nil), in.ReadMask); err != nil {
+		return nil, "", err
+	}
+	eng, conds, err := r.engine(in, scope...)
+	if err != nil {
+		return nil, "", err
+	}
 	rows, next, err := eng.List(ctx, filterx.ListInput{
 		PageSize:  in.PageSize,
 		PageToken: in.PageToken,
@@ -238,6 +341,9 @@ func (r *GraphQLBookingRepository) update(ctx context.Context, in *gen.Booking, 
 			return nil, err
 		}
 	}
+	if err := checkBookingRequired(merged); err != nil {
+		return nil, err
+	}
 	patch := bookingToUpdatePatch(merged)
 	if repox.GroupTouched(paths, "note") {
 		staleNote = repox.Deref(row.NoteId)
@@ -280,6 +386,9 @@ func (r *GraphQLBookingRepository) newInput(in *gen.Booking) (bookingsql.CreateI
 	}
 	in = proto.Clone(in).(*gen.Booking)
 	in.Name = FormatBookingName(id)
+	if err := checkBookingRequired(in); err != nil {
+		return ci, nil, err
+	}
 	ci = bookingToCreateInput(in)
 	ci.Id = id
 	return ci, in, nil
@@ -320,6 +429,9 @@ func (r *GraphQLBookingRepository) updateOps(ctx context.Context, ops *repox.Ops
 	var staleNote string
 	merged := proto.Clone(existingPB).(*gen.Booking)
 	applyBookingMask(merged, in, paths)
+	if err := checkBookingRequired(merged); err != nil {
+		return nil, err
+	}
 	patch := bookingToUpdatePatch(merged)
 	var utx, atx repox.Ops
 	if repox.GroupTouched(paths, "note") {

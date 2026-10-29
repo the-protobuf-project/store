@@ -224,26 +224,61 @@ func (r *GraphQLMemberRepository) toProto(ctx context.Context, row *membersql.Or
 
 // List returns one page of records under parent.
 func (r *GraphQLMemberRepository) List(ctx context.Context, parent string, in repox.ListInput) ([]*orgv1.Member, string, error) {
-	parentIDs, err := repox.SplitName(parent, "organisations")
+	scope, err := r.parentScope(ctx, parent)
 	if err != nil {
 		return nil, "", err
 	}
-	// AIP-159: "-" for the parent reads across every parent.
-	if parentIDs[len(parentIDs)-1] == "-" {
-		return r.list(ctx, in)
-	}
-	return r.list(ctx, in, membersql.OrganisationId.Eq(parentIDs[len(parentIDs)-1]))
+	return r.list(ctx, in, scope...)
 }
 
-func (r *GraphQLMemberRepository) list(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) ([]*orgv1.Member, string, error) {
+// Count returns how many records under parent match in; its page fields are
+// ignored.
+func (r *GraphQLMemberRepository) Count(ctx context.Context, parent string, in repox.ListInput) (int64, error) {
+	scope, err := r.parentScope(ctx, parent)
+	if err != nil {
+		return 0, err
+	}
+	return r.count(ctx, in, scope...)
+}
+
+// Facet counts the records under parent matching in by the values of field,
+// from the rows (see repox.FacetValues).
+func (r *GraphQLMemberRepository) Facet(ctx context.Context, parent string, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	scope, err := r.parentScope(ctx, parent)
+	if err != nil {
+		return nil, err
+	}
+	return r.facet(ctx, in, field, limit, scope...)
+}
+
+// parentScope is the predicate of the records under parent.
+func (r *GraphQLMemberRepository) parentScope(ctx context.Context, parent string) ([]graphql.Predicate, error) {
+	parentIDs, err := repox.SplitName(parent, "organisations")
+	if err != nil {
+		return nil, err
+	}
+	// AIP-159: "-" for the parent reads across every parent. A "-" widens
+	// only its own segment: under a parent naming some of its ancestors
+	// ("a/1/b/-"), the records' own names are matched, so they stay under
+	// those.
+	if parentIDs[len(parentIDs)-1] == "-" {
+		if repox.AllWild(parentIDs) {
+			return nil, nil
+		}
+		p, _ := repox.NamePattern(parent + "/members/-")
+		return []graphql.Predicate{membersql.Name.Like(p)}, nil
+	}
+	return []graphql.Predicate{membersql.OrganisationId.Eq(parentIDs[len(parentIDs)-1])}, nil
+}
+
+// engine is the list engine over the records scope selects (and, unless
+// in.ShowDeleted, not deleted), with in's filter conditions.
+func (r *GraphQLMemberRepository) engine(in repox.ListInput, scope ...graphql.Predicate) (*filterx.HasuraEngine[membersql.OrgV1Members], []filterx.Condition, error) {
 	conds, err := filterx.Parse(in.Filter)
 	if err != nil {
-		return nil, "", repox.MapFilterxErr(err)
+		return nil, nil, repox.MapFilterxErr(err)
 	}
 	conds = append(conds, in.Where...)
-	if err := repox.CheckReadMask((*orgv1.Member)(nil), in.ReadMask); err != nil {
-		return nil, "", err
-	}
 	eng := filterx.Hasura[membersql.OrgV1Members](orgv1gorm.MemberFilterSpec, r.Svc.Query.OrgV1.Members).Scope(scope...)
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)
@@ -264,6 +299,96 @@ func (r *GraphQLMemberRepository) list(ctx context.Context, in repox.ListInput, 
 		}
 		return ids, err
 	})
+	return eng, conds, nil
+}
+
+// count is Count over scope: one aggregate, unless a condition is matched
+// page by page (one reaching another table, or a hint), when the matching
+// rows are counted, at most repox.GraphQLScanLimit of them.
+func (r *GraphQLMemberRepository) count(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) (int64, error) {
+	eng, conds, err := r.engine(in, scope...)
+	if err != nil {
+		return 0, err
+	}
+	if repox.ReachesVia(orgv1gorm.MemberFilterSpec, conds) || repox.AnyHint(conds) {
+		var n int64
+		err := r.scan(ctx, eng, conds, func(*membersql.OrgV1Members) { n++ })
+		return n, err
+	}
+	where, has, err := eng.Predicate(conds)
+	if err != nil {
+		return 0, repox.MapFilterxErr(err)
+	}
+	if has {
+		scope = append(scope, where)
+	}
+	req := membersql.Aggregate()
+	if len(scope) > 0 {
+		req = req.Where(graphql.And(scope...))
+	}
+	agg, err := r.Svc.Query.OrgV1.Members.Aggregate(ctx, req)
+	if err != nil || agg == nil {
+		return 0, mapGraphQLErr(err)
+	}
+	return int64(agg.Count), nil
+}
+
+// facet is Facet over scope, counted from the matching rows, at most
+// repox.GraphQLScanLimit of them.
+func (r *GraphQLMemberRepository) facet(ctx context.Context, in repox.ListInput, field string, limit int, scope ...graphql.Predicate) ([]repox.Bucket, error) {
+	spec := orgv1gorm.MemberFilterSpec
+	if _, err := repox.FacetExpr(spec, field); err != nil {
+		return nil, err
+	}
+	if f, ok := spec.Fields[field]; ok && f.Via != nil {
+		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
+	}
+	eng, conds, err := r.engine(in, scope...)
+	if err != nil {
+		return nil, err
+	}
+	counts := map[string]int64{}
+	if err := r.scan(ctx, eng, conds, func(row *membersql.OrgV1Members) {
+		for _, v := range repox.FacetValues(spec, field, repox.RowMap(row)) {
+			counts[v]++
+		}
+	}); err != nil {
+		return nil, err
+	}
+	return repox.SortBuckets(counts, limit), nil
+}
+
+// scan calls f for every row eng matches under conds, failing past
+// repox.GraphQLScanLimit rows.
+func (r *GraphQLMemberRepository) scan(ctx context.Context, eng *filterx.HasuraEngine[membersql.OrgV1Members], conds []filterx.Condition, f func(*membersql.OrgV1Members)) error {
+	in := filterx.ListInput{PageSize: 1000, Filter: conds}
+	for read := 0; ; {
+		rows, next, err := eng.List(ctx, in)
+		if err != nil {
+			return repox.MapFilterxErr(err)
+		}
+		for i := range rows {
+			f(&rows[i])
+		}
+		read += len(rows)
+		if next == "" {
+			return nil
+		}
+		if read >= repox.GraphQLScanLimit {
+			return fmt.Errorf("%w: more than %d rows to scan on GraphQL; narrow the filter", repox.ErrInvalidArgument, repox.GraphQLScanLimit)
+		}
+		in.PageToken = next
+	}
+}
+
+func (r *GraphQLMemberRepository) list(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) ([]*orgv1.Member, string, error) {
+	if err := repox.CheckReadMask((*orgv1.Member)(nil), in.ReadMask); err != nil {
+		return nil, "", err
+	}
+	eng, conds, err := r.engine(in, scope...)
+	if err != nil {
+		return nil, "", err
+	}
 	rows, next, err := eng.List(ctx, filterx.ListInput{
 		PageSize:  in.PageSize,
 		PageToken: in.PageToken,
@@ -704,15 +829,25 @@ func (r *GraphQLOrganisationRepository) List(ctx context.Context, in repox.ListI
 	return r.list(ctx, in)
 }
 
-func (r *GraphQLOrganisationRepository) list(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) ([]*orgv1.Organisation, string, error) {
+// Count returns how many records match in; its page fields are ignored.
+func (r *GraphQLOrganisationRepository) Count(ctx context.Context, in repox.ListInput) (int64, error) {
+	return r.count(ctx, in)
+}
+
+// Facet counts the records matching in by the values of field, from the rows
+// (see repox.FacetValues).
+func (r *GraphQLOrganisationRepository) Facet(ctx context.Context, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	return r.facet(ctx, in, field, limit)
+}
+
+// engine is the list engine over the records scope selects (and, unless
+// in.ShowDeleted, not deleted), with in's filter conditions.
+func (r *GraphQLOrganisationRepository) engine(in repox.ListInput, scope ...graphql.Predicate) (*filterx.HasuraEngine[organisationsql.OrgV1Organisations], []filterx.Condition, error) {
 	conds, err := filterx.Parse(in.Filter)
 	if err != nil {
-		return nil, "", repox.MapFilterxErr(err)
+		return nil, nil, repox.MapFilterxErr(err)
 	}
 	conds = append(conds, in.Where...)
-	if err := repox.CheckReadMask((*orgv1.Organisation)(nil), in.ReadMask); err != nil {
-		return nil, "", err
-	}
 	eng := filterx.Hasura[organisationsql.OrgV1Organisations](orgv1gorm.OrganisationFilterSpec, r.Svc.Query.OrgV1.Organisations).Scope(scope...)
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)
@@ -725,6 +860,96 @@ func (r *GraphQLOrganisationRepository) list(ctx context.Context, in repox.ListI
 		}
 		return ids, err
 	})
+	return eng, conds, nil
+}
+
+// count is Count over scope: one aggregate, unless a condition is matched
+// page by page (one reaching another table, or a hint), when the matching
+// rows are counted, at most repox.GraphQLScanLimit of them.
+func (r *GraphQLOrganisationRepository) count(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) (int64, error) {
+	eng, conds, err := r.engine(in, scope...)
+	if err != nil {
+		return 0, err
+	}
+	if repox.ReachesVia(orgv1gorm.OrganisationFilterSpec, conds) || repox.AnyHint(conds) {
+		var n int64
+		err := r.scan(ctx, eng, conds, func(*organisationsql.OrgV1Organisations) { n++ })
+		return n, err
+	}
+	where, has, err := eng.Predicate(conds)
+	if err != nil {
+		return 0, repox.MapFilterxErr(err)
+	}
+	if has {
+		scope = append(scope, where)
+	}
+	req := organisationsql.Aggregate()
+	if len(scope) > 0 {
+		req = req.Where(graphql.And(scope...))
+	}
+	agg, err := r.Svc.Query.OrgV1.Organisations.Aggregate(ctx, req)
+	if err != nil || agg == nil {
+		return 0, mapGraphQLErr(err)
+	}
+	return int64(agg.Count), nil
+}
+
+// facet is Facet over scope, counted from the matching rows, at most
+// repox.GraphQLScanLimit of them.
+func (r *GraphQLOrganisationRepository) facet(ctx context.Context, in repox.ListInput, field string, limit int, scope ...graphql.Predicate) ([]repox.Bucket, error) {
+	spec := orgv1gorm.OrganisationFilterSpec
+	if _, err := repox.FacetExpr(spec, field); err != nil {
+		return nil, err
+	}
+	if f, ok := spec.Fields[field]; ok && f.Via != nil {
+		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
+	}
+	eng, conds, err := r.engine(in, scope...)
+	if err != nil {
+		return nil, err
+	}
+	counts := map[string]int64{}
+	if err := r.scan(ctx, eng, conds, func(row *organisationsql.OrgV1Organisations) {
+		for _, v := range repox.FacetValues(spec, field, repox.RowMap(row)) {
+			counts[v]++
+		}
+	}); err != nil {
+		return nil, err
+	}
+	return repox.SortBuckets(counts, limit), nil
+}
+
+// scan calls f for every row eng matches under conds, failing past
+// repox.GraphQLScanLimit rows.
+func (r *GraphQLOrganisationRepository) scan(ctx context.Context, eng *filterx.HasuraEngine[organisationsql.OrgV1Organisations], conds []filterx.Condition, f func(*organisationsql.OrgV1Organisations)) error {
+	in := filterx.ListInput{PageSize: 1000, Filter: conds}
+	for read := 0; ; {
+		rows, next, err := eng.List(ctx, in)
+		if err != nil {
+			return repox.MapFilterxErr(err)
+		}
+		for i := range rows {
+			f(&rows[i])
+		}
+		read += len(rows)
+		if next == "" {
+			return nil
+		}
+		if read >= repox.GraphQLScanLimit {
+			return fmt.Errorf("%w: more than %d rows to scan on GraphQL; narrow the filter", repox.ErrInvalidArgument, repox.GraphQLScanLimit)
+		}
+		in.PageToken = next
+	}
+}
+
+func (r *GraphQLOrganisationRepository) list(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) ([]*orgv1.Organisation, string, error) {
+	if err := repox.CheckReadMask((*orgv1.Organisation)(nil), in.ReadMask); err != nil {
+		return nil, "", err
+	}
+	eng, conds, err := r.engine(in, scope...)
+	if err != nil {
+		return nil, "", err
+	}
 	rows, next, err := eng.List(ctx, filterx.ListInput{
 		PageSize:  in.PageSize,
 		PageToken: in.PageToken,
@@ -1129,18 +1354,118 @@ func (r *GraphQLUserRepository) List(ctx context.Context, in repox.ListInput) ([
 	return r.list(ctx, in)
 }
 
-func (r *GraphQLUserRepository) list(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) ([]*orgv1.User, string, error) {
+// Count returns how many records match in; its page fields are ignored.
+func (r *GraphQLUserRepository) Count(ctx context.Context, in repox.ListInput) (int64, error) {
+	return r.count(ctx, in)
+}
+
+// Facet counts the records matching in by the values of field, from the rows
+// (see repox.FacetValues).
+func (r *GraphQLUserRepository) Facet(ctx context.Context, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	return r.facet(ctx, in, field, limit)
+}
+
+// engine is the list engine over the records scope selects (and, unless
+// in.ShowDeleted, not deleted), with in's filter conditions.
+func (r *GraphQLUserRepository) engine(in repox.ListInput, scope ...graphql.Predicate) (*filterx.HasuraEngine[usersql.OrgV1Users], []filterx.Condition, error) {
 	conds, err := filterx.Parse(in.Filter)
 	if err != nil {
-		return nil, "", repox.MapFilterxErr(err)
+		return nil, nil, repox.MapFilterxErr(err)
 	}
 	conds = append(conds, in.Where...)
-	if err := repox.CheckReadMask((*orgv1.User)(nil), in.ReadMask); err != nil {
-		return nil, "", err
-	}
 	eng := filterx.Hasura[usersql.OrgV1Users](orgv1gorm.UserFilterSpec, r.Svc.Query.OrgV1.Users).Scope(scope...)
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)
+	}
+	return eng, conds, nil
+}
+
+// count is Count over scope: one aggregate, unless a condition is matched
+// page by page (one reaching another table, or a hint), when the matching
+// rows are counted, at most repox.GraphQLScanLimit of them.
+func (r *GraphQLUserRepository) count(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) (int64, error) {
+	eng, conds, err := r.engine(in, scope...)
+	if err != nil {
+		return 0, err
+	}
+	if repox.ReachesVia(orgv1gorm.UserFilterSpec, conds) || repox.AnyHint(conds) {
+		var n int64
+		err := r.scan(ctx, eng, conds, func(*usersql.OrgV1Users) { n++ })
+		return n, err
+	}
+	where, has, err := eng.Predicate(conds)
+	if err != nil {
+		return 0, repox.MapFilterxErr(err)
+	}
+	if has {
+		scope = append(scope, where)
+	}
+	req := usersql.Aggregate()
+	if len(scope) > 0 {
+		req = req.Where(graphql.And(scope...))
+	}
+	agg, err := r.Svc.Query.OrgV1.Users.Aggregate(ctx, req)
+	if err != nil || agg == nil {
+		return 0, mapGraphQLErr(err)
+	}
+	return int64(agg.Count), nil
+}
+
+// facet is Facet over scope, counted from the matching rows, at most
+// repox.GraphQLScanLimit of them.
+func (r *GraphQLUserRepository) facet(ctx context.Context, in repox.ListInput, field string, limit int, scope ...graphql.Predicate) ([]repox.Bucket, error) {
+	spec := orgv1gorm.UserFilterSpec
+	if _, err := repox.FacetExpr(spec, field); err != nil {
+		return nil, err
+	}
+	if f, ok := spec.Fields[field]; ok && f.Via != nil {
+		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
+	}
+	eng, conds, err := r.engine(in, scope...)
+	if err != nil {
+		return nil, err
+	}
+	counts := map[string]int64{}
+	if err := r.scan(ctx, eng, conds, func(row *usersql.OrgV1Users) {
+		for _, v := range repox.FacetValues(spec, field, repox.RowMap(row)) {
+			counts[v]++
+		}
+	}); err != nil {
+		return nil, err
+	}
+	return repox.SortBuckets(counts, limit), nil
+}
+
+// scan calls f for every row eng matches under conds, failing past
+// repox.GraphQLScanLimit rows.
+func (r *GraphQLUserRepository) scan(ctx context.Context, eng *filterx.HasuraEngine[usersql.OrgV1Users], conds []filterx.Condition, f func(*usersql.OrgV1Users)) error {
+	in := filterx.ListInput{PageSize: 1000, Filter: conds}
+	for read := 0; ; {
+		rows, next, err := eng.List(ctx, in)
+		if err != nil {
+			return repox.MapFilterxErr(err)
+		}
+		for i := range rows {
+			f(&rows[i])
+		}
+		read += len(rows)
+		if next == "" {
+			return nil
+		}
+		if read >= repox.GraphQLScanLimit {
+			return fmt.Errorf("%w: more than %d rows to scan on GraphQL; narrow the filter", repox.ErrInvalidArgument, repox.GraphQLScanLimit)
+		}
+		in.PageToken = next
+	}
+}
+
+func (r *GraphQLUserRepository) list(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) ([]*orgv1.User, string, error) {
+	if err := repox.CheckReadMask((*orgv1.User)(nil), in.ReadMask); err != nil {
+		return nil, "", err
+	}
+	eng, conds, err := r.engine(in, scope...)
+	if err != nil {
+		return nil, "", err
 	}
 	rows, next, err := eng.List(ctx, filterx.ListInput{
 		PageSize:  in.PageSize,

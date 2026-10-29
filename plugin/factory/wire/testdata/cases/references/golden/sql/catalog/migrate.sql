@@ -68,6 +68,28 @@ CREATE TABLE IF NOT EXISTS "catalog"."pages" (
     "book_id"  CHAR(26)  NOT NULL
 );
 
+-- Join table for the many-to-many relation Shelf.featured ↔ Book.
+CREATE TABLE IF NOT EXISTS "catalog"."shelf_featured" (
+    -- Unique identifier for the record.
+    "id"  CHAR(26)  NOT NULL  PRIMARY KEY,
+    -- Foreign key to Shelf.
+    "shelf_id"  CHAR(26)  NOT NULL,
+    -- Foreign key to Book.
+    "book_id"  CHAR(26)  NOT NULL,
+    -- Full resource name of the referenced Book, capturing the parent hierarchy the book_id id alone omits.
+    "book_name"  TEXT  NOT NULL
+);
+
+-- Join table for the many-to-many relation Book.filed_under ↔ Shelf.
+CREATE TABLE IF NOT EXISTS "catalog"."book_filed_under" (
+    -- Unique identifier for the record.
+    "id"  CHAR(26)  NOT NULL  PRIMARY KEY,
+    -- Foreign key to Book.
+    "book_id"  CHAR(26)  NOT NULL,
+    -- Foreign key to Shelf.
+    "shelf_id"  CHAR(26)  NOT NULL
+);
+
 -- Foreign keys
 ALTER TABLE "catalog"."books" DROP CONSTRAINT IF EXISTS "fk_books_shelf_id";
 ALTER TABLE "catalog"."books" ADD CONSTRAINT "fk_books_shelf_id" FOREIGN KEY ("shelf_id") REFERENCES "catalog"."shelves"("id") ON DELETE CASCADE;
@@ -75,6 +97,14 @@ ALTER TABLE "catalog"."pages" DROP CONSTRAINT IF EXISTS "fk_pages_shelf_id";
 ALTER TABLE "catalog"."pages" ADD CONSTRAINT "fk_pages_shelf_id" FOREIGN KEY ("shelf_id") REFERENCES "catalog"."shelves"("id") ON DELETE CASCADE;
 ALTER TABLE "catalog"."pages" DROP CONSTRAINT IF EXISTS "fk_pages_book_id";
 ALTER TABLE "catalog"."pages" ADD CONSTRAINT "fk_pages_book_id" FOREIGN KEY ("book_id") REFERENCES "catalog"."books"("id") ON DELETE CASCADE;
+ALTER TABLE "catalog"."shelf_featured" DROP CONSTRAINT IF EXISTS "fk_shelf_featured_shelf_id";
+ALTER TABLE "catalog"."shelf_featured" ADD CONSTRAINT "fk_shelf_featured_shelf_id" FOREIGN KEY ("shelf_id") REFERENCES "catalog"."shelves"("id") ON DELETE CASCADE;
+ALTER TABLE "catalog"."shelf_featured" DROP CONSTRAINT IF EXISTS "fk_shelf_featured_book_id";
+ALTER TABLE "catalog"."shelf_featured" ADD CONSTRAINT "fk_shelf_featured_book_id" FOREIGN KEY ("book_id") REFERENCES "catalog"."books"("id") ON DELETE CASCADE;
+ALTER TABLE "catalog"."book_filed_under" DROP CONSTRAINT IF EXISTS "fk_book_filed_under_book_id";
+ALTER TABLE "catalog"."book_filed_under" ADD CONSTRAINT "fk_book_filed_under_book_id" FOREIGN KEY ("book_id") REFERENCES "catalog"."books"("id") ON DELETE CASCADE;
+ALTER TABLE "catalog"."book_filed_under" DROP CONSTRAINT IF EXISTS "fk_book_filed_under_shelf_id";
+ALTER TABLE "catalog"."book_filed_under" ADD CONSTRAINT "fk_book_filed_under_shelf_id" FOREIGN KEY ("shelf_id") REFERENCES "catalog"."shelves"("id") ON DELETE CASCADE;
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS "idx_shelves_delete_time" ON "catalog"."shelves" ("delete_time");
@@ -82,6 +112,10 @@ CREATE INDEX IF NOT EXISTS "idx_books_delete_time" ON "catalog"."books" ("delete
 CREATE INDEX IF NOT EXISTS "idx_books_shelf_id_id" ON "catalog"."books" ("shelf_id", "id");
 CREATE INDEX IF NOT EXISTS "idx_pages_book_id_id" ON "catalog"."pages" ("book_id", "id");
 CREATE INDEX IF NOT EXISTS "idx_pages_shelf_id" ON "catalog"."pages" ("shelf_id");
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_shelf_featured_shelf_id_book_id" ON "catalog"."shelf_featured" ("shelf_id", "book_id");
+CREATE INDEX IF NOT EXISTS "idx_shelf_featured_book_id" ON "catalog"."shelf_featured" ("book_id");
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_book_filed_under_book_id_shelf_id" ON "catalog"."book_filed_under" ("book_id", "shelf_id");
+CREATE INDEX IF NOT EXISTS "idx_book_filed_under_shelf_id" ON "catalog"."book_filed_under" ("shelf_id");
 
 -- Documentation
 COMMENT ON TABLE "catalog"."shelves" IS 'A shelf holds books.';
@@ -105,5 +139,14 @@ COMMENT ON COLUMN "catalog"."pages"."name" IS 'The page''s resource name.';
 COMMENT ON COLUMN "catalog"."pages"."text" IS 'What is printed on it.';
 COMMENT ON COLUMN "catalog"."pages"."shelf_id" IS 'Parent reference to Shelf (from the AIP resource pattern).';
 COMMENT ON COLUMN "catalog"."pages"."book_id" IS 'Parent reference to Book (from the AIP resource pattern).';
+COMMENT ON TABLE "catalog"."shelf_featured" IS 'Join table for the many-to-many relation Shelf.featured ↔ Book.';
+COMMENT ON COLUMN "catalog"."shelf_featured"."id" IS 'Unique identifier for the record.';
+COMMENT ON COLUMN "catalog"."shelf_featured"."shelf_id" IS 'Foreign key to Shelf.';
+COMMENT ON COLUMN "catalog"."shelf_featured"."book_id" IS 'Foreign key to Book.';
+COMMENT ON COLUMN "catalog"."shelf_featured"."book_name" IS 'Full resource name of the referenced Book, capturing the parent hierarchy the book_id id alone omits.';
+COMMENT ON TABLE "catalog"."book_filed_under" IS 'Join table for the many-to-many relation Book.filed_under ↔ Shelf.';
+COMMENT ON COLUMN "catalog"."book_filed_under"."id" IS 'Unique identifier for the record.';
+COMMENT ON COLUMN "catalog"."book_filed_under"."book_id" IS 'Foreign key to Book.';
+COMMENT ON COLUMN "catalog"."book_filed_under"."shelf_id" IS 'Foreign key to Shelf.';
 
 COMMIT;

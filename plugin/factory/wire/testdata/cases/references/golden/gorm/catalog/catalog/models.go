@@ -36,6 +36,10 @@ type Shelf struct {
 	Books []Book `gorm:"foreignKey:ShelfID" json:"books,omitempty"`
 	// Back-relation: Page records that reference this via shelf_id.
 	Pages []Page `gorm:"foreignKey:ShelfID" json:"pages,omitempty"`
+	// Back-relation: ShelfFeatured records that reference this via shelf_id.
+	ShelfFeatured []ShelfFeatured `gorm:"foreignKey:ShelfID;constraint:OnDelete:CASCADE" json:"shelffeatured,omitempty"`
+	// Back-relation: BookFiledUnder records that reference this via shelf_id.
+	BookFiledUnder []BookFiledUnder `gorm:"foreignKey:ShelfID;constraint:OnDelete:CASCADE" json:"bookfiledunder,omitempty"`
 }
 
 func (*Shelf) TableName() string { return "catalog.shelves" }
@@ -59,6 +63,10 @@ type Book struct {
 	Shelf   *Shelf `gorm:"foreignKey:ShelfID;constraint:OnDelete:CASCADE" json:"shelf,omitempty"`
 	// Back-relation: Page records that reference this via book_id.
 	Pages []Page `gorm:"foreignKey:BookID" json:"pages,omitempty"`
+	// Back-relation: ShelfFeatured records that reference this via book_id.
+	ShelfFeatured []ShelfFeatured `gorm:"foreignKey:BookID;constraint:OnDelete:CASCADE" json:"shelffeatured,omitempty"`
+	// Back-relation: BookFiledUnder records that reference this via book_id.
+	BookFiledUnder []BookFiledUnder `gorm:"foreignKey:BookID;constraint:OnDelete:CASCADE" json:"bookfiledunder,omitempty"`
 }
 
 func (*Book) TableName() string { return "catalog.books" }
@@ -80,3 +88,33 @@ type Page struct {
 }
 
 func (*Page) TableName() string { return "catalog.pages" }
+
+// Join table for the many-to-many relation Shelf.featured ↔ Book.
+type ShelfFeatured struct {
+	// Unique identifier for the record.
+	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	// Foreign key to Shelf.
+	ShelfID string `gorm:"column:shelf_id;not null;uniqueIndex:idx_shelf_featured_shelf_id_book_id,priority:1" json:"shelf_id" validate:"required"`
+	Shelf   *Shelf `gorm:"foreignKey:ShelfID;constraint:OnDelete:CASCADE" json:"shelf,omitempty"`
+	// Foreign key to Book.
+	BookID string `gorm:"column:book_id;not null;uniqueIndex:idx_shelf_featured_shelf_id_book_id,priority:2;index:idx_shelf_featured_book_id" json:"book_id" validate:"required"`
+	Book   *Book  `gorm:"foreignKey:BookID;constraint:OnDelete:CASCADE" json:"book,omitempty"`
+	// Full resource name of the referenced Book, capturing the parent hierarchy the book_id id alone omits.
+	BookName string `gorm:"column:book_name;not null" json:"book_name" validate:"required"`
+}
+
+func (*ShelfFeatured) TableName() string { return "catalog.shelf_featured" }
+
+// Join table for the many-to-many relation Book.filed_under ↔ Shelf.
+type BookFiledUnder struct {
+	// Unique identifier for the record.
+	ID string `gorm:"column:id;primaryKey;not null" json:"id"`
+	// Foreign key to Book.
+	BookID string `gorm:"column:book_id;not null;uniqueIndex:idx_book_filed_under_book_id_shelf_id,priority:1" json:"book_id" validate:"required"`
+	Book   *Book  `gorm:"foreignKey:BookID;constraint:OnDelete:CASCADE" json:"book,omitempty"`
+	// Foreign key to Shelf.
+	ShelfID string `gorm:"column:shelf_id;not null;uniqueIndex:idx_book_filed_under_book_id_shelf_id,priority:2;index:idx_book_filed_under_shelf_id" json:"shelf_id" validate:"required"`
+	Shelf   *Shelf `gorm:"foreignKey:ShelfID;constraint:OnDelete:CASCADE" json:"shelf,omitempty"`
+}
+
+func (*BookFiledUnder) TableName() string { return "catalog.book_filed_under" }

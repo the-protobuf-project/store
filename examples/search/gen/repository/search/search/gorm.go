@@ -41,11 +41,24 @@ type GormBookingRepository struct {
 	// ListOverrides substitute the generated dispatch for single filter fields
 	// (e.g. a derived state computed via subqueries).
 	ListOverrides map[string]filterx.SQLHandler
+	// Store, when set, builds the store the adapter writes and reads
+	// through over db -- DB, or the transaction a write runs in: a decorator
+	// (a read-through cache, an instrumented store) over
+	// search.NewBookingStore(db). Nil uses that store as it is.
+	Store func(db *gorm.DB) search.BookingStoreIface
 }
 
 // NewGormBookingRepository returns the GORM adapter bound to db.
 func NewGormBookingRepository(db *gorm.DB) *GormBookingRepository {
 	return &GormBookingRepository{DB: db}
+}
+
+// store is the store over db the adapter goes through (see Store).
+func (r *GormBookingRepository) store(db *gorm.DB) search.BookingStoreIface {
+	if r.Store != nil {
+		return r.Store(db)
+	}
+	return search.NewBookingStore(db)
 }
 
 // Create persists in and returns the stored record.
@@ -71,7 +84,7 @@ func (r *GormBookingRepository) Create(ctx context.Context, in *searchdemov1.Boo
 	if v := in.GetRoom(); v != "" {
 		m.RoomID = repox.LastSegment(v)
 	}
-	if err := search.NewBookingStore(r.DB).Create(ctx, m); err != nil {
+	if err := r.store(r.DB).Create(ctx, m); err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	return r.get(ctx, id)
@@ -98,6 +111,15 @@ func (r *GormBookingRepository) rowKey(name string) (string, error) {
 // get loads by row key (rowKey) — the private read every generated method
 // re-reads through, so Tier-2 overrides of Get never re-enter generated writes.
 func (r *GormBookingRepository) get(ctx context.Context, key string) (*searchdemov1.Booking, error) {
+	if r.Store != nil {
+		// One row: read through the store, so a decorator (a read-through
+		// cache) serves it.
+		m, err := r.Store(r.DB).GetByID(ctx, key)
+		if err != nil {
+			return nil, repox.MapGormErr(err)
+		}
+		return r.toProto(ctx, m)
+	}
 	var m search.Booking
 	if err := r.DB.WithContext(ctx).First(&m, "id = ?", key).Error; err != nil {
 		return nil, repox.MapGormErr(err)
@@ -123,6 +145,62 @@ func (r *GormBookingRepository) toProto(ctx context.Context, m *search.Booking) 
 // List returns one page of records.
 func (r *GormBookingRepository) List(ctx context.Context, in repox.ListInput) ([]*searchdemov1.Booking, string, error) {
 	return r.list(ctx, r.DB, in)
+}
+
+// Count returns how many records match in; its page fields are ignored.
+func (r *GormBookingRepository) Count(ctx context.Context, in repox.ListInput) (int64, error) {
+	return r.count(ctx, r.DB, in)
+}
+
+// Facet counts the records matching in by the values of field; see
+// repox.FacetExpr for the fields it takes.
+func (r *GormBookingRepository) Facet(ctx context.Context, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	return r.facet(ctx, r.DB, in, field, limit)
+}
+
+// filtered narrows scope to the records in's filter (and ShowDeleted)
+// selects, unpaged: what Count and Facet read.
+func (r *GormBookingRepository) filtered(ctx context.Context, scope *gorm.DB, in repox.ListInput) (*gorm.DB, error) {
+	conds, err := filterx.Parse(in.Filter)
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	eng := filterx.Gorm[search.Booking](search.BookingFilterSpec)
+	for f, h := range r.ListOverrides {
+		eng.Override(f, h)
+	}
+	where, args, err := eng.Where(append(conds, in.Where...))
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	q := scope.WithContext(ctx).Model(&search.Booking{})
+	if where != "" {
+		q = q.Where(where, args...)
+	}
+	return q, nil
+}
+
+// count is Count over scope.
+func (r *GormBookingRepository) count(ctx context.Context, scope *gorm.DB, in repox.ListInput) (int64, error) {
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	return n, repox.MapGormErr(q.Count(&n).Error)
+}
+
+// facet is Facet over scope.
+func (r *GormBookingRepository) facet(ctx context.Context, scope *gorm.DB, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	expr, err := repox.FacetExpr(search.BookingFilterSpec, field)
+	if err != nil {
+		return nil, err
+	}
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return nil, err
+	}
+	return repox.FacetGorm(ctx, q, expr, limit)
 }
 
 func (r *GormBookingRepository) list(ctx context.Context, scope *gorm.DB, in repox.ListInput) ([]*searchdemov1.Booking, string, error) {
@@ -228,7 +306,7 @@ func (r *GormBookingRepository) updateTx(ctx context.Context, tx *gorm.DB, key s
 	existing.StartTime = next.StartTime
 	existing.EndTime = next.EndTime
 	existing.SetupWindow = next.SetupWindow
-	return search.NewBookingStore(tx).Update(ctx, &existing)
+	return r.store(tx).Update(ctx, &existing)
 }
 
 // newRow builds the row a Batch inserts for in, and the
@@ -268,7 +346,7 @@ func (r *GormBookingRepository) Delete(ctx context.Context, name string) error {
 	if err := r.DB.WithContext(ctx).First(&existing, "id = ?", key).Error; err != nil {
 		return repox.MapGormErr(err)
 	}
-	return repox.MapGormErr(search.NewBookingStore(r.DB).DeleteByID(ctx, existing.ID))
+	return repox.MapGormErr(r.store(r.DB).DeleteByID(ctx, existing.ID))
 }
 
 // ListByKeys reads every record whose filter field field is one of keys; see
@@ -297,11 +375,24 @@ type GormRoomRepository struct {
 	// ListOverrides substitute the generated dispatch for single filter fields
 	// (e.g. a derived state computed via subqueries).
 	ListOverrides map[string]filterx.SQLHandler
+	// Store, when set, builds the store the adapter writes and reads
+	// through over db -- DB, or the transaction a write runs in: a decorator
+	// (a read-through cache, an instrumented store) over
+	// search.NewRoomStore(db). Nil uses that store as it is.
+	Store func(db *gorm.DB) search.RoomStoreIface
 }
 
 // NewGormRoomRepository returns the GORM adapter bound to db.
 func NewGormRoomRepository(db *gorm.DB) *GormRoomRepository {
 	return &GormRoomRepository{DB: db}
+}
+
+// store is the store over db the adapter goes through (see Store).
+func (r *GormRoomRepository) store(db *gorm.DB) search.RoomStoreIface {
+	if r.Store != nil {
+		return r.Store(db)
+	}
+	return search.NewRoomStore(db)
 }
 
 // Create persists in and returns the stored record.
@@ -324,7 +415,7 @@ func (r *GormRoomRepository) Create(ctx context.Context, in *searchdemov1.Room) 
 	m := search.RoomFromProto(in)
 	m.ID = id
 	m.Name = in.GetName()
-	if err := search.NewRoomStore(r.DB).Create(ctx, m); err != nil {
+	if err := r.store(r.DB).Create(ctx, m); err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	return r.get(ctx, id)
@@ -351,6 +442,15 @@ func (r *GormRoomRepository) rowKey(name string) (string, error) {
 // get loads by row key (rowKey) — the private read every generated method
 // re-reads through, so Tier-2 overrides of Get never re-enter generated writes.
 func (r *GormRoomRepository) get(ctx context.Context, key string) (*searchdemov1.Room, error) {
+	if r.Store != nil {
+		// One row: read through the store, so a decorator (a read-through
+		// cache) serves it.
+		m, err := r.Store(r.DB).GetByID(ctx, key)
+		if err != nil {
+			return nil, repox.MapGormErr(err)
+		}
+		return r.toProto(ctx, m)
+	}
 	var m search.Room
 	if err := r.DB.WithContext(ctx).First(&m, "id = ?", key).Error; err != nil {
 		return nil, repox.MapGormErr(err)
@@ -373,6 +473,62 @@ func (r *GormRoomRepository) toProto(ctx context.Context, m *search.Room) (*sear
 // List returns one page of records.
 func (r *GormRoomRepository) List(ctx context.Context, in repox.ListInput) ([]*searchdemov1.Room, string, error) {
 	return r.list(ctx, r.DB, in)
+}
+
+// Count returns how many records match in; its page fields are ignored.
+func (r *GormRoomRepository) Count(ctx context.Context, in repox.ListInput) (int64, error) {
+	return r.count(ctx, r.DB, in)
+}
+
+// Facet counts the records matching in by the values of field; see
+// repox.FacetExpr for the fields it takes.
+func (r *GormRoomRepository) Facet(ctx context.Context, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	return r.facet(ctx, r.DB, in, field, limit)
+}
+
+// filtered narrows scope to the records in's filter (and ShowDeleted)
+// selects, unpaged: what Count and Facet read.
+func (r *GormRoomRepository) filtered(ctx context.Context, scope *gorm.DB, in repox.ListInput) (*gorm.DB, error) {
+	conds, err := filterx.Parse(in.Filter)
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	eng := filterx.Gorm[search.Room](search.RoomFilterSpec)
+	for f, h := range r.ListOverrides {
+		eng.Override(f, h)
+	}
+	where, args, err := eng.Where(append(conds, in.Where...))
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	q := scope.WithContext(ctx).Model(&search.Room{})
+	if where != "" {
+		q = q.Where(where, args...)
+	}
+	return q, nil
+}
+
+// count is Count over scope.
+func (r *GormRoomRepository) count(ctx context.Context, scope *gorm.DB, in repox.ListInput) (int64, error) {
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	return n, repox.MapGormErr(q.Count(&n).Error)
+}
+
+// facet is Facet over scope.
+func (r *GormRoomRepository) facet(ctx context.Context, scope *gorm.DB, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	expr, err := repox.FacetExpr(search.RoomFilterSpec, field)
+	if err != nil {
+		return nil, err
+	}
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return nil, err
+	}
+	return repox.FacetGorm(ctx, q, expr, limit)
 }
 
 func (r *GormRoomRepository) list(ctx context.Context, scope *gorm.DB, in repox.ListInput) ([]*searchdemov1.Room, string, error) {
@@ -472,7 +628,7 @@ func (r *GormRoomRepository) updateTx(ctx context.Context, tx *gorm.DB, key stri
 	existing.Kinds = next.Kinds
 	existing.Floor = next.Floor
 	existing.Attributes = next.Attributes
-	return search.NewRoomStore(tx).Update(ctx, &existing)
+	return r.store(tx).Update(ctx, &existing)
 }
 
 // newRow builds the row a Batch inserts for in, and the
@@ -509,7 +665,7 @@ func (r *GormRoomRepository) Delete(ctx context.Context, name string) error {
 	if err := r.DB.WithContext(ctx).First(&existing, "id = ?", key).Error; err != nil {
 		return repox.MapGormErr(err)
 	}
-	return repox.MapGormErr(search.NewRoomStore(r.DB).DeleteByID(ctx, existing.ID))
+	return repox.MapGormErr(r.store(r.DB).DeleteByID(ctx, existing.ID))
 }
 
 // ListByKeys reads every record whose filter field field is one of keys; see
@@ -526,8 +682,9 @@ var _ RoomRepository = (*GormRoomRepository)(nil)
 // gormBatch is Batch on GORM: queued writes run in the Unit's transaction on
 // Commit.
 type gormBatch struct {
-	u  *repox.Unit
-	db *gorm.DB
+	u      *repox.Unit
+	db     *gorm.DB
+	stores storeFuncs
 }
 
 // Commit applies the Unit's writes; see repox.Unit.Commit.
@@ -535,7 +692,7 @@ func (b *gormBatch) Commit(ctx context.Context) error { return b.u.Commit(ctx) }
 
 // CreateBooking queues a create and returns the name the record will have.
 func (b *gormBatch) CreateBooking(in *searchdemov1.Booking) (string, error) {
-	r := &GormBookingRepository{DB: b.db}
+	r := &GormBookingRepository{DB: b.db, Store: b.stores.booking}
 	m, named, err := r.newRow(in)
 	if err != nil {
 		return "", err
@@ -546,7 +703,7 @@ func (b *gormBatch) CreateBooking(in *searchdemov1.Booking) (string, error) {
 	}
 	queueBookingReferences(b.u, named, nil)
 	b.u.QueueGorm(locks, func(ctx context.Context, tx *gorm.DB) error {
-		return search.NewBookingStore(tx).Create(ctx, m)
+		return r.store(tx).Create(ctx, m)
 	})
 	b.u.Record(repox.Change{Type: "searchdemo.v1/Booking", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
@@ -555,7 +712,7 @@ func (b *gormBatch) CreateBooking(in *searchdemov1.Booking) (string, error) {
 // UpdateBooking queues Update; in.Etag, when set, guards it, and a guard
 // that fails rolls the whole batch back.
 func (b *gormBatch) UpdateBooking(in *searchdemov1.Booking, paths []string) {
-	r := &GormBookingRepository{DB: b.db}
+	r := &GormBookingRepository{DB: b.db, Store: b.stores.booking}
 	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
@@ -572,7 +729,7 @@ func (b *gormBatch) UpdateBooking(in *searchdemov1.Booking, paths []string) {
 // gone is not an error: two batches clearing the same row must not fail each
 // other.
 func (b *gormBatch) DeleteBooking(name string) {
-	r := &GormBookingRepository{DB: b.db}
+	r := &GormBookingRepository{DB: b.db, Store: b.stores.booking}
 	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)
@@ -587,7 +744,7 @@ func (b *gormBatch) DeleteBooking(name string) {
 
 // CreateRoom queues a create and returns the name the record will have.
 func (b *gormBatch) CreateRoom(in *searchdemov1.Room) (string, error) {
-	r := &GormRoomRepository{DB: b.db}
+	r := &GormRoomRepository{DB: b.db, Store: b.stores.room}
 	m, named, err := r.newRow(in)
 	if err != nil {
 		return "", err
@@ -598,7 +755,7 @@ func (b *gormBatch) CreateRoom(in *searchdemov1.Room) (string, error) {
 	}
 	queueRoomReferences(b.u, named, nil)
 	b.u.QueueGorm(locks, func(ctx context.Context, tx *gorm.DB) error {
-		return search.NewRoomStore(tx).Create(ctx, m)
+		return r.store(tx).Create(ctx, m)
 	})
 	b.u.Record(repox.Change{Type: "searchdemo.v1/Room", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
@@ -607,7 +764,7 @@ func (b *gormBatch) CreateRoom(in *searchdemov1.Room) (string, error) {
 // UpdateRoom queues Update; in.Etag, when set, guards it, and a guard
 // that fails rolls the whole batch back.
 func (b *gormBatch) UpdateRoom(in *searchdemov1.Room, paths []string) {
-	r := &GormRoomRepository{DB: b.db}
+	r := &GormRoomRepository{DB: b.db, Store: b.stores.room}
 	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
@@ -624,7 +781,7 @@ func (b *gormBatch) UpdateRoom(in *searchdemov1.Room, paths []string) {
 // gone is not an error: two batches clearing the same row must not fail each
 // other.
 func (b *gormBatch) DeleteRoom(name string) {
-	r := &GormRoomRepository{DB: b.db}
+	r := &GormRoomRepository{DB: b.db, Store: b.stores.room}
 	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)

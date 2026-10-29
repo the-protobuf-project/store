@@ -28,6 +28,7 @@ var ShelfFilterSpec = filterx.Spec{
 		"display_name": {Column: "display_name", Kind: filterx.KindText},
 		"etag":         {Column: "etag", Kind: filterx.KindText},
 		"expire_time":  {Column: "expire_time", Kind: filterx.KindTimestamp},
+		"featured":     {Column: "id", Kind: filterx.KindText, Via: &filterx.Via{Table: `"catalog"."shelf_featured"`, Key: "shelf_id", Column: "book_name", Many: true}},
 		"name":         {Column: "name", Kind: filterx.KindText},
 	},
 	Sort: map[string]filterx.SortSpec{
@@ -48,6 +49,7 @@ var BookFilterSpec = filterx.Spec{
 		"delete_time": {Column: "delete_time", Kind: filterx.KindTimestamp},
 		"etag":        {Column: "etag", Kind: filterx.KindText},
 		"expire_time": {Column: "expire_time", Kind: filterx.KindTimestamp},
+		"filed_under": {Column: "id", Kind: filterx.KindRef, Via: &filterx.Via{Table: `"catalog"."book_filed_under"`, Key: "book_id", Column: "shelf_id", Many: true}},
 		"name":        {Column: "name", Kind: filterx.KindText},
 		"shelf":       {Column: "shelf_id", Kind: filterx.KindRef},
 		"title":       {Column: "title", Kind: filterx.KindText},

@@ -43,7 +43,7 @@ type Event struct {
 	// Back-relation: Attendee records that reference this via event_id.
 	Attendees []Attendee `gorm:"foreignKey:EventID" json:"attendees,omitempty"`
 	// Back-relation: EventAttendees records that reference this via event_id.
-	EventAttendees []EventAttendees `gorm:"foreignKey:EventID" json:"eventattendees,omitempty"`
+	EventAttendees []EventAttendees `gorm:"foreignKey:EventID;constraint:OnDelete:CASCADE" json:"eventattendees,omitempty"`
 }
 
 func (*Event) TableName() string { return "embedded_v1.events" }
@@ -62,7 +62,7 @@ type Attendee struct {
 	// Back-relation: Metadata records that reference this via owner.
 	Metadatas []Metadata `gorm:"foreignKey:OwnerID;references:Name" json:"metadatas,omitempty"`
 	// Back-relation: EventAttendees records that reference this via attendee_id.
-	EventAttendees []EventAttendees `gorm:"foreignKey:AttendeeID" json:"eventattendees,omitempty"`
+	EventAttendees []EventAttendees `gorm:"foreignKey:AttendeeID;constraint:OnDelete:CASCADE" json:"eventattendees,omitempty"`
 }
 
 func (*Attendee) TableName() string { return "embedded_v1.attendees" }

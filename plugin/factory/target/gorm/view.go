@@ -121,6 +121,13 @@ func packageView(db *schema.Database, s *schema.Schema, pkg string, typeOf types
 			refs := ""
 			if child := tableByModelFunc(db)(hm.Ref.Model); child != nil {
 				refs = referencesTag(child, hm.Ref.ViaFK, t)
+				// A join table's actions too: AutoMigrate builds a constraint
+				// from the back-relation as well, and one without them (NO
+				// ACTION) would refuse the delete the join's CASCADE allows,
+				// its rows going with the records they join.
+				if child.Join != nil {
+					refs += constraintTag(child, hm.Ref.ViaFK)
+				}
 			}
 			m.Fields = append(m.Fields, fieldView{
 				Comment: "Back-relation: " + childModel + " records that reference this via " + hm.Ref.ViaFK + ".",

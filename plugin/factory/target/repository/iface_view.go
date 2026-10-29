@@ -35,7 +35,8 @@ type resourceView struct {
 	// OutputOnly reports server-owned columns, which UpdateOutputOnly writes.
 	OutputOnly bool
 	// Flat reports a resource stored as one row -- no value objects, no deep
-	// graph -- whose Batch writes are a single statement or mutation.
+	// graph, no join rows -- whose Batch writes are a single statement or
+	// mutation.
 	Flat bool
 
 	// Type is the AIP resource type; deletes consult its referrers.
@@ -66,6 +67,10 @@ type schemaPkgView struct {
 	HasExtRefs   bool   // some resource has an external reference: ReferrerSources exists
 	ClientPkg    string // client root package name, e.g. "freebusyql"
 	GQLResources []gqlResourceView
+
+	// GormPkg qualifies the schema's gorm models package, whose store
+	// interfaces With<Model>Store decorates.
+	GormPkg string
 }
 
 // schemaView builds the repository.go view for schema s, or nil when the
@@ -107,14 +112,16 @@ func schemaView(pb *pbIndex, db *schema.Database, s *schema.Schema, resources ma
 			SoftDelete:     r.Cols.DeleteTime != nil,
 			Expiring:       r.Cols.ExpireTime != nil,
 			OutputOnly:     len(serverOwned(r)) > 0,
-			Flat:           len(r.VOs) == 0 && len(r.Graph) == 0,
+			Flat:           len(r.VOs) == 0 && len(r.Graph) == 0 && len(r.Joins) == 0,
 			Type:           r.Type,
 			ExtRefs:        r.ExtRefs,
 			ReferencedSQL:  referencedSQL(r),
 			WildcardParent: wildcardParent(r),
 		})
 	}
+	gormPkg := addGormModelsImport(pb, db, s, pkg, imports)
 	return &schemaPkgView{
+		GormPkg: gormPkg,
 		Header: provenance.Render("//", header.Info{
 			PluginVersion: db.PluginVersion,
 			ProtocVersion: db.ProtocVersion,

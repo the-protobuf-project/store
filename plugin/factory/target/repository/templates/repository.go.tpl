@@ -27,9 +27,29 @@ type {{.Model}}Repository interface {
 {{- if .Parented}}
 	// List returns one page of records under parent.
 	List(ctx context.Context, parent string, in repox.ListInput) ([]*{{.PB}}, string, error)
+	// Count returns how many records under parent match in (its filter and
+	// ShowDeleted; its page fields are ignored).
+	Count(ctx context.Context, parent string, in repox.ListInput) (int64, error)
+	// Facet counts the records under parent matching in by the values of
+	// field -- a filter field (a column, each element of a repeated one, a
+	// value object's or a join table's), or a JSON path -- most frequent
+	// first, at most limit values (all when limit is not positive). On
+	// GraphQL it is answered from the rows, at most repox.GraphQLScanLimit
+	// of them, and takes no field reached through another table.
+	Facet(ctx context.Context, parent string, in repox.ListInput, field string, limit int) ([]repox.Bucket, error)
 {{- else}}
 	// List returns one page of records.
 	List(ctx context.Context, in repox.ListInput) ([]*{{.PB}}, string, error)
+	// Count returns how many records match in (its filter and ShowDeleted;
+	// its page fields are ignored).
+	Count(ctx context.Context, in repox.ListInput) (int64, error)
+	// Facet counts the records matching in by the values of field -- a
+	// filter field (a column, each element of a repeated one, a value
+	// object's or a join table's), or a JSON path -- most frequent first, at
+	// most limit values (all when limit is not positive). On GraphQL it is
+	// answered from the rows, at most repox.GraphQLScanLimit of them, and
+	// takes no field reached through another table.
+	Facet(ctx context.Context, in repox.ListInput, field string, limit int) ([]repox.Bucket, error)
 {{- end}}
 	// ListByKeys reads every record whose filter field field is one of keys
 	// -- a batched read by name, by parent, by any text, enum or reference
@@ -170,15 +190,24 @@ func NewBatchIn(u *repox.Unit, opts ...Option) Batch {
 		return &graphQLBatch{u: u, svc: svc{{if .HasExpiring}}, retention: o.retention{{end}}}
 	}
 {{- end}}
-	return &gormBatch{u: u, db: u.Conn().Gorm{{if .HasExpiring}}, retention: o.retention{{end}}}
+	return &gormBatch{u: u, db: u.Conn().Gorm, stores: o.stores{{if .HasExpiring}}, retention: o.retention{{end}}}
 }
 {{- end}}
+
+// storeFuncs holds the store decorators With<Model>Store installs, by
+// resource.
+type storeFuncs struct {
+{{- range .Resources}}
+	{{.LowerModel}} func(db *gorm.DB) {{$.GormPkg}}.{{.Model}}StoreIface
+{{- end}}
+}
 
 // options collects the per-resource customizations the factories thread into
 // the adapters they build.
 type options struct {
 	references  *repox.References
 	projections *repox.Projections
+	stores      storeFuncs
 {{- range .Resources}}
 	{{.LowerModel}}Hooks     {{.Model}}Hooks
 	{{.LowerModel}}Overrides map[string]filterx.SQLHandler
@@ -226,6 +255,17 @@ func WithRetention(d time.Duration) Option {
 // With{{.Model}}Hooks installs h on the {{.Model}} adapters.
 func With{{.Model}}Hooks(h {{.Model}}Hooks) Option {
 	return func(o *options) { o.{{.LowerModel}}Hooks = h }
+}
+
+// With{{.Model}}Store has the GORM adapters go through the store f builds
+// over a handle -- the repository's, or the transaction a write runs in --
+// instead of {{$.GormPkg}}.New{{.Model}}Store's: a decorator over that one,
+// such as a protoc-gen-cache read-through cache or an instrumented store
+// (New{{.Model}}Store(db).WithTelemetry(t)). A one-row read goes through it
+// too, so a cache serves Get. f runs for every write and read, so it should
+// be cheap.
+func With{{.Model}}Store(f func(db *gorm.DB) {{$.GormPkg}}.{{.Model}}StoreIface) Option {
+	return func(o *options) { o.stores.{{.LowerModel}} = f }
 }
 
 // With{{.Model}}ListOverride substitutes the generated filter dispatch for one
@@ -316,7 +356,7 @@ func NewGorm(db *gorm.DB, opts ...Option) Repositories {
 	}
 	repos := Repositories{
 {{- range .Resources}}
-		{{.PluralField}}: &Gorm{{.Model}}Repository{DB: db, Hooks: o.{{.LowerModel}}Hooks, Refs: o.references, ListOverrides: o.{{.LowerModel}}Overrides{{if .Expiring}}, Retention: o.retention{{end}}},
+		{{.PluralField}}: &Gorm{{.Model}}Repository{DB: db, Hooks: o.{{.LowerModel}}Hooks, Refs: o.references, ListOverrides: o.{{.LowerModel}}Overrides, Store: o.stores.{{.LowerModel}}{{if .Expiring}}, Retention: o.retention{{end}}},
 {{- end}}
 	}
 	if p := o.projections; p != nil {

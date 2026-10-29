@@ -100,4 +100,6 @@ var Default = New().Register(
 	&catalog.Shelf{},
 	&catalog.Book{},
 	&catalog.Page{},
+	&catalog.ShelfFeatured{},
+	&catalog.BookFiledUnder{},
 )

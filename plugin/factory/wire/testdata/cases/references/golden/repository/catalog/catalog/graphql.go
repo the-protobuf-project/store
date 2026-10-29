@@ -21,8 +21,10 @@ import (
 	refdemov1 "example.com/test/gen"
 	"example.com/test/gen/repox"
 	"example.com/test/genql"
+	"example.com/test/genql/catalogql/bookfiledunderql"
 	"example.com/test/genql/catalogql/booksql"
 	"example.com/test/genql/catalogql/pagesql"
+	"example.com/test/genql/catalogql/shelffeaturedql"
 	"example.com/test/genql/catalogql/shelvesql"
 	"example.com/test/gormdb/catalog/catalog"
 	"example.com/test/gormdb/filterx"
@@ -111,7 +113,19 @@ func (r *GraphQLBookRepository) Create(ctx context.Context, parent string, in *r
 	ci.Id = id
 	ci.ShelfId = parentIDs[0]
 	ci.Etag = repox.NewULID()
-	if _, err := r.Svc.Mutation.Catalog.Books.Create(ctx, ci); err != nil {
+	// One transaction: the graph lands whole or not at all.
+	gtx := r.Svc.Mutation.Tx()
+	gtx.Add(r.Svc.Mutation.Catalog.Books.CreateOp(ci, new(booksql.InsertCatalogBooksResponse)))
+	{
+		var ops repox.Ops
+		if err := r.bookFiledUnderJoinOps(ctx, &ops, ci.Id, in.GetFiledUnder(), false); err != nil {
+			return nil, err
+		}
+		for _, op := range ops {
+			gtx.Add(op)
+		}
+	}
+	if err := gtx.Commit(ctx); err != nil {
 		return nil, mapGraphQLErr(err)
 	}
 	return r.get(ctx, id)
@@ -123,7 +137,7 @@ func (r *GraphQLBookRepository) Get(ctx context.Context, name string) (*refdemov
 	if err != nil {
 		return nil, err
 	}
-	return r.toProto(ctx, row, nil)
+	return r.toProto(ctx, row, nil, nil)
 }
 
 // rowID returns the surrogate key of the row named name, looked up by name:
@@ -162,14 +176,23 @@ func (r *GraphQLBookRepository) get(ctx context.Context, id string) (*refdemov1.
 	if row == nil {
 		return nil, repox.ErrNotFound
 	}
-	return r.toProto(ctx, row, nil)
+	return r.toProto(ctx, row, nil, nil)
 }
 
 // toProto converts a loaded row, hydrating the value objects mask reads (all
 // of them for an empty mask) through their stored references, and runs the
 // AfterRead hook.
-func (r *GraphQLBookRepository) toProto(ctx context.Context, row *booksql.CatalogBooks, mask []string) (*refdemov1.Book, error) {
+func (r *GraphQLBookRepository) toProto(ctx context.Context, row *booksql.CatalogBooks, mask []string, joined repox.Joined) (*refdemov1.Book, error) {
 	out := bookFromRow(row)
+	// The fields kept in join tables: from joined, read for row alone when
+	// nil.
+	if joined == nil {
+		var err error
+		if joined, err = r.readJoins(ctx, mask, row.Id); err != nil {
+			return nil, err
+		}
+	}
+	out.FiledUnder = joined["filed_under"][row.Id]
 	if h := r.Hooks.AfterRead; h != nil {
 		if err := h(ctx, out); err != nil {
 			return nil, err
@@ -180,32 +203,165 @@ func (r *GraphQLBookRepository) toProto(ctx context.Context, row *booksql.Catalo
 
 // List returns one page of records under parent.
 func (r *GraphQLBookRepository) List(ctx context.Context, parent string, in repox.ListInput) ([]*refdemov1.Book, string, error) {
-	parentIDs, err := repox.SplitName(parent, "shelves")
+	scope, err := r.parentScope(ctx, parent)
 	if err != nil {
 		return nil, "", err
 	}
-	// AIP-159: "-" for the parent reads across every parent.
-	if parentIDs[len(parentIDs)-1] == "-" {
-		return r.list(ctx, in)
-	}
-	return r.list(ctx, in, booksql.ShelfId.Eq(parentIDs[len(parentIDs)-1]))
+	return r.list(ctx, in, scope...)
 }
 
-func (r *GraphQLBookRepository) list(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) ([]*refdemov1.Book, string, error) {
+// Count returns how many records under parent match in; its page fields are
+// ignored.
+func (r *GraphQLBookRepository) Count(ctx context.Context, parent string, in repox.ListInput) (int64, error) {
+	scope, err := r.parentScope(ctx, parent)
+	if err != nil {
+		return 0, err
+	}
+	return r.count(ctx, in, scope...)
+}
+
+// Facet counts the records under parent matching in by the values of field,
+// from the rows (see repox.FacetValues).
+func (r *GraphQLBookRepository) Facet(ctx context.Context, parent string, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	scope, err := r.parentScope(ctx, parent)
+	if err != nil {
+		return nil, err
+	}
+	return r.facet(ctx, in, field, limit, scope...)
+}
+
+// parentScope is the predicate of the records under parent.
+func (r *GraphQLBookRepository) parentScope(ctx context.Context, parent string) ([]graphql.Predicate, error) {
+	parentIDs, err := repox.SplitName(parent, "shelves")
+	if err != nil {
+		return nil, err
+	}
+	// AIP-159: "-" for the parent reads across every parent. A "-" widens
+	// only its own segment: under a parent naming some of its ancestors
+	// ("a/1/b/-"), the records' own names are matched, so they stay under
+	// those.
+	if parentIDs[len(parentIDs)-1] == "-" {
+		if repox.AllWild(parentIDs) {
+			return nil, nil
+		}
+		p, _ := repox.NamePattern(parent + "/books/-")
+		return []graphql.Predicate{booksql.Name.Like(p)}, nil
+	}
+	return []graphql.Predicate{booksql.ShelfId.Eq(parentIDs[len(parentIDs)-1])}, nil
+}
+
+// engine is the list engine over the records scope selects (and, unless
+// in.ShowDeleted, not deleted), with in's filter conditions.
+func (r *GraphQLBookRepository) engine(in repox.ListInput, scope ...graphql.Predicate) (*filterx.HasuraEngine[booksql.CatalogBooks], []filterx.Condition, error) {
 	if !in.ShowDeleted {
 		scope = append(scope, booksql.DeleteTime.IsNull(true))
 	}
 	conds, err := filterx.Parse(in.Filter)
 	if err != nil {
-		return nil, "", repox.MapFilterxErr(err)
+		return nil, nil, repox.MapFilterxErr(err)
 	}
 	conds = append(conds, in.Where...)
-	if err := repox.CheckReadMask((*refdemov1.Book)(nil), in.ReadMask); err != nil {
-		return nil, "", err
-	}
 	eng := filterx.Hasura[booksql.CatalogBooks](catalog.BookFilterSpec, r.Svc.Query.Catalog.Books).Scope(scope...)
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)
+	}
+	eng.Via("filed_under", func(ctx context.Context, keys []string, where graphql.Predicate) ([]string, error) {
+		rows, err := r.Svc.Query.Catalog.BookFiledUnder.List(ctx, bookfiledunderql.List().Where(graphql.And(bookfiledunderql.BookId.In(keys...), where)))
+		ids := make([]string, 0, len(rows))
+		for i := range rows {
+			ids = append(ids, rows[i].BookId)
+		}
+		return ids, err
+	})
+	return eng, conds, nil
+}
+
+// count is Count over scope: one aggregate, unless a condition is matched
+// page by page (one reaching another table, or a hint), when the matching
+// rows are counted, at most repox.GraphQLScanLimit of them.
+func (r *GraphQLBookRepository) count(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) (int64, error) {
+	eng, conds, err := r.engine(in, scope...)
+	if err != nil {
+		return 0, err
+	}
+	if repox.ReachesVia(catalog.BookFilterSpec, conds) || repox.AnyHint(conds) {
+		var n int64
+		err := r.scan(ctx, eng, conds, func(*booksql.CatalogBooks) { n++ })
+		return n, err
+	}
+	where, has, err := eng.Predicate(conds)
+	if err != nil {
+		return 0, repox.MapFilterxErr(err)
+	}
+	if has {
+		scope = append(scope, where)
+	}
+	req := booksql.Aggregate()
+	if len(scope) > 0 {
+		req = req.Where(graphql.And(scope...))
+	}
+	agg, err := r.Svc.Query.Catalog.Books.Aggregate(ctx, req)
+	if err != nil || agg == nil {
+		return 0, mapGraphQLErr(err)
+	}
+	return int64(agg.Count), nil
+}
+
+// facet is Facet over scope, counted from the matching rows, at most
+// repox.GraphQLScanLimit of them.
+func (r *GraphQLBookRepository) facet(ctx context.Context, in repox.ListInput, field string, limit int, scope ...graphql.Predicate) ([]repox.Bucket, error) {
+	spec := catalog.BookFilterSpec
+	if _, err := repox.FacetExpr(spec, field); err != nil {
+		return nil, err
+	}
+	if f, ok := spec.Fields[field]; ok && f.Via != nil {
+		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
+	}
+	eng, conds, err := r.engine(in, scope...)
+	if err != nil {
+		return nil, err
+	}
+	counts := map[string]int64{}
+	if err := r.scan(ctx, eng, conds, func(row *booksql.CatalogBooks) {
+		for _, v := range repox.FacetValues(spec, field, repox.RowMap(row)) {
+			counts[v]++
+		}
+	}); err != nil {
+		return nil, err
+	}
+	return repox.SortBuckets(counts, limit), nil
+}
+
+// scan calls f for every row eng matches under conds, failing past
+// repox.GraphQLScanLimit rows.
+func (r *GraphQLBookRepository) scan(ctx context.Context, eng *filterx.HasuraEngine[booksql.CatalogBooks], conds []filterx.Condition, f func(*booksql.CatalogBooks)) error {
+	in := filterx.ListInput{PageSize: 1000, Filter: conds}
+	for read := 0; ; {
+		rows, next, err := eng.List(ctx, in)
+		if err != nil {
+			return repox.MapFilterxErr(err)
+		}
+		for i := range rows {
+			f(&rows[i])
+		}
+		read += len(rows)
+		if next == "" {
+			return nil
+		}
+		if read >= repox.GraphQLScanLimit {
+			return fmt.Errorf("%w: more than %d rows to scan on GraphQL; narrow the filter", repox.ErrInvalidArgument, repox.GraphQLScanLimit)
+		}
+		in.PageToken = next
+	}
+}
+
+func (r *GraphQLBookRepository) list(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) ([]*refdemov1.Book, string, error) {
+	if err := repox.CheckReadMask((*refdemov1.Book)(nil), in.ReadMask); err != nil {
+		return nil, "", err
+	}
+	eng, conds, err := r.engine(in, scope...)
+	if err != nil {
+		return nil, "", err
 	}
 	rows, next, err := eng.List(ctx, filterx.ListInput{
 		PageSize:  in.PageSize,
@@ -216,9 +372,17 @@ func (r *GraphQLBookRepository) list(ctx context.Context, in repox.ListInput, sc
 	if err != nil {
 		return nil, "", repox.MapFilterxErr(err)
 	}
+	keys := make([]string, len(rows))
+	for i := range rows {
+		keys[i] = rows[i].Id
+	}
+	joined, err := r.readJoins(ctx, in.ReadMask, keys...)
+	if err != nil {
+		return nil, "", err
+	}
 	items := make([]*refdemov1.Book, 0, len(rows))
 	for i := range rows {
-		out, err := r.toProto(ctx, &rows[i], in.ReadMask)
+		out, err := r.toProto(ctx, &rows[i], in.ReadMask, joined)
 		if err != nil {
 			return nil, "", err
 		}
@@ -250,6 +414,11 @@ func (r *GraphQLBookRepository) update(ctx context.Context, in *refdemov1.Book, 
 	}
 	id := row.Id
 	existingPB := bookFromRow(row)
+	joined, err := r.readJoins(ctx, nil, id)
+	if err != nil {
+		return nil, err
+	}
+	existingPB.FiledUnder = joined["filed_under"][id]
 	merged := proto.Clone(existingPB).(*refdemov1.Book)
 	applyBookMask(merged, in, paths)
 	repox.CopyFields(merged, in, outputPaths)
@@ -267,6 +436,9 @@ func (r *GraphQLBookRepository) update(ctx context.Context, in *refdemov1.Book, 
 		if _, err := r.Svc.Mutation.Catalog.Books.UpdateIfMatch(ctx, id, patch, booksql.Etag.Eq(in.GetEtag())); err != nil {
 			return nil, mapGraphQLErr(err)
 		}
+		if err := r.writeJoins(ctx, id, merged, paths); err != nil {
+			return nil, err
+		}
 		return r.get(ctx, id)
 	}
 	resp, err := r.Svc.Mutation.Catalog.Books.Update(ctx, id, patch)
@@ -276,7 +448,83 @@ func (r *GraphQLBookRepository) update(ctx context.Context, in *refdemov1.Book, 
 	if resp.AffectedRows == 0 {
 		return nil, repox.ErrNotFound
 	}
+	if err := r.writeJoins(ctx, id, merged, paths); err != nil {
+		return nil, err
+	}
 	return r.get(ctx, id)
+}
+
+// writeJoins replaces, in one transaction, the join rows of the fields kept
+// in join tables that paths names (all of them for an empty mask) with in's.
+// It runs after the row update it belongs to.
+func (r *GraphQLBookRepository) writeJoins(ctx context.Context, owner string, in *refdemov1.Book, paths []string) error {
+	var ops repox.Ops
+	if repox.InMask(paths, "filed_under") {
+		if err := r.bookFiledUnderJoinOps(ctx, &ops, owner, in.GetFiledUnder(), true); err != nil {
+			return err
+		}
+	}
+	if len(ops) == 0 {
+		return nil
+	}
+	tx := r.Svc.Mutation.Tx()
+	for _, op := range ops {
+		tx.Add(op)
+	}
+	return mapGraphQLErr(tx.Commit(ctx))
+}
+
+// readJoins reads the fields kept in join tables of the rows keyed by keys,
+// those of them mask reads (all for an empty mask), by field and then key, in
+// the order they were written.
+func (r *GraphQLBookRepository) readJoins(ctx context.Context, mask []string, keys ...string) (repox.Joined, error) {
+	joined := repox.Joined{}
+	if len(keys) == 0 {
+		return joined, nil
+	}
+	if repox.Reads(mask, "filed_under") {
+		rows, err := r.Svc.Query.Catalog.BookFiledUnder.List(ctx, bookfiledunderql.List().Where(bookfiledunderql.BookId.In(keys...)).OrderBy(bookfiledunderql.Id.Asc()))
+		if err != nil {
+			return nil, mapGraphQLErr(err)
+		}
+		got := map[string][]string{}
+		for i := range rows {
+			got[rows[i].BookId] = append(got[rows[i].BookId], "shelves/"+rows[i].ShelfId)
+		}
+		joined["filed_under"] = got
+	}
+	return joined, nil
+}
+
+// bookFiledUnderJoinOps queues onto ops the join rows keeping filed_under for the row
+// keyed owner, one per name in order (a repeat keeps its first place), after
+// removing the rows it holds when replace is set. A name no record holds is
+// repox.ErrForeignKey.
+func (r *GraphQLBookRepository) bookFiledUnderJoinOps(ctx context.Context, ops *repox.Ops, owner string, names []string, replace bool) error {
+	if replace {
+		rows, err := r.Svc.Query.Catalog.BookFiledUnder.List(ctx, bookfiledunderql.List().Where(bookfiledunderql.BookId.Eq(owner)))
+		if err != nil {
+			return mapGraphQLErr(err)
+		}
+		for i := range rows {
+			ops.Add(r.Svc.Mutation.Catalog.BookFiledUnder.DeleteOp(rows[i].Id, new(bookfiledunderql.DeleteCatalogBookFiledUnderByIdResponse)))
+		}
+	}
+	seen := map[string]bool{}
+	for _, n := range names {
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		if !strings.HasPrefix(n, "shelves/") {
+			return fmt.Errorf("%w: filed_under: %q is not a shelves name", repox.ErrInvalidArgument, n)
+		}
+		key := repox.LastSegment(n)
+		ops.Add(r.Svc.Mutation.Catalog.BookFiledUnder.CreateOp(bookfiledunderql.CreateInput{
+			Id: repox.NewULID(), BookId: owner, ShelfId: key,
+		}, new(bookfiledunderql.InsertCatalogBookFiledUnderResponse)))
+	}
+	return nil
 }
 
 // newInput builds the insert a Batch queues for in under parent, and
@@ -309,6 +557,18 @@ func (r *GraphQLBookRepository) newInput(parent string, in *refdemov1.Book) (boo
 	ci.ShelfId = parentIDs[0]
 	ci.Etag = repox.NewULID()
 	return ci, in, nil
+}
+
+// insertOps queues the inserts that create in onto gtx, for a Batch: the
+// value objects it points at, its row (ci), then its children.
+func (r *GraphQLBookRepository) insertOps(ctx context.Context, gtx *repox.Ops, in *refdemov1.Book, ci booksql.CreateInput) (repox.Check, error) {
+	id := ci.Id
+	_ = id
+	gtx.Add(r.Svc.Mutation.Catalog.Books.CreateOp(ci, new(booksql.InsertCatalogBooksResponse)))
+	if err := r.bookFiledUnderJoinOps(ctx, gtx, ci.Id, in.GetFiledUnder(), false); err != nil {
+		return nil, err
+	}
+	return nil, nil
 }
 
 // updateOps queues Update's writes onto ops, for a Batch: the value-object
@@ -349,6 +609,11 @@ func (r *GraphQLBookRepository) updateOps(ctx context.Context, ops *repox.Ops, i
 	} else {
 		ops.Add(r.Svc.Mutation.Catalog.Books.UpdateOp(id, patch, resp))
 	}
+	if repox.InMask(paths, "filed_under") {
+		if err := r.bookFiledUnderJoinOps(ctx, &atx, id, merged.GetFiledUnder(), true); err != nil {
+			return nil, err
+		}
+	}
 	*ops = append(*ops, atx...)
 	return func(ctx context.Context, failed error) error {
 		if failed == nil {
@@ -368,6 +633,20 @@ func (r *GraphQLBookRepository) updateOps(ctx context.Context, ops *repox.Ops, i
 		}
 		return nil
 	}, nil
+}
+
+// purgeOps queues the removal of row id and of the value-object rows it owns
+// onto dtx, for a Batch. A row already gone queues nothing.
+func (r *GraphQLBookRepository) purgeOps(ctx context.Context, dtx *repox.Ops, id string) (repox.Check, error) {
+	row, err := r.Svc.Query.Catalog.Books.Get(ctx, id)
+	if err != nil {
+		return nil, mapGraphQLErr(err)
+	}
+	if row == nil {
+		return nil, nil
+	}
+	dtx.Add(r.Svc.Mutation.Catalog.Books.DeleteOp(id, new(booksql.DeleteCatalogBooksByIdResponse)))
+	return nil, nil
 }
 
 // UpdateOutputOnly persists the server-owned fields of in that paths names.
@@ -706,34 +985,159 @@ func (r *GraphQLPageRepository) toProto(ctx context.Context, row *pagesql.Catalo
 
 // List returns one page of records under parent.
 func (r *GraphQLPageRepository) List(ctx context.Context, parent string, in repox.ListInput) ([]*refdemov1.Page, string, error) {
-	parentIDs, err := repox.SplitName(parent, "shelves", "books")
+	scope, err := r.parentScope(ctx, parent)
 	if err != nil {
 		return nil, "", err
 	}
-	// AIP-159: "-" for the parent reads across every parent.
+	return r.list(ctx, in, scope...)
+}
+
+// Count returns how many records under parent match in; its page fields are
+// ignored.
+func (r *GraphQLPageRepository) Count(ctx context.Context, parent string, in repox.ListInput) (int64, error) {
+	scope, err := r.parentScope(ctx, parent)
+	if err != nil {
+		return 0, err
+	}
+	return r.count(ctx, in, scope...)
+}
+
+// Facet counts the records under parent matching in by the values of field,
+// from the rows (see repox.FacetValues).
+func (r *GraphQLPageRepository) Facet(ctx context.Context, parent string, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	scope, err := r.parentScope(ctx, parent)
+	if err != nil {
+		return nil, err
+	}
+	return r.facet(ctx, in, field, limit, scope...)
+}
+
+// parentScope is the predicate of the records under parent.
+func (r *GraphQLPageRepository) parentScope(ctx context.Context, parent string) ([]graphql.Predicate, error) {
+	parentIDs, err := repox.SplitName(parent, "shelves", "books")
+	if err != nil {
+		return nil, err
+	}
+	// AIP-159: "-" for the parent reads across every parent. A "-" widens
+	// only its own segment: under a parent naming some of its ancestors
+	// ("a/1/b/-"), the records' own names are matched, so they stay under
+	// those.
 	if parentIDs[len(parentIDs)-1] == "-" {
-		return r.list(ctx, in)
+		if repox.AllWild(parentIDs) {
+			return nil, nil
+		}
+		p, _ := repox.NamePattern(parent + "/pages/-")
+		return []graphql.Predicate{pagesql.Name.Like(p)}, nil
 	}
 	// The parent is nested, so its row is found by name.
 	keys, err := catalogBooksKeys(ctx, r.Svc, parent)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
-	return r.list(ctx, in, pagesql.BookId.In(keys...))
+	return []graphql.Predicate{pagesql.BookId.In(keys...)}, nil
 }
 
-func (r *GraphQLPageRepository) list(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) ([]*refdemov1.Page, string, error) {
+// engine is the list engine over the records scope selects (and, unless
+// in.ShowDeleted, not deleted), with in's filter conditions.
+func (r *GraphQLPageRepository) engine(in repox.ListInput, scope ...graphql.Predicate) (*filterx.HasuraEngine[pagesql.CatalogPages], []filterx.Condition, error) {
 	conds, err := filterx.Parse(in.Filter)
 	if err != nil {
-		return nil, "", repox.MapFilterxErr(err)
+		return nil, nil, repox.MapFilterxErr(err)
 	}
 	conds = append(conds, in.Where...)
-	if err := repox.CheckReadMask((*refdemov1.Page)(nil), in.ReadMask); err != nil {
-		return nil, "", err
-	}
 	eng := filterx.Hasura[pagesql.CatalogPages](catalog.PageFilterSpec, r.Svc.Query.Catalog.Pages).Scope(scope...)
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)
+	}
+	return eng, conds, nil
+}
+
+// count is Count over scope: one aggregate, unless a condition is matched
+// page by page (one reaching another table, or a hint), when the matching
+// rows are counted, at most repox.GraphQLScanLimit of them.
+func (r *GraphQLPageRepository) count(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) (int64, error) {
+	eng, conds, err := r.engine(in, scope...)
+	if err != nil {
+		return 0, err
+	}
+	if repox.ReachesVia(catalog.PageFilterSpec, conds) || repox.AnyHint(conds) {
+		var n int64
+		err := r.scan(ctx, eng, conds, func(*pagesql.CatalogPages) { n++ })
+		return n, err
+	}
+	where, has, err := eng.Predicate(conds)
+	if err != nil {
+		return 0, repox.MapFilterxErr(err)
+	}
+	if has {
+		scope = append(scope, where)
+	}
+	req := pagesql.Aggregate()
+	if len(scope) > 0 {
+		req = req.Where(graphql.And(scope...))
+	}
+	agg, err := r.Svc.Query.Catalog.Pages.Aggregate(ctx, req)
+	if err != nil || agg == nil {
+		return 0, mapGraphQLErr(err)
+	}
+	return int64(agg.Count), nil
+}
+
+// facet is Facet over scope, counted from the matching rows, at most
+// repox.GraphQLScanLimit of them.
+func (r *GraphQLPageRepository) facet(ctx context.Context, in repox.ListInput, field string, limit int, scope ...graphql.Predicate) ([]repox.Bucket, error) {
+	spec := catalog.PageFilterSpec
+	if _, err := repox.FacetExpr(spec, field); err != nil {
+		return nil, err
+	}
+	if f, ok := spec.Fields[field]; ok && f.Via != nil {
+		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
+	}
+	eng, conds, err := r.engine(in, scope...)
+	if err != nil {
+		return nil, err
+	}
+	counts := map[string]int64{}
+	if err := r.scan(ctx, eng, conds, func(row *pagesql.CatalogPages) {
+		for _, v := range repox.FacetValues(spec, field, repox.RowMap(row)) {
+			counts[v]++
+		}
+	}); err != nil {
+		return nil, err
+	}
+	return repox.SortBuckets(counts, limit), nil
+}
+
+// scan calls f for every row eng matches under conds, failing past
+// repox.GraphQLScanLimit rows.
+func (r *GraphQLPageRepository) scan(ctx context.Context, eng *filterx.HasuraEngine[pagesql.CatalogPages], conds []filterx.Condition, f func(*pagesql.CatalogPages)) error {
+	in := filterx.ListInput{PageSize: 1000, Filter: conds}
+	for read := 0; ; {
+		rows, next, err := eng.List(ctx, in)
+		if err != nil {
+			return repox.MapFilterxErr(err)
+		}
+		for i := range rows {
+			f(&rows[i])
+		}
+		read += len(rows)
+		if next == "" {
+			return nil
+		}
+		if read >= repox.GraphQLScanLimit {
+			return fmt.Errorf("%w: more than %d rows to scan on GraphQL; narrow the filter", repox.ErrInvalidArgument, repox.GraphQLScanLimit)
+		}
+		in.PageToken = next
+	}
+}
+
+func (r *GraphQLPageRepository) list(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) ([]*refdemov1.Page, string, error) {
+	if err := repox.CheckReadMask((*refdemov1.Page)(nil), in.ReadMask); err != nil {
+		return nil, "", err
+	}
+	eng, conds, err := r.engine(in, scope...)
+	if err != nil {
+		return nil, "", err
 	}
 	rows, next, err := eng.List(ctx, filterx.ListInput{
 		PageSize:  in.PageSize,
@@ -939,7 +1343,19 @@ func (r *GraphQLShelfRepository) Create(ctx context.Context, in *refdemov1.Shelf
 	ci := shelfToCreateInput(in)
 	ci.Id = id
 	ci.Etag = repox.NewULID()
-	if _, err := r.Svc.Mutation.Catalog.Shelves.Create(ctx, ci); err != nil {
+	// One transaction: the graph lands whole or not at all.
+	gtx := r.Svc.Mutation.Tx()
+	gtx.Add(r.Svc.Mutation.Catalog.Shelves.CreateOp(ci, new(shelvesql.InsertCatalogShelvesResponse)))
+	{
+		var ops repox.Ops
+		if err := r.shelfFeaturedJoinOps(ctx, &ops, ci.Id, in.GetFeatured(), false); err != nil {
+			return nil, err
+		}
+		for _, op := range ops {
+			gtx.Add(op)
+		}
+	}
+	if err := gtx.Commit(ctx); err != nil {
 		return nil, mapGraphQLErr(err)
 	}
 	return r.get(ctx, id)
@@ -973,14 +1389,23 @@ func (r *GraphQLShelfRepository) get(ctx context.Context, id string) (*refdemov1
 	if row == nil {
 		return nil, repox.ErrNotFound
 	}
-	return r.toProto(ctx, row, nil)
+	return r.toProto(ctx, row, nil, nil)
 }
 
 // toProto converts a loaded row, hydrating the value objects mask reads (all
 // of them for an empty mask) through their stored references, and runs the
 // AfterRead hook.
-func (r *GraphQLShelfRepository) toProto(ctx context.Context, row *shelvesql.CatalogShelves, mask []string) (*refdemov1.Shelf, error) {
+func (r *GraphQLShelfRepository) toProto(ctx context.Context, row *shelvesql.CatalogShelves, mask []string, joined repox.Joined) (*refdemov1.Shelf, error) {
 	out := shelfFromRow(row)
+	// The fields kept in join tables: from joined, read for row alone when
+	// nil.
+	if joined == nil {
+		var err error
+		if joined, err = r.readJoins(ctx, mask, row.Id); err != nil {
+			return nil, err
+		}
+	}
+	out.Featured = joined["featured"][row.Id]
 	if h := r.Hooks.AfterRead; h != nil {
 		if err := h(ctx, out); err != nil {
 			return nil, err
@@ -994,21 +1419,129 @@ func (r *GraphQLShelfRepository) List(ctx context.Context, in repox.ListInput) (
 	return r.list(ctx, in)
 }
 
-func (r *GraphQLShelfRepository) list(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) ([]*refdemov1.Shelf, string, error) {
+// Count returns how many records match in; its page fields are ignored.
+func (r *GraphQLShelfRepository) Count(ctx context.Context, in repox.ListInput) (int64, error) {
+	return r.count(ctx, in)
+}
+
+// Facet counts the records matching in by the values of field, from the rows
+// (see repox.FacetValues).
+func (r *GraphQLShelfRepository) Facet(ctx context.Context, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	return r.facet(ctx, in, field, limit)
+}
+
+// engine is the list engine over the records scope selects (and, unless
+// in.ShowDeleted, not deleted), with in's filter conditions.
+func (r *GraphQLShelfRepository) engine(in repox.ListInput, scope ...graphql.Predicate) (*filterx.HasuraEngine[shelvesql.CatalogShelves], []filterx.Condition, error) {
 	if !in.ShowDeleted {
 		scope = append(scope, shelvesql.DeleteTime.IsNull(true))
 	}
 	conds, err := filterx.Parse(in.Filter)
 	if err != nil {
-		return nil, "", repox.MapFilterxErr(err)
+		return nil, nil, repox.MapFilterxErr(err)
 	}
 	conds = append(conds, in.Where...)
-	if err := repox.CheckReadMask((*refdemov1.Shelf)(nil), in.ReadMask); err != nil {
-		return nil, "", err
-	}
 	eng := filterx.Hasura[shelvesql.CatalogShelves](catalog.ShelfFilterSpec, r.Svc.Query.Catalog.Shelves).Scope(scope...)
 	for f, h := range r.ListOverrides {
 		eng.Override(f, h)
+	}
+	eng.Via("featured", func(ctx context.Context, keys []string, where graphql.Predicate) ([]string, error) {
+		rows, err := r.Svc.Query.Catalog.ShelfFeatured.List(ctx, shelffeaturedql.List().Where(graphql.And(shelffeaturedql.ShelfId.In(keys...), where)))
+		ids := make([]string, 0, len(rows))
+		for i := range rows {
+			ids = append(ids, rows[i].ShelfId)
+		}
+		return ids, err
+	})
+	return eng, conds, nil
+}
+
+// count is Count over scope: one aggregate, unless a condition is matched
+// page by page (one reaching another table, or a hint), when the matching
+// rows are counted, at most repox.GraphQLScanLimit of them.
+func (r *GraphQLShelfRepository) count(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) (int64, error) {
+	eng, conds, err := r.engine(in, scope...)
+	if err != nil {
+		return 0, err
+	}
+	if repox.ReachesVia(catalog.ShelfFilterSpec, conds) || repox.AnyHint(conds) {
+		var n int64
+		err := r.scan(ctx, eng, conds, func(*shelvesql.CatalogShelves) { n++ })
+		return n, err
+	}
+	where, has, err := eng.Predicate(conds)
+	if err != nil {
+		return 0, repox.MapFilterxErr(err)
+	}
+	if has {
+		scope = append(scope, where)
+	}
+	req := shelvesql.Aggregate()
+	if len(scope) > 0 {
+		req = req.Where(graphql.And(scope...))
+	}
+	agg, err := r.Svc.Query.Catalog.Shelves.Aggregate(ctx, req)
+	if err != nil || agg == nil {
+		return 0, mapGraphQLErr(err)
+	}
+	return int64(agg.Count), nil
+}
+
+// facet is Facet over scope, counted from the matching rows, at most
+// repox.GraphQLScanLimit of them.
+func (r *GraphQLShelfRepository) facet(ctx context.Context, in repox.ListInput, field string, limit int, scope ...graphql.Predicate) ([]repox.Bucket, error) {
+	spec := catalog.ShelfFilterSpec
+	if _, err := repox.FacetExpr(spec, field); err != nil {
+		return nil, err
+	}
+	if f, ok := spec.Fields[field]; ok && f.Via != nil {
+		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
+	}
+	eng, conds, err := r.engine(in, scope...)
+	if err != nil {
+		return nil, err
+	}
+	counts := map[string]int64{}
+	if err := r.scan(ctx, eng, conds, func(row *shelvesql.CatalogShelves) {
+		for _, v := range repox.FacetValues(spec, field, repox.RowMap(row)) {
+			counts[v]++
+		}
+	}); err != nil {
+		return nil, err
+	}
+	return repox.SortBuckets(counts, limit), nil
+}
+
+// scan calls f for every row eng matches under conds, failing past
+// repox.GraphQLScanLimit rows.
+func (r *GraphQLShelfRepository) scan(ctx context.Context, eng *filterx.HasuraEngine[shelvesql.CatalogShelves], conds []filterx.Condition, f func(*shelvesql.CatalogShelves)) error {
+	in := filterx.ListInput{PageSize: 1000, Filter: conds}
+	for read := 0; ; {
+		rows, next, err := eng.List(ctx, in)
+		if err != nil {
+			return repox.MapFilterxErr(err)
+		}
+		for i := range rows {
+			f(&rows[i])
+		}
+		read += len(rows)
+		if next == "" {
+			return nil
+		}
+		if read >= repox.GraphQLScanLimit {
+			return fmt.Errorf("%w: more than %d rows to scan on GraphQL; narrow the filter", repox.ErrInvalidArgument, repox.GraphQLScanLimit)
+		}
+		in.PageToken = next
+	}
+}
+
+func (r *GraphQLShelfRepository) list(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) ([]*refdemov1.Shelf, string, error) {
+	if err := repox.CheckReadMask((*refdemov1.Shelf)(nil), in.ReadMask); err != nil {
+		return nil, "", err
+	}
+	eng, conds, err := r.engine(in, scope...)
+	if err != nil {
+		return nil, "", err
 	}
 	rows, next, err := eng.List(ctx, filterx.ListInput{
 		PageSize:  in.PageSize,
@@ -1019,9 +1552,17 @@ func (r *GraphQLShelfRepository) list(ctx context.Context, in repox.ListInput, s
 	if err != nil {
 		return nil, "", repox.MapFilterxErr(err)
 	}
+	keys := make([]string, len(rows))
+	for i := range rows {
+		keys[i] = rows[i].Id
+	}
+	joined, err := r.readJoins(ctx, in.ReadMask, keys...)
+	if err != nil {
+		return nil, "", err
+	}
 	items := make([]*refdemov1.Shelf, 0, len(rows))
 	for i := range rows {
-		out, err := r.toProto(ctx, &rows[i], in.ReadMask)
+		out, err := r.toProto(ctx, &rows[i], in.ReadMask, joined)
 		if err != nil {
 			return nil, "", err
 		}
@@ -1060,6 +1601,11 @@ func (r *GraphQLShelfRepository) update(ctx context.Context, in *refdemov1.Shelf
 		return nil, repox.ErrNotFound
 	}
 	existingPB := shelfFromRow(row)
+	joined, err := r.readJoins(ctx, nil, id)
+	if err != nil {
+		return nil, err
+	}
+	existingPB.Featured = joined["featured"][id]
 	merged := proto.Clone(existingPB).(*refdemov1.Shelf)
 	applyShelfMask(merged, in, paths)
 	repox.CopyFields(merged, in, outputPaths)
@@ -1077,6 +1623,9 @@ func (r *GraphQLShelfRepository) update(ctx context.Context, in *refdemov1.Shelf
 		if _, err := r.Svc.Mutation.Catalog.Shelves.UpdateIfMatch(ctx, id, patch, shelvesql.Etag.Eq(in.GetEtag())); err != nil {
 			return nil, mapGraphQLErr(err)
 		}
+		if err := r.writeJoins(ctx, id, merged, paths); err != nil {
+			return nil, err
+		}
 		return r.get(ctx, id)
 	}
 	resp, err := r.Svc.Mutation.Catalog.Shelves.Update(ctx, id, patch)
@@ -1086,7 +1635,86 @@ func (r *GraphQLShelfRepository) update(ctx context.Context, in *refdemov1.Shelf
 	if resp.AffectedRows == 0 {
 		return nil, repox.ErrNotFound
 	}
+	if err := r.writeJoins(ctx, id, merged, paths); err != nil {
+		return nil, err
+	}
 	return r.get(ctx, id)
+}
+
+// writeJoins replaces, in one transaction, the join rows of the fields kept
+// in join tables that paths names (all of them for an empty mask) with in's.
+// It runs after the row update it belongs to.
+func (r *GraphQLShelfRepository) writeJoins(ctx context.Context, owner string, in *refdemov1.Shelf, paths []string) error {
+	var ops repox.Ops
+	if repox.InMask(paths, "featured") {
+		if err := r.shelfFeaturedJoinOps(ctx, &ops, owner, in.GetFeatured(), true); err != nil {
+			return err
+		}
+	}
+	if len(ops) == 0 {
+		return nil
+	}
+	tx := r.Svc.Mutation.Tx()
+	for _, op := range ops {
+		tx.Add(op)
+	}
+	return mapGraphQLErr(tx.Commit(ctx))
+}
+
+// readJoins reads the fields kept in join tables of the rows keyed by keys,
+// those of them mask reads (all for an empty mask), by field and then key, in
+// the order they were written.
+func (r *GraphQLShelfRepository) readJoins(ctx context.Context, mask []string, keys ...string) (repox.Joined, error) {
+	joined := repox.Joined{}
+	if len(keys) == 0 {
+		return joined, nil
+	}
+	if repox.Reads(mask, "featured") {
+		rows, err := r.Svc.Query.Catalog.ShelfFeatured.List(ctx, shelffeaturedql.List().Where(shelffeaturedql.ShelfId.In(keys...)).OrderBy(shelffeaturedql.Id.Asc()))
+		if err != nil {
+			return nil, mapGraphQLErr(err)
+		}
+		got := map[string][]string{}
+		for i := range rows {
+			got[rows[i].ShelfId] = append(got[rows[i].ShelfId], rows[i].BookName)
+		}
+		joined["featured"] = got
+	}
+	return joined, nil
+}
+
+// shelfFeaturedJoinOps queues onto ops the join rows keeping featured for the row
+// keyed owner, one per name in order (a repeat keeps its first place), after
+// removing the rows it holds when replace is set. A name no record holds is
+// repox.ErrForeignKey.
+func (r *GraphQLShelfRepository) shelfFeaturedJoinOps(ctx context.Context, ops *repox.Ops, owner string, names []string, replace bool) error {
+	if replace {
+		rows, err := r.Svc.Query.Catalog.ShelfFeatured.List(ctx, shelffeaturedql.List().Where(shelffeaturedql.ShelfId.Eq(owner)))
+		if err != nil {
+			return mapGraphQLErr(err)
+		}
+		for i := range rows {
+			ops.Add(r.Svc.Mutation.Catalog.ShelfFeatured.DeleteOp(rows[i].Id, new(shelffeaturedql.DeleteCatalogShelfFeaturedByIdResponse)))
+		}
+	}
+	seen := map[string]bool{}
+	for _, n := range names {
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		key, found, err := catalogBooksKey(ctx, r.Svc, n)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return fmt.Errorf("%w: featured: no record named %q", repox.ErrForeignKey, n)
+		}
+		ops.Add(r.Svc.Mutation.Catalog.ShelfFeatured.CreateOp(shelffeaturedql.CreateInput{
+			Id: repox.NewULID(), ShelfId: owner, BookId: key, BookName: n,
+		}, new(shelffeaturedql.InsertCatalogShelfFeaturedResponse)))
+	}
+	return nil
 }
 
 // newInput builds the insert a Batch queues for in, and
@@ -1107,6 +1735,18 @@ func (r *GraphQLShelfRepository) newInput(in *refdemov1.Shelf) (shelvesql.Create
 	ci.Id = id
 	ci.Etag = repox.NewULID()
 	return ci, in, nil
+}
+
+// insertOps queues the inserts that create in onto gtx, for a Batch: the
+// value objects it points at, its row (ci), then its children.
+func (r *GraphQLShelfRepository) insertOps(ctx context.Context, gtx *repox.Ops, in *refdemov1.Shelf, ci shelvesql.CreateInput) (repox.Check, error) {
+	id := ci.Id
+	_ = id
+	gtx.Add(r.Svc.Mutation.Catalog.Shelves.CreateOp(ci, new(shelvesql.InsertCatalogShelvesResponse)))
+	if err := r.shelfFeaturedJoinOps(ctx, gtx, ci.Id, in.GetFeatured(), false); err != nil {
+		return nil, err
+	}
+	return nil, nil
 }
 
 // updateOps queues Update's writes onto ops, for a Batch: the value-object
@@ -1147,6 +1787,11 @@ func (r *GraphQLShelfRepository) updateOps(ctx context.Context, ops *repox.Ops, 
 	} else {
 		ops.Add(r.Svc.Mutation.Catalog.Shelves.UpdateOp(id, patch, resp))
 	}
+	if repox.InMask(paths, "featured") {
+		if err := r.shelfFeaturedJoinOps(ctx, &atx, id, merged.GetFeatured(), true); err != nil {
+			return nil, err
+		}
+	}
 	*ops = append(*ops, atx...)
 	return func(ctx context.Context, failed error) error {
 		if failed == nil {
@@ -1166,6 +1811,20 @@ func (r *GraphQLShelfRepository) updateOps(ctx context.Context, ops *repox.Ops, 
 		}
 		return nil
 	}, nil
+}
+
+// purgeOps queues the removal of row id and of the value-object rows it owns
+// onto dtx, for a Batch. A row already gone queues nothing.
+func (r *GraphQLShelfRepository) purgeOps(ctx context.Context, dtx *repox.Ops, id string) (repox.Check, error) {
+	row, err := r.Svc.Query.Catalog.Shelves.Get(ctx, id)
+	if err != nil {
+		return nil, mapGraphQLErr(err)
+	}
+	if row == nil {
+		return nil, nil
+	}
+	dtx.Add(r.Svc.Mutation.Catalog.Shelves.DeleteOp(id, new(shelvesql.DeleteCatalogShelvesByIdResponse)))
+	return nil, nil
 }
 
 // UpdateOutputOnly persists the server-owned fields of in that paths names.
@@ -1397,8 +2056,7 @@ func (b *graphQLBatch) CreateBook(parent string, in *refdemov1.Book) (string, er
 	b.keys[named.GetName()] = ci.Id
 	queueBookReferences(b.u, named, nil)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
-		ops.Add(b.svc.Mutation.Catalog.Books.CreateOp(ci, new(booksql.InsertCatalogBooksResponse)))
-		return nil, nil
+		return r.insertOps(ctx, ops, named, ci)
 	})
 	b.u.Record(repox.Change{Type: "catalog.example.com/Book", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
@@ -1525,8 +2183,7 @@ func (b *graphQLBatch) PurgeBook(name string) {
 		if err != nil {
 			return nil, err
 		}
-		ops.Add(b.svc.Mutation.Catalog.Books.DeleteOp(id, new(booksql.DeleteCatalogBooksByIdResponse)))
-		return nil, nil
+		return r.purgeOps(ctx, ops, id)
 	})
 	b.u.Record(repox.Change{Type: "catalog.example.com/Book", Name: name, Op: repox.ChangePurge, LoadPrior: repox.PriorOf(name, getBook)})
 }
@@ -1609,8 +2266,7 @@ func (b *graphQLBatch) CreateShelf(in *refdemov1.Shelf) (string, error) {
 	b.keys[named.GetName()] = ci.Id
 	queueShelfReferences(b.u, named, nil)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
-		ops.Add(b.svc.Mutation.Catalog.Shelves.CreateOp(ci, new(shelvesql.InsertCatalogShelvesResponse)))
-		return nil, nil
+		return r.insertOps(ctx, ops, named, ci)
 	})
 	b.u.Record(repox.Change{Type: "catalog.example.com/Shelf", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
@@ -1737,8 +2393,7 @@ func (b *graphQLBatch) PurgeShelf(name string) {
 		if err != nil {
 			return nil, err
 		}
-		ops.Add(b.svc.Mutation.Catalog.Shelves.DeleteOp(id, new(shelvesql.DeleteCatalogShelvesByIdResponse)))
-		return nil, nil
+		return r.purgeOps(ctx, ops, id)
 	})
 	b.u.Record(repox.Change{Type: "catalog.example.com/Shelf", Name: name, Op: repox.ChangePurge, LoadPrior: repox.PriorOf(name, getShelf)})
 }

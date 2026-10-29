@@ -30,12 +30,31 @@ type Gorm{{.Model}}Repository struct {
 	// sets expire_time that far ahead. Zero leaves it unset.
 	Retention time.Duration
 {{- end}}
+	// Store, when set, builds the store the adapter writes{{if not .Preloads}}{{if not .Joins}} and reads{{end}}{{end}}
+	// through over db -- DB, or the transaction a write runs in: a decorator
+	// (a read-through cache, an instrumented store) over
+	// {{$.GormPkg}}.{{.Store}}(db). Nil uses that store as it is.
+	Store func(db *gorm.DB) {{$.GormPkg}}.{{.Model}}StoreIface
 }
 
 // NewGorm{{.Model}}Repository returns the GORM adapter bound to db.
 func NewGorm{{.Model}}Repository(db *gorm.DB) *Gorm{{.Model}}Repository {
 	return &Gorm{{.Model}}Repository{DB: db}
 }
+
+// store is the store over db the adapter goes through (see Store).
+func (r *Gorm{{.Model}}Repository) store(db *gorm.DB) {{$.GormPkg}}.{{.Model}}StoreIface {
+	if r.Store != nil {
+		return r.Store(db)
+	}
+	return {{$.GormPkg}}.{{.Store}}(db)
+}
+{{- $model := .Model}}
+{{- range .Joins}}
+
+// {{.Var}} is the join table keeping {{$model}}.{{.Field}}: one row per element.
+var {{.Var}} = {{.Literal}}
+{{- end}}
 
 {{if .Parented}}
 // Create persists in under parent and returns the stored record.
@@ -72,6 +91,11 @@ func (r *Gorm{{.Model}}Repository) Create(ctx context.Context, parent string, in
 			return nil, err
 		}
 	}
+	{{- if .RequiredDocs}}
+	if err := check{{.Model}}Required(in); err != nil {
+		return nil, err
+	}
+	{{- end}}
 	m := {{$.GormPkg}}.{{.Model}}FromProto(in)
 	m.{{.PKField}} = id
 	m.Name = in.GetName()
@@ -89,12 +113,12 @@ func (r *Gorm{{.Model}}Repository) Create(ctx context.Context, parent string, in
 	{{- if .HasEtag}}
 	m.{{.EtagField}} = {{if .EtagPtr}}repox.Ptr(repox.NewULID()){{else}}repox.NewULID(){{end}}
 	{{- end}}
-	{{- if .HasVOs}}
+	{{- if .InTx}}
 	if err := r.DB.Transaction(func(tx *gorm.DB) error { return r.insertTx(ctx, tx, in, m) }); err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	{{- else}}
-	if err := {{$.GormPkg}}.{{.Store}}(r.DB).Create(ctx, m); err != nil {
+	if err := r.store(r.DB).Create(ctx, m); err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	{{- end}}
@@ -134,6 +158,11 @@ func (r *Gorm{{.Model}}Repository) Create(ctx context.Context, in *{{.PB}}) (*{{
 			return nil, err
 		}
 	}
+	{{- if .RequiredDocs}}
+	if err := check{{.Model}}Required(in); err != nil {
+		return nil, err
+	}
+	{{- end}}
 	m := {{$.GormPkg}}.{{.Model}}FromProto(in)
 	m.{{.PKField}} = id
 	m.Name = in.GetName()
@@ -143,12 +172,12 @@ func (r *Gorm{{.Model}}Repository) Create(ctx context.Context, in *{{.PB}}) (*{{
 	{{- if .HasEtag}}
 	m.{{.EtagField}} = {{if .EtagPtr}}repox.Ptr(repox.NewULID()){{else}}repox.NewULID(){{end}}
 	{{- end}}
-	{{- if .HasVOs}}
+	{{- if .InTx}}
 	if err := r.DB.Transaction(func(tx *gorm.DB) error { return r.insertTx(ctx, tx, in, m) }); err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	{{- else}}
-	if err := {{$.GormPkg}}.{{.Store}}(r.DB).Create(ctx, m); err != nil {
+	if err := r.store(r.DB).Create(ctx, m); err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	{{- end}}
@@ -185,19 +214,43 @@ func (r *Gorm{{.Model}}Repository) rowKey(name string) (string, error) {
 // get loads by row key (rowKey) — the private read every generated method
 // re-reads through, so Tier-2 overrides of Get never re-enter generated writes.
 func (r *Gorm{{.Model}}Repository) get(ctx context.Context, key string) (*{{.PB}}, error) {
+	{{- if and (not .Preloads) .StoreGet}}
+	if r.Store != nil {
+		// One row: read through the store, so a decorator (a read-through
+		// cache) serves it.
+		m, err := r.Store(r.DB).{{.StoreGet}}(ctx, key)
+		if err != nil {
+			return nil, repox.MapGormErr(err)
+		}
+		return r.toProto(ctx, m{{if .Joins}}, nil{{end}})
+	}
+	{{- end}}
 	var m {{$.GormPkg}}.{{.Model}}
 	if err := r.DB.WithContext(ctx){{.Preloads}}.First(&m, "{{.KeyColumn}} = ?", key).Error; err != nil {
 		return nil, repox.MapGormErr(err)
 	}
-	return r.toProto(ctx, &m)
+	return r.toProto(ctx, &m{{if .Joins}}, nil{{end}})
 }
 
 // toProto converts a loaded row, decorating reference names and running the
-// AfterRead hook.
-func (r *Gorm{{.Model}}Repository) toProto(ctx context.Context, m *{{$.GormPkg}}.{{.Model}}) (*{{.PB}}, error) {
+// AfterRead hook.{{if .Joins}} The fields kept in join tables come from joined, read
+// for m alone when nil.{{end}}
+func (r *Gorm{{.Model}}Repository) toProto(ctx context.Context, m *{{$.GormPkg}}.{{.Model}}{{if .Joins}}, joined repox.Joined{{end}}) (*{{.PB}}, error) {
 	out := {{$.GormPkg}}.{{.Model}}ToProto(m)
 	{{- range .RefsToProto}}
 	{{.}}
+	{{- end}}
+	{{- if .Joins}}
+	if joined == nil {
+		var err error
+		if joined, err = r.readJoins(ctx, r.DB, nil, m.{{.PKField}}); err != nil {
+			return nil, err
+		}
+	}
+	{{- $pk := .PKField}}
+	{{- range .Joins}}
+	out.{{.GoField}} = joined["{{.Field}}"][m.{{$pk}}]
+	{{- end}}
 	{{- end}}
 	if h := r.Hooks.AfterRead; h != nil {
 		if err := h(ctx, out); err != nil {
@@ -210,30 +263,125 @@ func (r *Gorm{{.Model}}Repository) toProto(ctx context.Context, m *{{$.GormPkg}}
 {{if .Parented}}
 // List returns one page of records under parent.
 func (r *Gorm{{.Model}}Repository) List(ctx context.Context, parent string, in repox.ListInput) ([]*{{.PB}}, string, error) {
-	parentIDs, err := repox.SplitName(parent, {{.ParentCollExpr}})
+	scope, err := r.parentScope(parent)
 	if err != nil {
 		return nil, "", err
 	}
+	return r.list(ctx, scope, in)
+}
+
+// Count returns how many records under parent match in; its page fields are
+// ignored.
+func (r *Gorm{{.Model}}Repository) Count(ctx context.Context, parent string, in repox.ListInput) (int64, error) {
+	scope, err := r.parentScope(parent)
+	if err != nil {
+		return 0, err
+	}
+	return r.count(ctx, scope, in)
+}
+
+// Facet counts the records under parent matching in by the values of field;
+// see repox.FacetExpr for the fields it takes.
+func (r *Gorm{{.Model}}Repository) Facet(ctx context.Context, parent string, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	scope, err := r.parentScope(parent)
+	if err != nil {
+		return nil, err
+	}
+	return r.facet(ctx, scope, in, field, limit)
+}
+
+// parentScope is the query of the records under parent.
+func (r *Gorm{{.Model}}Repository) parentScope(parent string) (*gorm.DB, error) {
+	parentIDs, err := repox.SplitName(parent, {{.ParentCollExpr}})
+	if err != nil {
+		return nil, err
+	}
 	// AIP-159: "-" for the parent reads across every parent; narrow with a
-	// Where on the parent field instead.
+	// Where on the parent field instead. A "-" widens only its own segment:
+	// under a parent naming some of its ancestors ("a/1/b/-"), the records'
+	// own names are matched, so they stay under those.
 	if parentIDs[len(parentIDs)-1] == "-" {
-		return r.list(ctx, r.DB, in)
+		if repox.AllWild(parentIDs) {
+			return r.DB, nil
+		}
+		op, arg := repox.NameMatch(parent + "/{{.OwnCollection}}/-")
+		return r.DB.Where(`{{.NameColumnSQL}} `+op, arg), nil
 	}
 	{{- if .ParentScopeSQL}}
 	// The parent is nested, so its row is found by name.
 	op, arg := repox.NameMatch(parent)
-	scope := r.DB.Where({{.ParentScopeSQL}}+op+")", arg)
+	return r.DB.Where({{.ParentScopeSQL}}+op+")", arg), nil
 	{{- else}}
-	scope := r.DB.Where("{{.ParentFKColumn}} = ?", parentIDs[len(parentIDs)-1])
+	return r.DB.Where("{{.ParentFKColumn}} = ?", parentIDs[len(parentIDs)-1]), nil
 	{{- end}}
-	return r.list(ctx, scope, in)
 }
 {{else}}
 // List returns one page of records.
 func (r *Gorm{{.Model}}Repository) List(ctx context.Context, in repox.ListInput) ([]*{{.PB}}, string, error) {
 	return r.list(ctx, r.DB, in)
 }
+
+// Count returns how many records match in; its page fields are ignored.
+func (r *Gorm{{.Model}}Repository) Count(ctx context.Context, in repox.ListInput) (int64, error) {
+	return r.count(ctx, r.DB, in)
+}
+
+// Facet counts the records matching in by the values of field; see
+// repox.FacetExpr for the fields it takes.
+func (r *Gorm{{.Model}}Repository) Facet(ctx context.Context, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	return r.facet(ctx, r.DB, in, field, limit)
+}
 {{end}}
+
+// filtered narrows scope to the records in's filter (and ShowDeleted)
+// selects, unpaged: what Count and Facet read.
+func (r *Gorm{{.Model}}Repository) filtered(ctx context.Context, scope *gorm.DB, in repox.ListInput) (*gorm.DB, error) {
+	{{- if .SoftDelete}}
+	if !in.ShowDeleted {
+		scope = scope.Where("delete_time IS NULL")
+	}
+	{{- end}}
+	conds, err := filterx.Parse(in.Filter)
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	eng := filterx.Gorm[{{$.GormPkg}}.{{.Model}}]({{$.GormPkg}}.{{.Model}}FilterSpec)
+	for f, h := range r.ListOverrides {
+		eng.Override(f, h)
+	}
+	where, args, err := eng.Where(append(conds, in.Where...))
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	q := scope.WithContext(ctx).Model(&{{$.GormPkg}}.{{.Model}}{})
+	if where != "" {
+		q = q.Where(where, args...)
+	}
+	return q, nil
+}
+
+// count is Count over scope.
+func (r *Gorm{{.Model}}Repository) count(ctx context.Context, scope *gorm.DB, in repox.ListInput) (int64, error) {
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	return n, repox.MapGormErr(q.Count(&n).Error)
+}
+
+// facet is Facet over scope.
+func (r *Gorm{{.Model}}Repository) facet(ctx context.Context, scope *gorm.DB, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	expr, err := repox.FacetExpr({{$.GormPkg}}.{{.Model}}FilterSpec, field)
+	if err != nil {
+		return nil, err
+	}
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return nil, err
+	}
+	return repox.FacetGorm(ctx, q, expr, limit)
+}
 
 func (r *Gorm{{.Model}}Repository) list(ctx context.Context, scope *gorm.DB, in repox.ListInput) ([]*{{.PB}}, string, error) {
 	{{- if .SoftDelete}}
@@ -262,9 +410,19 @@ func (r *Gorm{{.Model}}Repository) list(ctx context.Context, scope *gorm.DB, in 
 	if err != nil {
 		return nil, "", repox.MapFilterxErr(err)
 	}
+	{{- if .Joins}}
+	keys := make([]string, len(rows))
+	for i := range rows {
+		keys[i] = rows[i].{{.PKField}}
+	}
+	joined, err := r.readJoins(ctx, r.DB, in.ReadMask, keys...)
+	if err != nil {
+		return nil, "", err
+	}
+	{{- end}}
 	items := make([]*{{.PB}}, 0, len(rows))
 	for i := range rows {
-		out, err := r.toProto(ctx, &rows[i])
+		out, err := r.toProto(ctx, &rows[i]{{if .Joins}}, joined{{end}})
 		if err != nil {
 			return nil, "", err
 		}
@@ -274,6 +432,24 @@ func (r *Gorm{{.Model}}Repository) list(ctx context.Context, scope *gorm.DB, in 
 	return items, next, nil
 }
 
+{{if .Joins -}}
+// readJoins reads the fields kept in join tables of the rows keyed by keys,
+// those of them mask reads (all for an empty mask), by field and then key.
+func (r *Gorm{{.Model}}Repository) readJoins(ctx context.Context, db *gorm.DB, mask []string, keys ...string) (repox.Joined, error) {
+	joined := repox.Joined{}
+	{{- range .Joins}}
+	if repox.Reads(mask, "{{.Field}}") {
+		got, err := {{.Var}}.Read(ctx, db, keys)
+		if err != nil {
+			return nil, repox.MapGormErr(err)
+		}
+		joined["{{.Field}}"] = got
+	}
+	{{- end}}
+	return joined, nil
+}
+
+{{end -}}
 // reads is the query a List reads rows through: every column and value object
 // without a read mask; with one, only the columns and value objects of the
 // fields it names, and the columns the page is sorted by.
@@ -359,6 +535,15 @@ func (r *Gorm{{.Model}}Repository) updateTx(ctx context.Context, tx *gorm.DB, ke
 		{{- end}}
 	}
 	{{- end}}
+	{{- if .Joins}}
+	joined, err := r.readJoins(ctx, tx, nil, id)
+	if err != nil {
+		return err
+	}
+	{{- range .Joins}}
+	existingPB.{{.GoField}} = joined["{{.Field}}"][id]
+	{{- end}}
+	{{- end}}
 	merged := proto.Clone(existingPB).(*{{.PB}})
 	apply{{.Model}}Mask(merged, in, paths)
 	{{- if .OutputOnly}}
@@ -369,6 +554,11 @@ func (r *Gorm{{.Model}}Repository) updateTx(ctx context.Context, tx *gorm.DB, ke
 			return err
 		}
 	}
+	{{- if .RequiredDocs}}
+	if err := check{{.Model}}Required(merged); err != nil {
+		return err
+	}
+	{{- end}}
 	next := {{$.GormPkg}}.{{.Model}}FromProto(merged)
 	_ = next
 	{{- range .MutableAssigns}}
@@ -388,11 +578,18 @@ func (r *Gorm{{.Model}}Repository) updateTx(ctx context.Context, tx *gorm.DB, ke
 	{{- range .DeepDetach}}
 	{{.}}
 	{{- end}}
+	{{- range .Joins}}
+	if repox.InMask(paths, "{{.Field}}") {
+		if err := {{.Var}}.Write(ctx, tx, id, merged.Get{{.GoField}}()); err != nil {
+			return err
+		}
+	}
+	{{- end}}
 	{{- if .HasEtag}}
 	existing.{{.EtagField}} = {{if .EtagPtr}}repox.Ptr(repox.NewULID()){{else}}repox.NewULID(){{end}}
 	{{- end}}
 	{{- if .HasVOs}}
-	if err := {{$.GormPkg}}.{{.Store}}(tx).Update(ctx, &existing); err != nil {
+	if err := r.store(tx).Update(ctx, &existing); err != nil {
 		return err
 	}
 	{{- range .VOStaleDels}}
@@ -400,7 +597,7 @@ func (r *Gorm{{.Model}}Repository) updateTx(ctx context.Context, tx *gorm.DB, ke
 	{{- end}}
 	return nil
 	{{- else}}
-	return {{$.GormPkg}}.{{.Store}}(tx).Update(ctx, &existing)
+	return r.store(tx).Update(ctx, &existing)
 	{{- end}}
 }
 {{- if .OutputOnly}}
@@ -448,7 +645,7 @@ func (r *Gorm{{.Model}}Repository) updateOutputOnlyTx(ctx context.Context, tx *g
 		{{- if .HasEtag}}
 		existing.{{.EtagField}} = {{if .EtagPtr}}repox.Ptr(repox.NewULID()){{else}}repox.NewULID(){{end}}
 		{{- end}}
-		return {{$.GormPkg}}.{{.Store}}(tx).Update(ctx, &existing)
+		return r.store(tx).Update(ctx, &existing)
 	}
 }
 {{- end}}
@@ -485,6 +682,11 @@ func (r *Gorm{{.Model}}Repository) newRow({{if .Parented}}parent string, {{end}}
 	{{- if .NameKeyed}}
 	id = rowID // keyed as Create keys it
 	{{- end}}
+	{{- if .RequiredDocs}}
+	if err := check{{.Model}}Required(in); err != nil {
+		return nil, nil, err
+	}
+	{{- end}}
 	m := {{$.GormPkg}}.{{.Model}}FromProto(in)
 	m.{{.PKField}} = id
 	m.Name = in.GetName()
@@ -499,21 +701,26 @@ func (r *Gorm{{.Model}}Repository) newRow({{if .Parented}}parent string, {{end}}
 	{{- end}}
 	return m, in, nil
 }
-{{- if .HasVOs}}
+{{- if .InTx}}
 
 // insertTx writes m inside tx with the value-object rows in carries: those
-// it points at first, then m, then its children.
+// it points at first, then m, then its children and its join rows.
 func (r *Gorm{{.Model}}Repository) insertTx(ctx context.Context, tx *gorm.DB, in *{{.PB}}, m *{{$.GormPkg}}.{{.Model}}) error {
 	id := m.{{.PKField}}
 	_ = id
 	{{- range .VOCreates}}
 	{{.}}
 	{{- end}}
-	if err := {{$.GormPkg}}.{{.Store}}(tx).Create(ctx, m); err != nil {
+	if err := r.store(tx).Create(ctx, m); err != nil {
 		return err
 	}
 	{{- range .DeepAfterCreates}}
 	{{.}}
+	{{- end}}
+	{{- range .Joins}}
+	if err := {{.Var}}.Write(ctx, tx, id, in.Get{{.GoField}}()); err != nil {
+		return err
+	}
 	{{- end}}
 	return nil
 }
@@ -600,7 +807,7 @@ func (r *Gorm{{.Model}}Repository) Delete(ctx context.Context, name string) erro
 	if err := r.DB.WithContext(ctx).First(&existing, "{{.KeyColumn}} = ?", key).Error; err != nil {
 		return repox.MapGormErr(err)
 	}
-	return repox.MapGormErr({{$.GormPkg}}.{{.Store}}(r.DB).DeleteByID(ctx, existing.{{.PKField}}))
+	return repox.MapGormErr(r.store(r.DB).DeleteByID(ctx, existing.{{.PKField}}))
 	{{- end}}
 }
 {{- if .HasVOs}}
@@ -612,7 +819,7 @@ func (r *Gorm{{.Model}}Repository) purgeTx(ctx context.Context, tx *gorm.DB, key
 	if err := tx.WithContext(ctx){{.DeletePreloads}}.First(&existing, "{{.KeyColumn}} = ?", key).Error; err != nil {
 		return err
 	}
-	if err := {{$.GormPkg}}.{{.Store}}(tx).DeleteByID(ctx, existing.{{.PKField}}); err != nil {
+	if err := r.store(tx).DeleteByID(ctx, existing.{{.PKField}}); err != nil {
 		return err
 	}
 	{{- range .VODeleteCleanups}}
@@ -657,7 +864,7 @@ func (r *Gorm{{.Model}}Repository) purge(ctx context.Context, db *gorm.DB, key, 
 		if err := tx.First(&existing, "{{.KeyColumn}} = ?", key).Error; err != nil {
 			return err
 		}
-		return {{$.GormPkg}}.{{.Store}}(tx).DeleteByID(ctx, existing.{{.PKField}})
+		return r.store(tx).DeleteByID(ctx, existing.{{.PKField}})
 		{{- end}}
 	})
 	if repox.IsForeignKeyViolation(err) {
@@ -734,8 +941,9 @@ var _ {{.Model}}Repository = (*Gorm{{.Model}}Repository)(nil)
 // gormBatch is Batch on GORM: queued writes run in the Unit's transaction on
 // Commit.
 type gormBatch struct {
-	u  *repox.Unit
-	db *gorm.DB
+	u      *repox.Unit
+	db     *gorm.DB
+	stores storeFuncs
 {{- if .HasExpiring}}
 	retention time.Duration
 {{- end}}
@@ -747,7 +955,7 @@ func (b *gormBatch) Commit(ctx context.Context) error { return b.u.Commit(ctx) }
 
 // Create{{.Model}} queues a create and returns the name the record will have.
 func (b *gormBatch) Create{{.Model}}({{if .Parented}}parent string, {{end}}in *{{.PB}}) (string, error) {
-	r := &Gorm{{.Model}}Repository{DB: b.db}
+	r := &Gorm{{.Model}}Repository{DB: b.db, Store: b.stores.{{.LowerModel}}}
 	m, named, err := r.newRow({{if .Parented}}parent, {{end}}in)
 	if err != nil {
 		return "", err
@@ -763,10 +971,10 @@ func (b *gormBatch) Create{{.Model}}({{if .Parented}}parent string, {{end}}in *{
 			return err
 		}
 		{{- end}}
-		{{- if .HasVOs}}
+		{{- if .InTx}}
 		return r.insertTx(ctx, tx, named, m)
 		{{- else}}
-		return {{$.GormPkg}}.{{.Store}}(tx).Create(ctx, m)
+		return r.store(tx).Create(ctx, m)
 		{{- end}}
 	})
 	b.u.Record(repox.Change{Type: {{printf "%q" .Type}}, Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
@@ -776,7 +984,7 @@ func (b *gormBatch) Create{{.Model}}({{if .Parented}}parent string, {{end}}in *{
 // Update{{.Model}} queues Update; in.Etag, when set, guards it, and a guard
 // that fails rolls the whole batch back.
 func (b *gormBatch) Update{{.Model}}(in *{{.PB}}, paths []string) {
-	r := &Gorm{{.Model}}Repository{DB: b.db}
+	r := &Gorm{{.Model}}Repository{DB: b.db, Store: b.stores.{{.LowerModel}}}
 	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
@@ -793,7 +1001,7 @@ func (b *gormBatch) Update{{.Model}}(in *{{.PB}}, paths []string) {
 // Update{{.Model}}WithOutputOnly queues UpdateWithOutputOnly; in.Etag, when
 // set, guards it, and a guard that fails rolls the whole batch back.
 func (b *gormBatch) Update{{.Model}}WithOutputOnly(in *{{.PB}}, paths, outputPaths []string) {
-	r := &Gorm{{.Model}}Repository{DB: b.db}
+	r := &Gorm{{.Model}}Repository{DB: b.db, Store: b.stores.{{.LowerModel}}}
 	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
@@ -810,7 +1018,7 @@ func (b *gormBatch) Update{{.Model}}WithOutputOnly(in *{{.PB}}, paths, outputPat
 
 // Update{{.Model}}OutputOnly queues UpdateOutputOnly; in.Etag, when set, guards it.
 func (b *gormBatch) Update{{.Model}}OutputOnly(in *{{.PB}}, paths []string) {
-	r := &Gorm{{.Model}}Repository{DB: b.db}
+	r := &Gorm{{.Model}}Repository{DB: b.db, Store: b.stores.{{.LowerModel}}}
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.updateOutputOnlyTx(ctx, tx, in, paths)
 	})
@@ -822,7 +1030,7 @@ func (b *gormBatch) Update{{.Model}}OutputOnly(in *{{.PB}}, paths []string) {
 // Delete{{.Model}} queues a soft delete. A record already deleted or gone is
 // not an error: two batches deleting the same record must not fail each other.
 func (b *gormBatch) Delete{{.Model}}(name string) {
-	r := &Gorm{{.Model}}Repository{DB: b.db{{if .Expiring}}, Retention: b.retention{{end}}}
+	r := &Gorm{{.Model}}Repository{DB: b.db, Store: b.stores.{{.LowerModel}}{{if .Expiring}}, Retention: b.retention{{end}}}
 	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)
@@ -842,9 +1050,9 @@ func (b *gormBatch) Delete{{.Model}}(name string) {
 func (b *gormBatch) {{if .SoftDelete}}Purge{{else}}Delete{{end}}{{.Model}}(name string) {
 	{{- if .SoftDelete}}
 	// A record something still refers to is kept, as Purge keeps it.
-	r := &Gorm{{.Model}}Repository{DB: b.db, Refs: b.u.Conn().References}
+	r := &Gorm{{.Model}}Repository{DB: b.db, Store: b.stores.{{.LowerModel}}, Refs: b.u.Conn().References}
 	{{- else}}
-	r := &Gorm{{.Model}}Repository{DB: b.db}
+	r := &Gorm{{.Model}}Repository{DB: b.db, Store: b.stores.{{.LowerModel}}}
 	{{- end}}
 	key, err := r.rowKey(name)
 	if err != nil {

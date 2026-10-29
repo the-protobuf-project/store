@@ -42,7 +42,10 @@ type Shelf struct {
 	// When the shelf was soft-deleted.
 	DeleteTime *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=delete_time,json=deleteTime,proto3" json:"delete_time,omitempty"`
 	// When the soft-deleted shelf goes for good.
-	ExpireTime    *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=expire_time,json=expireTime,proto3" json:"expire_time,omitempty"`
+	ExpireTime *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=expire_time,json=expireTime,proto3" json:"expire_time,omitempty"`
+	// Books on show, of this shelf or another: a repeated reference to a
+	// nested resource, kept in a join table with each book's full name.
+	Featured      []string `protobuf:"bytes,6,rep,name=featured,proto3" json:"featured,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -112,6 +115,13 @@ func (x *Shelf) GetExpireTime() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *Shelf) GetFeatured() []string {
+	if x != nil {
+		return x.Featured
+	}
+	return nil
+}
+
 // A book on a shelf: a nested resource, so a reference to it stores its full
 // name and a foreign key to it targets its name column.
 type Book struct {
@@ -125,7 +135,10 @@ type Book struct {
 	// When the book was soft-deleted.
 	DeleteTime *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=delete_time,json=deleteTime,proto3" json:"delete_time,omitempty"`
 	// When the soft-deleted book goes for good.
-	ExpireTime    *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=expire_time,json=expireTime,proto3" json:"expire_time,omitempty"`
+	ExpireTime *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=expire_time,json=expireTime,proto3" json:"expire_time,omitempty"`
+	// Shelves the book is also filed under: a repeated reference to a
+	// top-level resource, kept in a join table by the shelves' ids.
+	FiledUnder    []string `protobuf:"bytes,6,rep,name=filed_under,json=filedUnder,proto3" json:"filed_under,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -195,6 +208,13 @@ func (x *Book) GetExpireTime() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *Book) GetFiledUnder() []string {
+	if x != nil {
+		return x.FiledUnder
+	}
+	return nil
+}
+
 // A page of a book: nested two deep, so the row it hangs off is a nested
 // resource's, found by its name.
 type Page struct {
@@ -255,7 +275,7 @@ var File_refdemo_catalog_v1_catalog_proto protoreflect.FileDescriptor
 
 const file_refdemo_catalog_v1_catalog_proto_rawDesc = "" +
 	"\n" +
-	" refdemo/catalog/v1/catalog.proto\x12\x12refdemo.catalog.v1\x1a\x1bentity/v1/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xac\x02\n" +
+	" refdemo/catalog/v1/catalog.proto\x12\x12refdemo.catalog.v1\x1a\x1bentity/v1/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xea\x02\n" +
 	"\x05Shelf\x12\x17\n" +
 	"\x04name\x18\x01 \x01(\tB\x03\xe0A\bR\x04name\x12&\n" +
 	"\fdisplay_name\x18\x02 \x01(\tB\x03\xe0A\x02R\vdisplayName\x12\x17\n" +
@@ -263,8 +283,10 @@ const file_refdemo_catalog_v1_catalog_proto_rawDesc = "" +
 	"\vdelete_time\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampB\x03\xe0A\x03R\n" +
 	"deleteTime\x12@\n" +
 	"\vexpire_time\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampB\x03\xe0A\x03R\n" +
-	"expireTime:E\xeaA<\n" +
-	"\x19catalog.example.com/Shelf\x12\x0fshelves/{shelf}*\ashelves2\x05shelf\xca\xf3\x18\x02\x18\x01\"\xa7\x02\n" +
+	"expireTime\x12<\n" +
+	"\bfeatured\x18\x06 \x03(\tB \xe0A\x01\xfaA\x1a\n" +
+	"\x18catalog.example.com/BookR\bfeatured:E\xeaA<\n" +
+	"\x19catalog.example.com/Shelf\x12\x0fshelves/{shelf}*\ashelves2\x05shelf\xca\xf3\x18\x02\x18\x01\"\xeb\x02\n" +
 	"\x04Book\x12\x17\n" +
 	"\x04name\x18\x01 \x01(\tB\x03\xe0A\bR\x04name\x12\x19\n" +
 	"\x05title\x18\x02 \x01(\tB\x03\xe0A\x02R\x05title\x12\x17\n" +
@@ -272,7 +294,10 @@ const file_refdemo_catalog_v1_catalog_proto_rawDesc = "" +
 	"\vdelete_time\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampB\x03\xe0A\x03R\n" +
 	"deleteTime\x12@\n" +
 	"\vexpire_time\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampB\x03\xe0A\x03R\n" +
-	"expireTime:N\xeaAE\n" +
+	"expireTime\x12B\n" +
+	"\vfiled_under\x18\x06 \x03(\tB!\xe0A\x01\xfaA\x1b\n" +
+	"\x19catalog.example.com/ShelfR\n" +
+	"filedUnder:N\xeaAE\n" +
 	"\x18catalog.example.com/Book\x12\x1cshelves/{shelf}/books/{book}*\x05books2\x04book\xca\xf3\x18\x02\x18\x01\"\x90\x01\n" +
 	"\x04Page\x12\x17\n" +
 	"\x04name\x18\x01 \x01(\tB\x03\xe0A\bR\x04name\x12\x12\n" +

@@ -47,12 +47,28 @@ type GormBookRepository struct {
 	// Retention is how long a soft-deleted record stays restorable: Delete
 	// sets expire_time that far ahead. Zero leaves it unset.
 	Retention time.Duration
+	// Store, when set, builds the store the adapter writes
+	// through over db -- DB, or the transaction a write runs in: a decorator
+	// (a read-through cache, an instrumented store) over
+	// catalog.NewBookStore(db). Nil uses that store as it is.
+	Store func(db *gorm.DB) catalog.BookStoreIface
 }
 
 // NewGormBookRepository returns the GORM adapter bound to db.
 func NewGormBookRepository(db *gorm.DB) *GormBookRepository {
 	return &GormBookRepository{DB: db}
 }
+
+// store is the store over db the adapter goes through (see Store).
+func (r *GormBookRepository) store(db *gorm.DB) catalog.BookStoreIface {
+	if r.Store != nil {
+		return r.Store(db)
+	}
+	return catalog.NewBookStore(db)
+}
+
+// bookFiledUnderJoin is the join table keeping Book.filed_under: one row per element.
+var bookFiledUnderJoin = repox.Join{Field: "filed_under", Table: `"catalog"."book_filed_under"`, Key: "id", Owner: "book_id", Target: "shelf_id", Name: "", TargetTable: `"catalog"."shelves"`, TargetKey: "id", TargetName: "", Collection: "shelves"}
 
 // Create persists in under parent and returns the stored record.
 func (r *GormBookRepository) Create(ctx context.Context, parent string, in *catalogv1.Book) (*catalogv1.Book, error) {
@@ -89,7 +105,7 @@ func (r *GormBookRepository) Create(ctx context.Context, parent string, in *cata
 	m.Name = in.GetName()
 	m.ShelfID = parentIDs[0]
 	m.Etag = repox.Ptr(repox.NewULID())
-	if err := catalog.NewBookStore(r.DB).Create(ctx, m); err != nil {
+	if err := r.DB.Transaction(func(tx *gorm.DB) error { return r.insertTx(ctx, tx, in, m) }); err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	return r.get(ctx, m.Name)
@@ -116,17 +132,34 @@ func (r *GormBookRepository) rowKey(name string) (string, error) {
 // get loads by row key (rowKey) — the private read every generated method
 // re-reads through, so Tier-2 overrides of Get never re-enter generated writes.
 func (r *GormBookRepository) get(ctx context.Context, key string) (*catalogv1.Book, error) {
+	if r.Store != nil {
+		// One row: read through the store, so a decorator (a read-through
+		// cache) serves it.
+		m, err := r.Store(r.DB).GetByName(ctx, key)
+		if err != nil {
+			return nil, repox.MapGormErr(err)
+		}
+		return r.toProto(ctx, m, nil)
+	}
 	var m catalog.Book
 	if err := r.DB.WithContext(ctx).First(&m, "name = ?", key).Error; err != nil {
 		return nil, repox.MapGormErr(err)
 	}
-	return r.toProto(ctx, &m)
+	return r.toProto(ctx, &m, nil)
 }
 
 // toProto converts a loaded row, decorating reference names and running the
-// AfterRead hook.
-func (r *GormBookRepository) toProto(ctx context.Context, m *catalog.Book) (*catalogv1.Book, error) {
+// AfterRead hook. The fields kept in join tables come from joined, read
+// for m alone when nil.
+func (r *GormBookRepository) toProto(ctx context.Context, m *catalog.Book, joined repox.Joined) (*catalogv1.Book, error) {
 	out := catalog.BookToProto(m)
+	if joined == nil {
+		var err error
+		if joined, err = r.readJoins(ctx, r.DB, nil, m.ID); err != nil {
+			return nil, err
+		}
+	}
+	out.FiledUnder = joined["filed_under"][m.ID]
 	if h := r.Hooks.AfterRead; h != nil {
 		if err := h(ctx, out); err != nil {
 			return nil, err
@@ -137,17 +170,99 @@ func (r *GormBookRepository) toProto(ctx context.Context, m *catalog.Book) (*cat
 
 // List returns one page of records under parent.
 func (r *GormBookRepository) List(ctx context.Context, parent string, in repox.ListInput) ([]*catalogv1.Book, string, error) {
-	parentIDs, err := repox.SplitName(parent, "shelves")
+	scope, err := r.parentScope(parent)
 	if err != nil {
 		return nil, "", err
 	}
-	// AIP-159: "-" for the parent reads across every parent; narrow with a
-	// Where on the parent field instead.
-	if parentIDs[len(parentIDs)-1] == "-" {
-		return r.list(ctx, r.DB, in)
-	}
-	scope := r.DB.Where("shelf_id = ?", parentIDs[len(parentIDs)-1])
 	return r.list(ctx, scope, in)
+}
+
+// Count returns how many records under parent match in; its page fields are
+// ignored.
+func (r *GormBookRepository) Count(ctx context.Context, parent string, in repox.ListInput) (int64, error) {
+	scope, err := r.parentScope(parent)
+	if err != nil {
+		return 0, err
+	}
+	return r.count(ctx, scope, in)
+}
+
+// Facet counts the records under parent matching in by the values of field;
+// see repox.FacetExpr for the fields it takes.
+func (r *GormBookRepository) Facet(ctx context.Context, parent string, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	scope, err := r.parentScope(parent)
+	if err != nil {
+		return nil, err
+	}
+	return r.facet(ctx, scope, in, field, limit)
+}
+
+// parentScope is the query of the records under parent.
+func (r *GormBookRepository) parentScope(parent string) (*gorm.DB, error) {
+	parentIDs, err := repox.SplitName(parent, "shelves")
+	if err != nil {
+		return nil, err
+	}
+	// AIP-159: "-" for the parent reads across every parent; narrow with a
+	// Where on the parent field instead. A "-" widens only its own segment:
+	// under a parent naming some of its ancestors ("a/1/b/-"), the records'
+	// own names are matched, so they stay under those.
+	if parentIDs[len(parentIDs)-1] == "-" {
+		if repox.AllWild(parentIDs) {
+			return r.DB, nil
+		}
+		op, arg := repox.NameMatch(parent + "/books/-")
+		return r.DB.Where(`"catalog"."books"."name" `+op, arg), nil
+	}
+	return r.DB.Where("shelf_id = ?", parentIDs[len(parentIDs)-1]), nil
+}
+
+// filtered narrows scope to the records in's filter (and ShowDeleted)
+// selects, unpaged: what Count and Facet read.
+func (r *GormBookRepository) filtered(ctx context.Context, scope *gorm.DB, in repox.ListInput) (*gorm.DB, error) {
+	if !in.ShowDeleted {
+		scope = scope.Where("delete_time IS NULL")
+	}
+	conds, err := filterx.Parse(in.Filter)
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	eng := filterx.Gorm[catalog.Book](catalog.BookFilterSpec)
+	for f, h := range r.ListOverrides {
+		eng.Override(f, h)
+	}
+	where, args, err := eng.Where(append(conds, in.Where...))
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	q := scope.WithContext(ctx).Model(&catalog.Book{})
+	if where != "" {
+		q = q.Where(where, args...)
+	}
+	return q, nil
+}
+
+// count is Count over scope.
+func (r *GormBookRepository) count(ctx context.Context, scope *gorm.DB, in repox.ListInput) (int64, error) {
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	return n, repox.MapGormErr(q.Count(&n).Error)
+}
+
+// facet is Facet over scope.
+func (r *GormBookRepository) facet(ctx context.Context, scope *gorm.DB, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	expr, err := repox.FacetExpr(catalog.BookFilterSpec, field)
+	if err != nil {
+		return nil, err
+	}
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return nil, err
+	}
+	return repox.FacetGorm(ctx, q, expr, limit)
 }
 
 func (r *GormBookRepository) list(ctx context.Context, scope *gorm.DB, in repox.ListInput) ([]*catalogv1.Book, string, error) {
@@ -175,9 +290,17 @@ func (r *GormBookRepository) list(ctx context.Context, scope *gorm.DB, in repox.
 	if err != nil {
 		return nil, "", repox.MapFilterxErr(err)
 	}
+	keys := make([]string, len(rows))
+	for i := range rows {
+		keys[i] = rows[i].ID
+	}
+	joined, err := r.readJoins(ctx, r.DB, in.ReadMask, keys...)
+	if err != nil {
+		return nil, "", err
+	}
 	items := make([]*catalogv1.Book, 0, len(rows))
 	for i := range rows {
-		out, err := r.toProto(ctx, &rows[i])
+		out, err := r.toProto(ctx, &rows[i], joined)
 		if err != nil {
 			return nil, "", err
 		}
@@ -185,6 +308,20 @@ func (r *GormBookRepository) list(ctx context.Context, scope *gorm.DB, in repox.
 		items = append(items, out)
 	}
 	return items, next, nil
+}
+
+// readJoins reads the fields kept in join tables of the rows keyed by keys,
+// those of them mask reads (all for an empty mask), by field and then key.
+func (r *GormBookRepository) readJoins(ctx context.Context, db *gorm.DB, mask []string, keys ...string) (repox.Joined, error) {
+	joined := repox.Joined{}
+	if repox.Reads(mask, "filed_under") {
+		got, err := bookFiledUnderJoin.Read(ctx, db, keys)
+		if err != nil {
+			return nil, repox.MapGormErr(err)
+		}
+		joined["filed_under"] = got
+	}
+	return joined, nil
 }
 
 // reads is the query a List reads rows through: every column and value object
@@ -253,6 +390,11 @@ func (r *GormBookRepository) updateTx(ctx context.Context, tx *gorm.DB, key stri
 		return repox.ErrConflict
 	}
 	existingPB := catalog.BookToProto(&existing)
+	joined, err := r.readJoins(ctx, tx, nil, id)
+	if err != nil {
+		return err
+	}
+	existingPB.FiledUnder = joined["filed_under"][id]
 	merged := proto.Clone(existingPB).(*catalogv1.Book)
 	applyBookMask(merged, in, paths)
 	repox.CopyFields(merged, in, outputPaths)
@@ -271,8 +413,13 @@ func (r *GormBookRepository) updateTx(ctx context.Context, tx *gorm.DB, key stri
 			existing.ExpireTime = next.ExpireTime
 		}
 	}
+	if repox.InMask(paths, "filed_under") {
+		if err := bookFiledUnderJoin.Write(ctx, tx, id, merged.GetFiledUnder()); err != nil {
+			return err
+		}
+	}
 	existing.Etag = repox.Ptr(repox.NewULID())
-	return catalog.NewBookStore(tx).Update(ctx, &existing)
+	return r.store(tx).Update(ctx, &existing)
 }
 
 // UpdateOutputOnly persists the server-owned fields of in that paths names, in
@@ -314,7 +461,7 @@ func (r *GormBookRepository) updateOutputOnlyTx(ctx context.Context, tx *gorm.DB
 			existing.ExpireTime = next.ExpireTime
 		}
 		existing.Etag = repox.Ptr(repox.NewULID())
-		return catalog.NewBookStore(tx).Update(ctx, &existing)
+		return r.store(tx).Update(ctx, &existing)
 	}
 }
 
@@ -348,6 +495,20 @@ func (r *GormBookRepository) newRow(parent string, in *catalogv1.Book) (*catalog
 	m.ShelfID = parentIDs[0]
 	m.Etag = repox.Ptr(repox.NewULID())
 	return m, in, nil
+}
+
+// insertTx writes m inside tx with the value-object rows in carries: those
+// it points at first, then m, then its children and its join rows.
+func (r *GormBookRepository) insertTx(ctx context.Context, tx *gorm.DB, in *catalogv1.Book, m *catalog.Book) error {
+	id := m.ID
+	_ = id
+	if err := r.store(tx).Create(ctx, m); err != nil {
+		return err
+	}
+	if err := bookFiledUnderJoin.Write(ctx, tx, id, in.GetFiledUnder()); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Delete soft-deletes the record addressed by its resource name: delete_time
@@ -445,7 +606,7 @@ func (r *GormBookRepository) purge(ctx context.Context, db *gorm.DB, key, name s
 		if err := tx.First(&existing, "name = ?", key).Error; err != nil {
 			return err
 		}
-		return catalog.NewBookStore(tx).DeleteByID(ctx, existing.ID)
+		return r.store(tx).DeleteByID(ctx, existing.ID)
 	})
 	if repox.IsForeignKeyViolation(err) {
 		r.Refs.Kept(ctx, name, "foreign key")
@@ -526,11 +687,24 @@ type GormPageRepository struct {
 	// ListOverrides substitute the generated dispatch for single filter fields
 	// (e.g. a derived state computed via subqueries).
 	ListOverrides map[string]filterx.SQLHandler
+	// Store, when set, builds the store the adapter writes and reads
+	// through over db -- DB, or the transaction a write runs in: a decorator
+	// (a read-through cache, an instrumented store) over
+	// catalog.NewPageStore(db). Nil uses that store as it is.
+	Store func(db *gorm.DB) catalog.PageStoreIface
 }
 
 // NewGormPageRepository returns the GORM adapter bound to db.
 func NewGormPageRepository(db *gorm.DB) *GormPageRepository {
 	return &GormPageRepository{DB: db}
+}
+
+// store is the store over db the adapter goes through (see Store).
+func (r *GormPageRepository) store(db *gorm.DB) catalog.PageStoreIface {
+	if r.Store != nil {
+		return r.Store(db)
+	}
+	return catalog.NewPageStore(db)
 }
 
 // Create persists in under parent and returns the stored record.
@@ -571,7 +745,7 @@ func (r *GormPageRepository) Create(ctx context.Context, parent string, in *cata
 	if err := r.linkParents(ctx, r.DB, m); err != nil {
 		return nil, repox.MapGormErr(err)
 	}
-	if err := catalog.NewPageStore(r.DB).Create(ctx, m); err != nil {
+	if err := r.store(r.DB).Create(ctx, m); err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	return r.get(ctx, m.Name)
@@ -612,6 +786,15 @@ func (r *GormPageRepository) rowKey(name string) (string, error) {
 // get loads by row key (rowKey) — the private read every generated method
 // re-reads through, so Tier-2 overrides of Get never re-enter generated writes.
 func (r *GormPageRepository) get(ctx context.Context, key string) (*catalogv1.Page, error) {
+	if r.Store != nil {
+		// One row: read through the store, so a decorator (a read-through
+		// cache) serves it.
+		m, err := r.Store(r.DB).GetByName(ctx, key)
+		if err != nil {
+			return nil, repox.MapGormErr(err)
+		}
+		return r.toProto(ctx, m)
+	}
 	var m catalog.Page
 	if err := r.DB.WithContext(ctx).First(&m, "name = ?", key).Error; err != nil {
 		return nil, repox.MapGormErr(err)
@@ -633,19 +816,98 @@ func (r *GormPageRepository) toProto(ctx context.Context, m *catalog.Page) (*cat
 
 // List returns one page of records under parent.
 func (r *GormPageRepository) List(ctx context.Context, parent string, in repox.ListInput) ([]*catalogv1.Page, string, error) {
-	parentIDs, err := repox.SplitName(parent, "shelves", "books")
+	scope, err := r.parentScope(parent)
 	if err != nil {
 		return nil, "", err
 	}
+	return r.list(ctx, scope, in)
+}
+
+// Count returns how many records under parent match in; its page fields are
+// ignored.
+func (r *GormPageRepository) Count(ctx context.Context, parent string, in repox.ListInput) (int64, error) {
+	scope, err := r.parentScope(parent)
+	if err != nil {
+		return 0, err
+	}
+	return r.count(ctx, scope, in)
+}
+
+// Facet counts the records under parent matching in by the values of field;
+// see repox.FacetExpr for the fields it takes.
+func (r *GormPageRepository) Facet(ctx context.Context, parent string, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	scope, err := r.parentScope(parent)
+	if err != nil {
+		return nil, err
+	}
+	return r.facet(ctx, scope, in, field, limit)
+}
+
+// parentScope is the query of the records under parent.
+func (r *GormPageRepository) parentScope(parent string) (*gorm.DB, error) {
+	parentIDs, err := repox.SplitName(parent, "shelves", "books")
+	if err != nil {
+		return nil, err
+	}
 	// AIP-159: "-" for the parent reads across every parent; narrow with a
-	// Where on the parent field instead.
+	// Where on the parent field instead. A "-" widens only its own segment:
+	// under a parent naming some of its ancestors ("a/1/b/-"), the records'
+	// own names are matched, so they stay under those.
 	if parentIDs[len(parentIDs)-1] == "-" {
-		return r.list(ctx, r.DB, in)
+		if repox.AllWild(parentIDs) {
+			return r.DB, nil
+		}
+		op, arg := repox.NameMatch(parent + "/pages/-")
+		return r.DB.Where(`"catalog"."pages"."name" `+op, arg), nil
 	}
 	// The parent is nested, so its row is found by name.
 	op, arg := repox.NameMatch(parent)
-	scope := r.DB.Where(`"book_id" IN (SELECT "id" FROM "catalog"."books" WHERE "name" `+op+")", arg)
-	return r.list(ctx, scope, in)
+	return r.DB.Where(`"book_id" IN (SELECT "id" FROM "catalog"."books" WHERE "name" `+op+")", arg), nil
+}
+
+// filtered narrows scope to the records in's filter (and ShowDeleted)
+// selects, unpaged: what Count and Facet read.
+func (r *GormPageRepository) filtered(ctx context.Context, scope *gorm.DB, in repox.ListInput) (*gorm.DB, error) {
+	conds, err := filterx.Parse(in.Filter)
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	eng := filterx.Gorm[catalog.Page](catalog.PageFilterSpec)
+	for f, h := range r.ListOverrides {
+		eng.Override(f, h)
+	}
+	where, args, err := eng.Where(append(conds, in.Where...))
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	q := scope.WithContext(ctx).Model(&catalog.Page{})
+	if where != "" {
+		q = q.Where(where, args...)
+	}
+	return q, nil
+}
+
+// count is Count over scope.
+func (r *GormPageRepository) count(ctx context.Context, scope *gorm.DB, in repox.ListInput) (int64, error) {
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	return n, repox.MapGormErr(q.Count(&n).Error)
+}
+
+// facet is Facet over scope.
+func (r *GormPageRepository) facet(ctx context.Context, scope *gorm.DB, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	expr, err := repox.FacetExpr(catalog.PageFilterSpec, field)
+	if err != nil {
+		return nil, err
+	}
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return nil, err
+	}
+	return repox.FacetGorm(ctx, q, expr, limit)
 }
 
 func (r *GormPageRepository) list(ctx context.Context, scope *gorm.DB, in repox.ListInput) ([]*catalogv1.Page, string, error) {
@@ -739,7 +1001,7 @@ func (r *GormPageRepository) updateTx(ctx context.Context, tx *gorm.DB, key stri
 	_ = next
 	existing.Name = next.Name
 	existing.Text = next.Text
-	return catalog.NewPageStore(tx).Update(ctx, &existing)
+	return r.store(tx).Update(ctx, &existing)
 }
 
 // newRow builds the row a Batch inserts for in under parent, and the
@@ -789,7 +1051,7 @@ func (r *GormPageRepository) Delete(ctx context.Context, name string) error {
 	if err := r.DB.WithContext(ctx).First(&existing, "name = ?", key).Error; err != nil {
 		return repox.MapGormErr(err)
 	}
-	return repox.MapGormErr(catalog.NewPageStore(r.DB).DeleteByID(ctx, existing.ID))
+	return repox.MapGormErr(r.store(r.DB).DeleteByID(ctx, existing.ID))
 }
 
 // ListByKeys reads every record whose filter field field is one of keys; see
@@ -821,12 +1083,28 @@ type GormShelfRepository struct {
 	// Retention is how long a soft-deleted record stays restorable: Delete
 	// sets expire_time that far ahead. Zero leaves it unset.
 	Retention time.Duration
+	// Store, when set, builds the store the adapter writes
+	// through over db -- DB, or the transaction a write runs in: a decorator
+	// (a read-through cache, an instrumented store) over
+	// catalog.NewShelfStore(db). Nil uses that store as it is.
+	Store func(db *gorm.DB) catalog.ShelfStoreIface
 }
 
 // NewGormShelfRepository returns the GORM adapter bound to db.
 func NewGormShelfRepository(db *gorm.DB) *GormShelfRepository {
 	return &GormShelfRepository{DB: db}
 }
+
+// store is the store over db the adapter goes through (see Store).
+func (r *GormShelfRepository) store(db *gorm.DB) catalog.ShelfStoreIface {
+	if r.Store != nil {
+		return r.Store(db)
+	}
+	return catalog.NewShelfStore(db)
+}
+
+// shelfFeaturedJoin is the join table keeping Shelf.featured: one row per element.
+var shelfFeaturedJoin = repox.Join{Field: "featured", Table: `"catalog"."shelf_featured"`, Key: "id", Owner: "shelf_id", Target: "book_id", Name: "book_name", TargetTable: `"catalog"."books"`, TargetKey: "id", TargetName: "name", Collection: ""}
 
 // Create persists in and returns the stored record.
 func (r *GormShelfRepository) Create(ctx context.Context, in *catalogv1.Shelf) (*catalogv1.Shelf, error) {
@@ -849,7 +1127,7 @@ func (r *GormShelfRepository) Create(ctx context.Context, in *catalogv1.Shelf) (
 	m.ID = id
 	m.Name = in.GetName()
 	m.Etag = repox.Ptr(repox.NewULID())
-	if err := catalog.NewShelfStore(r.DB).Create(ctx, m); err != nil {
+	if err := r.DB.Transaction(func(tx *gorm.DB) error { return r.insertTx(ctx, tx, in, m) }); err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	return r.get(ctx, id)
@@ -876,17 +1154,34 @@ func (r *GormShelfRepository) rowKey(name string) (string, error) {
 // get loads by row key (rowKey) — the private read every generated method
 // re-reads through, so Tier-2 overrides of Get never re-enter generated writes.
 func (r *GormShelfRepository) get(ctx context.Context, key string) (*catalogv1.Shelf, error) {
+	if r.Store != nil {
+		// One row: read through the store, so a decorator (a read-through
+		// cache) serves it.
+		m, err := r.Store(r.DB).GetByID(ctx, key)
+		if err != nil {
+			return nil, repox.MapGormErr(err)
+		}
+		return r.toProto(ctx, m, nil)
+	}
 	var m catalog.Shelf
 	if err := r.DB.WithContext(ctx).First(&m, "id = ?", key).Error; err != nil {
 		return nil, repox.MapGormErr(err)
 	}
-	return r.toProto(ctx, &m)
+	return r.toProto(ctx, &m, nil)
 }
 
 // toProto converts a loaded row, decorating reference names and running the
-// AfterRead hook.
-func (r *GormShelfRepository) toProto(ctx context.Context, m *catalog.Shelf) (*catalogv1.Shelf, error) {
+// AfterRead hook. The fields kept in join tables come from joined, read
+// for m alone when nil.
+func (r *GormShelfRepository) toProto(ctx context.Context, m *catalog.Shelf, joined repox.Joined) (*catalogv1.Shelf, error) {
 	out := catalog.ShelfToProto(m)
+	if joined == nil {
+		var err error
+		if joined, err = r.readJoins(ctx, r.DB, nil, m.ID); err != nil {
+			return nil, err
+		}
+	}
+	out.Featured = joined["featured"][m.ID]
 	if h := r.Hooks.AfterRead; h != nil {
 		if err := h(ctx, out); err != nil {
 			return nil, err
@@ -898,6 +1193,65 @@ func (r *GormShelfRepository) toProto(ctx context.Context, m *catalog.Shelf) (*c
 // List returns one page of records.
 func (r *GormShelfRepository) List(ctx context.Context, in repox.ListInput) ([]*catalogv1.Shelf, string, error) {
 	return r.list(ctx, r.DB, in)
+}
+
+// Count returns how many records match in; its page fields are ignored.
+func (r *GormShelfRepository) Count(ctx context.Context, in repox.ListInput) (int64, error) {
+	return r.count(ctx, r.DB, in)
+}
+
+// Facet counts the records matching in by the values of field; see
+// repox.FacetExpr for the fields it takes.
+func (r *GormShelfRepository) Facet(ctx context.Context, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	return r.facet(ctx, r.DB, in, field, limit)
+}
+
+// filtered narrows scope to the records in's filter (and ShowDeleted)
+// selects, unpaged: what Count and Facet read.
+func (r *GormShelfRepository) filtered(ctx context.Context, scope *gorm.DB, in repox.ListInput) (*gorm.DB, error) {
+	if !in.ShowDeleted {
+		scope = scope.Where("delete_time IS NULL")
+	}
+	conds, err := filterx.Parse(in.Filter)
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	eng := filterx.Gorm[catalog.Shelf](catalog.ShelfFilterSpec)
+	for f, h := range r.ListOverrides {
+		eng.Override(f, h)
+	}
+	where, args, err := eng.Where(append(conds, in.Where...))
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	q := scope.WithContext(ctx).Model(&catalog.Shelf{})
+	if where != "" {
+		q = q.Where(where, args...)
+	}
+	return q, nil
+}
+
+// count is Count over scope.
+func (r *GormShelfRepository) count(ctx context.Context, scope *gorm.DB, in repox.ListInput) (int64, error) {
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	return n, repox.MapGormErr(q.Count(&n).Error)
+}
+
+// facet is Facet over scope.
+func (r *GormShelfRepository) facet(ctx context.Context, scope *gorm.DB, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	expr, err := repox.FacetExpr(catalog.ShelfFilterSpec, field)
+	if err != nil {
+		return nil, err
+	}
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return nil, err
+	}
+	return repox.FacetGorm(ctx, q, expr, limit)
 }
 
 func (r *GormShelfRepository) list(ctx context.Context, scope *gorm.DB, in repox.ListInput) ([]*catalogv1.Shelf, string, error) {
@@ -925,9 +1279,17 @@ func (r *GormShelfRepository) list(ctx context.Context, scope *gorm.DB, in repox
 	if err != nil {
 		return nil, "", repox.MapFilterxErr(err)
 	}
+	keys := make([]string, len(rows))
+	for i := range rows {
+		keys[i] = rows[i].ID
+	}
+	joined, err := r.readJoins(ctx, r.DB, in.ReadMask, keys...)
+	if err != nil {
+		return nil, "", err
+	}
 	items := make([]*catalogv1.Shelf, 0, len(rows))
 	for i := range rows {
-		out, err := r.toProto(ctx, &rows[i])
+		out, err := r.toProto(ctx, &rows[i], joined)
 		if err != nil {
 			return nil, "", err
 		}
@@ -935,6 +1297,20 @@ func (r *GormShelfRepository) list(ctx context.Context, scope *gorm.DB, in repox
 		items = append(items, out)
 	}
 	return items, next, nil
+}
+
+// readJoins reads the fields kept in join tables of the rows keyed by keys,
+// those of them mask reads (all for an empty mask), by field and then key.
+func (r *GormShelfRepository) readJoins(ctx context.Context, db *gorm.DB, mask []string, keys ...string) (repox.Joined, error) {
+	joined := repox.Joined{}
+	if repox.Reads(mask, "featured") {
+		got, err := shelfFeaturedJoin.Read(ctx, db, keys)
+		if err != nil {
+			return nil, repox.MapGormErr(err)
+		}
+		joined["featured"] = got
+	}
+	return joined, nil
 }
 
 // reads is the query a List reads rows through: every column and value object
@@ -1003,6 +1379,11 @@ func (r *GormShelfRepository) updateTx(ctx context.Context, tx *gorm.DB, key str
 		return repox.ErrConflict
 	}
 	existingPB := catalog.ShelfToProto(&existing)
+	joined, err := r.readJoins(ctx, tx, nil, id)
+	if err != nil {
+		return err
+	}
+	existingPB.Featured = joined["featured"][id]
 	merged := proto.Clone(existingPB).(*catalogv1.Shelf)
 	applyShelfMask(merged, in, paths)
 	repox.CopyFields(merged, in, outputPaths)
@@ -1021,8 +1402,13 @@ func (r *GormShelfRepository) updateTx(ctx context.Context, tx *gorm.DB, key str
 			existing.ExpireTime = next.ExpireTime
 		}
 	}
+	if repox.InMask(paths, "featured") {
+		if err := shelfFeaturedJoin.Write(ctx, tx, id, merged.GetFeatured()); err != nil {
+			return err
+		}
+	}
 	existing.Etag = repox.Ptr(repox.NewULID())
-	return catalog.NewShelfStore(tx).Update(ctx, &existing)
+	return r.store(tx).Update(ctx, &existing)
 }
 
 // UpdateOutputOnly persists the server-owned fields of in that paths names, in
@@ -1064,7 +1450,7 @@ func (r *GormShelfRepository) updateOutputOnlyTx(ctx context.Context, tx *gorm.D
 			existing.ExpireTime = next.ExpireTime
 		}
 		existing.Etag = repox.Ptr(repox.NewULID())
-		return catalog.NewShelfStore(tx).Update(ctx, &existing)
+		return r.store(tx).Update(ctx, &existing)
 	}
 }
 
@@ -1086,6 +1472,20 @@ func (r *GormShelfRepository) newRow(in *catalogv1.Shelf) (*catalog.Shelf, *cata
 	m.Name = in.GetName()
 	m.Etag = repox.Ptr(repox.NewULID())
 	return m, in, nil
+}
+
+// insertTx writes m inside tx with the value-object rows in carries: those
+// it points at first, then m, then its children and its join rows.
+func (r *GormShelfRepository) insertTx(ctx context.Context, tx *gorm.DB, in *catalogv1.Shelf, m *catalog.Shelf) error {
+	id := m.ID
+	_ = id
+	if err := r.store(tx).Create(ctx, m); err != nil {
+		return err
+	}
+	if err := shelfFeaturedJoin.Write(ctx, tx, id, in.GetFeatured()); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Delete soft-deletes the record addressed by its resource name: delete_time
@@ -1183,7 +1583,7 @@ func (r *GormShelfRepository) purge(ctx context.Context, db *gorm.DB, key, name 
 		if err := tx.First(&existing, "id = ?", key).Error; err != nil {
 			return err
 		}
-		return catalog.NewShelfStore(tx).DeleteByID(ctx, existing.ID)
+		return r.store(tx).DeleteByID(ctx, existing.ID)
 	})
 	if repox.IsForeignKeyViolation(err) {
 		r.Refs.Kept(ctx, name, "foreign key")
@@ -1254,6 +1654,7 @@ var _ ShelfRepository = (*GormShelfRepository)(nil)
 type gormBatch struct {
 	u         *repox.Unit
 	db        *gorm.DB
+	stores    storeFuncs
 	retention time.Duration
 }
 
@@ -1262,7 +1663,7 @@ func (b *gormBatch) Commit(ctx context.Context) error { return b.u.Commit(ctx) }
 
 // CreateBook queues a create and returns the name the record will have.
 func (b *gormBatch) CreateBook(parent string, in *catalogv1.Book) (string, error) {
-	r := &GormBookRepository{DB: b.db}
+	r := &GormBookRepository{DB: b.db, Store: b.stores.book}
 	m, named, err := r.newRow(parent, in)
 	if err != nil {
 		return "", err
@@ -1273,7 +1674,7 @@ func (b *gormBatch) CreateBook(parent string, in *catalogv1.Book) (string, error
 	}
 	queueBookReferences(b.u, named, nil)
 	b.u.QueueGorm(locks, func(ctx context.Context, tx *gorm.DB) error {
-		return catalog.NewBookStore(tx).Create(ctx, m)
+		return r.insertTx(ctx, tx, named, m)
 	})
 	b.u.Record(repox.Change{Type: "catalog.example.com/Book", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
@@ -1282,7 +1683,7 @@ func (b *gormBatch) CreateBook(parent string, in *catalogv1.Book) (string, error
 // UpdateBook queues Update; in.Etag, when set, guards it, and a guard
 // that fails rolls the whole batch back.
 func (b *gormBatch) UpdateBook(in *catalogv1.Book, paths []string) {
-	r := &GormBookRepository{DB: b.db}
+	r := &GormBookRepository{DB: b.db, Store: b.stores.book}
 	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
@@ -1298,7 +1699,7 @@ func (b *gormBatch) UpdateBook(in *catalogv1.Book, paths []string) {
 // UpdateBookWithOutputOnly queues UpdateWithOutputOnly; in.Etag, when
 // set, guards it, and a guard that fails rolls the whole batch back.
 func (b *gormBatch) UpdateBookWithOutputOnly(in *catalogv1.Book, paths, outputPaths []string) {
-	r := &GormBookRepository{DB: b.db}
+	r := &GormBookRepository{DB: b.db, Store: b.stores.book}
 	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
@@ -1313,7 +1714,7 @@ func (b *gormBatch) UpdateBookWithOutputOnly(in *catalogv1.Book, paths, outputPa
 
 // UpdateBookOutputOnly queues UpdateOutputOnly; in.Etag, when set, guards it.
 func (b *gormBatch) UpdateBookOutputOnly(in *catalogv1.Book, paths []string) {
-	r := &GormBookRepository{DB: b.db}
+	r := &GormBookRepository{DB: b.db, Store: b.stores.book}
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.updateOutputOnlyTx(ctx, tx, in, paths)
 	})
@@ -1323,7 +1724,7 @@ func (b *gormBatch) UpdateBookOutputOnly(in *catalogv1.Book, paths []string) {
 // DeleteBook queues a soft delete. A record already deleted or gone is
 // not an error: two batches deleting the same record must not fail each other.
 func (b *gormBatch) DeleteBook(name string) {
-	r := &GormBookRepository{DB: b.db, Retention: b.retention}
+	r := &GormBookRepository{DB: b.db, Store: b.stores.book, Retention: b.retention}
 	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)
@@ -1341,7 +1742,7 @@ func (b *gormBatch) DeleteBook(name string) {
 // other.
 func (b *gormBatch) PurgeBook(name string) {
 	// A record something still refers to is kept, as Purge keeps it.
-	r := &GormBookRepository{DB: b.db, Refs: b.u.Conn().References}
+	r := &GormBookRepository{DB: b.db, Store: b.stores.book, Refs: b.u.Conn().References}
 	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)
@@ -1362,7 +1763,7 @@ func (b *gormBatch) PurgeBook(name string) {
 
 // CreatePage queues a create and returns the name the record will have.
 func (b *gormBatch) CreatePage(parent string, in *catalogv1.Page) (string, error) {
-	r := &GormPageRepository{DB: b.db}
+	r := &GormPageRepository{DB: b.db, Store: b.stores.page}
 	m, named, err := r.newRow(parent, in)
 	if err != nil {
 		return "", err
@@ -1376,7 +1777,7 @@ func (b *gormBatch) CreatePage(parent string, in *catalogv1.Page) (string, error
 		if err := r.linkParents(ctx, tx, m); err != nil {
 			return err
 		}
-		return catalog.NewPageStore(tx).Create(ctx, m)
+		return r.store(tx).Create(ctx, m)
 	})
 	b.u.Record(repox.Change{Type: "catalog.example.com/Page", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
@@ -1385,7 +1786,7 @@ func (b *gormBatch) CreatePage(parent string, in *catalogv1.Page) (string, error
 // UpdatePage queues Update; in.Etag, when set, guards it, and a guard
 // that fails rolls the whole batch back.
 func (b *gormBatch) UpdatePage(in *catalogv1.Page, paths []string) {
-	r := &GormPageRepository{DB: b.db}
+	r := &GormPageRepository{DB: b.db, Store: b.stores.page}
 	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
@@ -1402,7 +1803,7 @@ func (b *gormBatch) UpdatePage(in *catalogv1.Page, paths []string) {
 // gone is not an error: two batches clearing the same row must not fail each
 // other.
 func (b *gormBatch) DeletePage(name string) {
-	r := &GormPageRepository{DB: b.db}
+	r := &GormPageRepository{DB: b.db, Store: b.stores.page}
 	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)
@@ -1417,7 +1818,7 @@ func (b *gormBatch) DeletePage(name string) {
 
 // CreateShelf queues a create and returns the name the record will have.
 func (b *gormBatch) CreateShelf(in *catalogv1.Shelf) (string, error) {
-	r := &GormShelfRepository{DB: b.db}
+	r := &GormShelfRepository{DB: b.db, Store: b.stores.shelf}
 	m, named, err := r.newRow(in)
 	if err != nil {
 		return "", err
@@ -1428,7 +1829,7 @@ func (b *gormBatch) CreateShelf(in *catalogv1.Shelf) (string, error) {
 	}
 	queueShelfReferences(b.u, named, nil)
 	b.u.QueueGorm(locks, func(ctx context.Context, tx *gorm.DB) error {
-		return catalog.NewShelfStore(tx).Create(ctx, m)
+		return r.insertTx(ctx, tx, named, m)
 	})
 	b.u.Record(repox.Change{Type: "catalog.example.com/Shelf", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
@@ -1437,7 +1838,7 @@ func (b *gormBatch) CreateShelf(in *catalogv1.Shelf) (string, error) {
 // UpdateShelf queues Update; in.Etag, when set, guards it, and a guard
 // that fails rolls the whole batch back.
 func (b *gormBatch) UpdateShelf(in *catalogv1.Shelf, paths []string) {
-	r := &GormShelfRepository{DB: b.db}
+	r := &GormShelfRepository{DB: b.db, Store: b.stores.shelf}
 	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
@@ -1453,7 +1854,7 @@ func (b *gormBatch) UpdateShelf(in *catalogv1.Shelf, paths []string) {
 // UpdateShelfWithOutputOnly queues UpdateWithOutputOnly; in.Etag, when
 // set, guards it, and a guard that fails rolls the whole batch back.
 func (b *gormBatch) UpdateShelfWithOutputOnly(in *catalogv1.Shelf, paths, outputPaths []string) {
-	r := &GormShelfRepository{DB: b.db}
+	r := &GormShelfRepository{DB: b.db, Store: b.stores.shelf}
 	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
@@ -1468,7 +1869,7 @@ func (b *gormBatch) UpdateShelfWithOutputOnly(in *catalogv1.Shelf, paths, output
 
 // UpdateShelfOutputOnly queues UpdateOutputOnly; in.Etag, when set, guards it.
 func (b *gormBatch) UpdateShelfOutputOnly(in *catalogv1.Shelf, paths []string) {
-	r := &GormShelfRepository{DB: b.db}
+	r := &GormShelfRepository{DB: b.db, Store: b.stores.shelf}
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.updateOutputOnlyTx(ctx, tx, in, paths)
 	})
@@ -1478,7 +1879,7 @@ func (b *gormBatch) UpdateShelfOutputOnly(in *catalogv1.Shelf, paths []string) {
 // DeleteShelf queues a soft delete. A record already deleted or gone is
 // not an error: two batches deleting the same record must not fail each other.
 func (b *gormBatch) DeleteShelf(name string) {
-	r := &GormShelfRepository{DB: b.db, Retention: b.retention}
+	r := &GormShelfRepository{DB: b.db, Store: b.stores.shelf, Retention: b.retention}
 	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)
@@ -1496,7 +1897,7 @@ func (b *gormBatch) DeleteShelf(name string) {
 // other.
 func (b *gormBatch) PurgeShelf(name string) {
 	// A record something still refers to is kept, as Purge keeps it.
-	r := &GormShelfRepository{DB: b.db, Refs: b.u.Conn().References}
+	r := &GormShelfRepository{DB: b.db, Store: b.stores.shelf, Refs: b.u.Conn().References}
 	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)

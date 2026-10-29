@@ -528,7 +528,15 @@ func (e *HasuraEngine[M]) viaPredicate(ctx context.Context, page []M, c Conditio
 		return gqlCondition(e.spec, c)
 	}
 	col := CamelCase(f.Column)
-	if c.Op == OpNull {
+	present, null := false, false
+	if f.Via.Many {
+		// A join-table field: the lookup matches join rows, and reports the
+		// owners among these rows that have one.
+		var err error
+		if c, present, null, err = ManyCondition(c); err != nil {
+			return graphql.Predicate{}, err
+		}
+	} else if c.Op == OpNull {
 		// Whether the value object is there is whether the row points at one.
 		null, err := ParseBool(c.Value)
 		if err != nil {
@@ -536,17 +544,21 @@ func (e *HasuraEngine[M]) viaPredicate(ctx context.Context, page []M, c Conditio
 		}
 		return graphql.StringField{Col: col}.IsNull(null), nil
 	}
-	inner := Spec{Table: f.Via.Table, Fields: map[string]FieldSpec{
-		c.Field: {Column: f.Via.Column, Kind: f.Kind, EnumPrefix: f.EnumPrefix},
-	}}
-	where, err := gqlCondition(inner, c)
-	if err != nil {
-		return graphql.Predicate{}, err
+	// A presence test matches every join row: their owner is never null.
+	where := graphql.StringField{Col: CamelCase(f.Via.Key)}.IsNull(false)
+	if !present {
+		inner := Spec{Table: f.Via.Table, Fields: map[string]FieldSpec{
+			c.Field: {Column: f.Via.Column, Kind: f.Kind, EnumPrefix: f.EnumPrefix},
+		}}
+		var err error
+		if where, err = gqlCondition(inner, c); err != nil {
+			return graphql.Predicate{}, err
+		}
 	}
 	matched := []string{}
 	if refs := columnValues(page, col); len(refs) > 0 {
 		head, _, _ := strings.Cut(c.Field, ".")
-		err = e.observer.Span(ctx, "filterx.List/"+f.Via.Table, func(ctx context.Context) error {
+		err := e.observer.Span(ctx, "filterx.List/"+f.Via.Table, func(ctx context.Context) error {
 			var er error
 			matched, er = e.vias[head](ctx, refs, where)
 			return er
@@ -554,6 +566,9 @@ func (e *HasuraEngine[M]) viaPredicate(ctx context.Context, page []M, c Conditio
 		if err != nil {
 			return graphql.Predicate{}, err
 		}
+	}
+	if null {
+		return graphql.Not(graphql.StringField{Col: col}.In(matched...)), nil
 	}
 	return graphql.StringField{Col: col}.In(matched...), nil
 }

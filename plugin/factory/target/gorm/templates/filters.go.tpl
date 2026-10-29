@@ -14,7 +14,7 @@ var {{.SpecVar}} = filterx.Spec{
 	Table: `{{.Table}}`,
 	Fields: map[string]filterx.FieldSpec{
 {{- range .Fields}}
-		"{{.Field}}": {Column: "{{.Column}}", Kind: filterx.{{.Kind}}{{if .EnumPrefix}}, EnumPrefix: "{{.EnumPrefix}}"{{end}}{{if .ViaTable}}, Via: &filterx.Via{Table: `{{.ViaTable}}`, Key: "{{.ViaKey}}", Column: "{{.ViaColumn}}"}{{end}}{{if .JSONKeys}}, JSONKeys: map[string]filterx.Kind{ {{- range $i, $k := .JSONKeys}}{{if $i}}, {{end}}"{{$k.Path}}": filterx.{{$k.Kind}}{{end -}} }{{end}}},
+		"{{.Field}}": {Column: "{{.Column}}", Kind: filterx.{{.Kind}}{{if .EnumPrefix}}, EnumPrefix: "{{.EnumPrefix}}"{{end}}{{if .ViaTable}}, Via: &filterx.Via{Table: `{{.ViaTable}}`, Key: "{{.ViaKey}}", Column: "{{.ViaColumn}}"{{if .ViaMany}}, Many: true{{end}}}{{end}}{{if .JSONKeys}}, JSONKeys: map[string]filterx.Kind{ {{- range $i, $k := .JSONKeys}}{{if $i}}, {{end}}"{{$k.Path}}": filterx.{{$k.Kind}}{{end -}} }{{end}}},
 {{- end}}
 	},
 {{- if .Search}}

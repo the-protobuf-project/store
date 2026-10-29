@@ -205,7 +205,54 @@ func TestNestedResourcesAreKeyedByName(t *testing.T) {
 	if body, _ := funcBody(parentSrc, "func catalogBooksKey("); !strings.Contains(body, "booksql.Name.Eq(name)") {
 		t.Error("catalogBooksKey does not find the book by its name")
 	}
-	if body, _ := funcBody(gqlSrc, "func (r *GraphQLPageRepository) List("); !strings.Contains(body, "pagesql.BookId.In(") {
+	if body, _ := funcBody(gqlSrc, "func (r *GraphQLPageRepository) parentScope("); !strings.Contains(body, "pagesql.BookId.In(") {
 		t.Error("GraphQLPageRepository.List does not scope by the book rows found by name")
+	}
+}
+
+// A "-" in a parent widens only its own segment: under "shelves/s/books/-"
+// a page List matches the pages' own names, so it stays under shelf s, on
+// both adapters; only a parent of nothing but "-" reads every parent.
+func TestWildcardParentKeepsNamedSegments(t *testing.T) {
+	dir := "testdata/cases/references/golden/repository/catalog/catalog"
+	for file, sig := range map[string]string{
+		"gorm.go":    "func (r *GormPageRepository) parentScope(",
+		"graphql.go": "func (r *GraphQLPageRepository) parentScope(",
+	} {
+		body, ok := funcBody(readGolden(t, dir, file), sig)
+		if !ok {
+			t.Fatalf("%s: no %s", file, sig)
+		}
+		if !strings.Contains(body, "repox.AllWild(parentIDs)") || !strings.Contains(body, `parent + "/pages/-"`) {
+			t.Errorf("%s: %s reads across every parent for a partial wildcard", file, sig)
+		}
+	}
+}
+
+// A repeated reference kept in a join table is written with its record --
+// in the create's transaction, and on an update the mask names -- and read
+// back on every read, on both adapters.
+func TestJoinFieldsArePersisted(t *testing.T) {
+	dir := "testdata/cases/references/golden/repository/catalog/catalog"
+	gormSrc, gqlSrc := readGolden(t, dir, "gorm.go"), readGolden(t, dir, "graphql.go")
+	for _, c := range []struct{ src, sig, want string }{
+		{gormSrc, "func (r *GormShelfRepository) insertTx(", "shelfFeaturedJoin.Write(ctx, tx, id, in.GetFeatured())"},
+		{gormSrc, "func (r *GormShelfRepository) updateTx(", `repox.InMask(paths, "featured")`},
+		{gormSrc, "func (r *GormShelfRepository) toProto(", `out.Featured = joined["featured"]`},
+		{gormSrc, "func (r *GormShelfRepository) list(", "r.readJoins(ctx, r.DB, in.ReadMask, keys...)"},
+		{gqlSrc, "func (r *GraphQLShelfRepository) Create(", "r.shelfFeaturedJoinOps(ctx, &ops, ci.Id, in.GetFeatured(), false)"},
+		{gqlSrc, "func (r *GraphQLShelfRepository) update(", "r.writeJoins(ctx, id, merged, paths)"},
+		{gqlSrc, "func (r *GraphQLShelfRepository) toProto(", `out.Featured = joined["featured"]`},
+		{gqlSrc, "func (r *GraphQLShelfRepository) insertOps(", "r.shelfFeaturedJoinOps(ctx, gtx, ci.Id, in.GetFeatured(), false)"},
+		{gqlSrc, "func (r *GraphQLShelfRepository) updateOps(", "r.shelfFeaturedJoinOps(ctx, &atx, id, merged.GetFeatured(), true)"},
+	} {
+		body, ok := funcBody(c.src, c.sig)
+		if !ok {
+			t.Errorf("no %s", c.sig)
+			continue
+		}
+		if !strings.Contains(body, c.want) {
+			t.Errorf("%s does not %s", c.sig, c.want)
+		}
 	}
 }

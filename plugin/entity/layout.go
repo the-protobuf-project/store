@@ -59,6 +59,14 @@ type LayoutConfig struct {
 	// generated table name changes; proto/model names are untouched.
 	DedupeSchemaTable bool `yaml:"dedupe_schema_table"`
 
+	// KeepEponymousTables, with DedupeSchemaTable, leaves the schema's
+	// eponymous table under its own name ("venue" schema, "venues" table)
+	// instead of the generic word, while prefixed tables are still shortened
+	// ("venue_photos" → "photos"). Off by default: turning it on renames
+	// existing "resource" tables, a migration Prisma writes as a drop and a
+	// create, so a schema already deployed needs a hand-written rename.
+	KeepEponymousTables bool `yaml:"keep_eponymous_tables"`
+
 	// Documents names message types stored whole: a field of a matching type
 	// is one JSONB column holding the message's JSON form (an array, for a
 	// repeated field) instead of a table of its own. For a vocabulary imported
@@ -111,8 +119,9 @@ func Layout(cfg *LayoutConfig) protokit.LayoutResolver { return layout{cfg: cfg}
 type layout struct{ cfg *LayoutConfig }
 
 var (
-	_ schema.LayoutResolver   = layout{}
-	_ schema.DocumentResolver = layout{}
+	_ schema.LayoutResolver         = layout{}
+	_ schema.DocumentResolver       = layout{}
+	_ schema.EponymousTableResolver = layout{}
 )
 
 // ResolveDatasource maps a proto package to its database and schema under the
@@ -148,6 +157,12 @@ func (l layout) Document(fullName string) bool {
 // config was supplied).
 func (l layout) DedupeSchemaTable() bool {
 	return l.cfg != nil && l.cfg.DedupeSchemaTable
+}
+
+// KeepEponymousTables reports the config's keep_eponymous_tables policy
+// (schema.EponymousTableResolver; false when no config was supplied).
+func (l layout) KeepEponymousTables() bool {
+	return l.cfg != nil && l.cfg.KeepEponymousTables
 }
 
 // resolve returns the database, schema, and version-stripping decision for a

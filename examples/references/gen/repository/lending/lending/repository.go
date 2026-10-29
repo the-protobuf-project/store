@@ -18,6 +18,7 @@ package lending
 import (
 	"context"
 	"github.com/the-protobuf-project/store/examples/references/gen/gorm/filterx"
+	"github.com/the-protobuf-project/store/examples/references/gen/gorm/lending/lending"
 	"github.com/the-protobuf-project/store/examples/references/gen/pb/lendingv1"
 	"github.com/the-protobuf-project/store/examples/references/gen/repository/repox"
 	"gorm.io/gorm"
@@ -35,6 +36,16 @@ type LoanRepository interface {
 	Get(ctx context.Context, name string) (*lendingv1.Loan, error)
 	// List returns one page of records.
 	List(ctx context.Context, in repox.ListInput) ([]*lendingv1.Loan, string, error)
+	// Count returns how many records match in (its filter and ShowDeleted;
+	// its page fields are ignored).
+	Count(ctx context.Context, in repox.ListInput) (int64, error)
+	// Facet counts the records matching in by the values of field -- a
+	// filter field (a column, each element of a repeated one, a value
+	// object's or a join table's), or a JSON path -- most frequent first, at
+	// most limit values (all when limit is not positive). On GraphQL it is
+	// answered from the rows, at most repox.GraphQLScanLimit of them, and
+	// takes no field reached through another table.
+	Facet(ctx context.Context, in repox.ListInput, field string, limit int) ([]repox.Bucket, error)
 	// ListByKeys reads every record whose filter field field is one of keys
 	// -- a batched read by name, by parent, by any text, enum or reference
 	// field -- in statements of at most repox.KeysPerRead keys, at most
@@ -146,7 +157,13 @@ func NewBatchIn(u *repox.Unit, opts ...Option) Batch {
 		opt(&o)
 	}
 	_ = o
-	return &gormBatch{u: u, db: u.Conn().Gorm, retention: o.retention}
+	return &gormBatch{u: u, db: u.Conn().Gorm, stores: o.stores, retention: o.retention}
+}
+
+// storeFuncs holds the store decorators With<Model>Store installs, by
+// resource.
+type storeFuncs struct {
+	loan func(db *gorm.DB) lending.LoanStoreIface
 }
 
 // options collects the per-resource customizations the factories thread into
@@ -154,6 +171,7 @@ func NewBatchIn(u *repox.Unit, opts ...Option) Batch {
 type options struct {
 	references    *repox.References
 	projections   *repox.Projections
+	stores        storeFuncs
 	loanHooks     LoanHooks
 	loanOverrides map[string]filterx.SQLHandler
 	retention     time.Duration
@@ -190,6 +208,17 @@ func WithLoanHooks(h LoanHooks) Option {
 	return func(o *options) { o.loanHooks = h }
 }
 
+// WithLoanStore has the GORM adapters go through the store f builds
+// over a handle -- the repository's, or the transaction a write runs in --
+// instead of lending.NewLoanStore's: a decorator over that one,
+// such as a protoc-gen-cache read-through cache or an instrumented store
+// (NewLoanStore(db).WithTelemetry(t)). A one-row read goes through it
+// too, so a cache serves Get. f runs for every write and read, so it should
+// be cheap.
+func WithLoanStore(f func(db *gorm.DB) lending.LoanStoreIface) Option {
+	return func(o *options) { o.stores.loan = f }
+}
+
 // WithLoanListOverride substitutes the generated filter dispatch for one
 // Loan filter field (e.g. a derived state computed via subqueries).
 func WithLoanListOverride(field string, h filterx.SQLHandler) Option {
@@ -217,7 +246,7 @@ func NewGorm(db *gorm.DB, opts ...Option) Repositories {
 		opt(&o)
 	}
 	repos := Repositories{
-		Loans: &GormLoanRepository{DB: db, Hooks: o.loanHooks, Refs: o.references, ListOverrides: o.loanOverrides, Retention: o.retention},
+		Loans: &GormLoanRepository{DB: db, Hooks: o.loanHooks, Refs: o.references, ListOverrides: o.loanOverrides, Store: o.stores.loan, Retention: o.retention},
 	}
 	if p := o.projections; p != nil {
 		if p.Watches("lending.example.com/Loan") {

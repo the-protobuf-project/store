@@ -20,6 +20,7 @@ import (
 	refdemov1 "example.com/test/gen"
 	"example.com/test/gen/repox"
 	"example.com/test/genql"
+	"example.com/test/gormdb/catalog/catalog"
 	"example.com/test/gormdb/filterx"
 	"gorm.io/gorm"
 	"time"
@@ -36,6 +37,16 @@ type BookRepository interface {
 	Get(ctx context.Context, name string) (*refdemov1.Book, error)
 	// List returns one page of records under parent.
 	List(ctx context.Context, parent string, in repox.ListInput) ([]*refdemov1.Book, string, error)
+	// Count returns how many records under parent match in (its filter and
+	// ShowDeleted; its page fields are ignored).
+	Count(ctx context.Context, parent string, in repox.ListInput) (int64, error)
+	// Facet counts the records under parent matching in by the values of
+	// field -- a filter field (a column, each element of a repeated one, a
+	// value object's or a join table's), or a JSON path -- most frequent
+	// first, at most limit values (all when limit is not positive). On
+	// GraphQL it is answered from the rows, at most repox.GraphQLScanLimit
+	// of them, and takes no field reached through another table.
+	Facet(ctx context.Context, parent string, in repox.ListInput, field string, limit int) ([]repox.Bucket, error)
 	// ListByKeys reads every record whose filter field field is one of keys
 	// -- a batched read by name, by parent, by any text, enum or reference
 	// field -- in statements of at most repox.KeysPerRead keys, at most
@@ -105,6 +116,16 @@ type PageRepository interface {
 	Get(ctx context.Context, name string) (*refdemov1.Page, error)
 	// List returns one page of records under parent.
 	List(ctx context.Context, parent string, in repox.ListInput) ([]*refdemov1.Page, string, error)
+	// Count returns how many records under parent match in (its filter and
+	// ShowDeleted; its page fields are ignored).
+	Count(ctx context.Context, parent string, in repox.ListInput) (int64, error)
+	// Facet counts the records under parent matching in by the values of
+	// field -- a filter field (a column, each element of a repeated one, a
+	// value object's or a join table's), or a JSON path -- most frequent
+	// first, at most limit values (all when limit is not positive). On
+	// GraphQL it is answered from the rows, at most repox.GraphQLScanLimit
+	// of them, and takes no field reached through another table.
+	Facet(ctx context.Context, parent string, in repox.ListInput, field string, limit int) ([]repox.Bucket, error)
 	// ListByKeys reads every record whose filter field field is one of keys
 	// -- a batched read by name, by parent, by any text, enum or reference
 	// field -- in statements of at most repox.KeysPerRead keys, at most
@@ -148,6 +169,16 @@ type ShelfRepository interface {
 	Get(ctx context.Context, name string) (*refdemov1.Shelf, error)
 	// List returns one page of records.
 	List(ctx context.Context, in repox.ListInput) ([]*refdemov1.Shelf, string, error)
+	// Count returns how many records match in (its filter and ShowDeleted;
+	// its page fields are ignored).
+	Count(ctx context.Context, in repox.ListInput) (int64, error)
+	// Facet counts the records matching in by the values of field -- a
+	// filter field (a column, each element of a repeated one, a value
+	// object's or a join table's), or a JSON path -- most frequent first, at
+	// most limit values (all when limit is not positive). On GraphQL it is
+	// answered from the rows, at most repox.GraphQLScanLimit of them, and
+	// takes no field reached through another table.
+	Facet(ctx context.Context, in repox.ListInput, field string, limit int) ([]repox.Bucket, error)
 	// ListByKeys reads every record whose filter field field is one of keys
 	// -- a batched read by name, by parent, by any text, enum or reference
 	// field -- in statements of at most repox.KeysPerRead keys, at most
@@ -291,7 +322,15 @@ func NewBatchIn(u *repox.Unit, opts ...Option) Batch {
 	if svc := u.Conn().GraphQL; svc != nil {
 		return &graphQLBatch{u: u, svc: svc, retention: o.retention}
 	}
-	return &gormBatch{u: u, db: u.Conn().Gorm, retention: o.retention}
+	return &gormBatch{u: u, db: u.Conn().Gorm, stores: o.stores, retention: o.retention}
+}
+
+// storeFuncs holds the store decorators With<Model>Store installs, by
+// resource.
+type storeFuncs struct {
+	book  func(db *gorm.DB) catalog.BookStoreIface
+	page  func(db *gorm.DB) catalog.PageStoreIface
+	shelf func(db *gorm.DB) catalog.ShelfStoreIface
 }
 
 // options collects the per-resource customizations the factories thread into
@@ -299,6 +338,7 @@ func NewBatchIn(u *repox.Unit, opts ...Option) Batch {
 type options struct {
 	references        *repox.References
 	projections       *repox.Projections
+	stores            storeFuncs
 	bookHooks         BookHooks
 	bookOverrides     map[string]filterx.SQLHandler
 	pageHooks         PageHooks
@@ -342,6 +382,17 @@ func WithBookHooks(h BookHooks) Option {
 	return func(o *options) { o.bookHooks = h }
 }
 
+// WithBookStore has the GORM adapters go through the store f builds
+// over a handle -- the repository's, or the transaction a write runs in --
+// instead of catalog.NewBookStore's: a decorator over that one,
+// such as a protoc-gen-cache read-through cache or an instrumented store
+// (NewBookStore(db).WithTelemetry(t)). A one-row read goes through it
+// too, so a cache serves Get. f runs for every write and read, so it should
+// be cheap.
+func WithBookStore(f func(db *gorm.DB) catalog.BookStoreIface) Option {
+	return func(o *options) { o.stores.book = f }
+}
+
 // WithBookListOverride substitutes the generated filter dispatch for one
 // Book filter field (e.g. a derived state computed via subqueries).
 func WithBookListOverride(field string, h filterx.SQLHandler) Option {
@@ -358,6 +409,17 @@ func WithPageHooks(h PageHooks) Option {
 	return func(o *options) { o.pageHooks = h }
 }
 
+// WithPageStore has the GORM adapters go through the store f builds
+// over a handle -- the repository's, or the transaction a write runs in --
+// instead of catalog.NewPageStore's: a decorator over that one,
+// such as a protoc-gen-cache read-through cache or an instrumented store
+// (NewPageStore(db).WithTelemetry(t)). A one-row read goes through it
+// too, so a cache serves Get. f runs for every write and read, so it should
+// be cheap.
+func WithPageStore(f func(db *gorm.DB) catalog.PageStoreIface) Option {
+	return func(o *options) { o.stores.page = f }
+}
+
 // WithPageListOverride substitutes the generated filter dispatch for one
 // Page filter field (e.g. a derived state computed via subqueries).
 func WithPageListOverride(field string, h filterx.SQLHandler) Option {
@@ -372,6 +434,17 @@ func WithPageListOverride(field string, h filterx.SQLHandler) Option {
 // WithShelfHooks installs h on the Shelf adapters.
 func WithShelfHooks(h ShelfHooks) Option {
 	return func(o *options) { o.shelfHooks = h }
+}
+
+// WithShelfStore has the GORM adapters go through the store f builds
+// over a handle -- the repository's, or the transaction a write runs in --
+// instead of catalog.NewShelfStore's: a decorator over that one,
+// such as a protoc-gen-cache read-through cache or an instrumented store
+// (NewShelfStore(db).WithTelemetry(t)). A one-row read goes through it
+// too, so a cache serves Get. f runs for every write and read, so it should
+// be cheap.
+func WithShelfStore(f func(db *gorm.DB) catalog.ShelfStoreIface) Option {
+	return func(o *options) { o.stores.shelf = f }
 }
 
 // WithShelfListOverride substitutes the generated filter dispatch for one
@@ -484,9 +557,9 @@ func NewGorm(db *gorm.DB, opts ...Option) Repositories {
 		opt(&o)
 	}
 	repos := Repositories{
-		Books:  &GormBookRepository{DB: db, Hooks: o.bookHooks, Refs: o.references, ListOverrides: o.bookOverrides, Retention: o.retention},
-		Pages:  &GormPageRepository{DB: db, Hooks: o.pageHooks, Refs: o.references, ListOverrides: o.pageOverrides},
-		Shelfs: &GormShelfRepository{DB: db, Hooks: o.shelfHooks, Refs: o.references, ListOverrides: o.shelfOverrides, Retention: o.retention},
+		Books:  &GormBookRepository{DB: db, Hooks: o.bookHooks, Refs: o.references, ListOverrides: o.bookOverrides, Store: o.stores.book, Retention: o.retention},
+		Pages:  &GormPageRepository{DB: db, Hooks: o.pageHooks, Refs: o.references, ListOverrides: o.pageOverrides, Store: o.stores.page},
+		Shelfs: &GormShelfRepository{DB: db, Hooks: o.shelfHooks, Refs: o.references, ListOverrides: o.shelfOverrides, Store: o.stores.shelf, Retention: o.retention},
 	}
 	if p := o.projections; p != nil {
 		if p.Watches("catalog.example.com/Book") {

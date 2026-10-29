@@ -44,11 +44,24 @@ type GormAgendaRepository struct {
 	// ListOverrides substitute the generated dispatch for single filter fields
 	// (e.g. a derived state computed via subqueries).
 	ListOverrides map[string]filterx.SQLHandler
+	// Store, when set, builds the store the adapter writes
+	// through over db -- DB, or the transaction a write runs in: a decorator
+	// (a read-through cache, an instrumented store) over
+	// deepv1gorm.NewAgendaStore(db). Nil uses that store as it is.
+	Store func(db *gorm.DB) deepv1gorm.AgendaStoreIface
 }
 
 // NewGormAgendaRepository returns the GORM adapter bound to db.
 func NewGormAgendaRepository(db *gorm.DB) *GormAgendaRepository {
 	return &GormAgendaRepository{DB: db}
+}
+
+// store is the store over db the adapter goes through (see Store).
+func (r *GormAgendaRepository) store(db *gorm.DB) deepv1gorm.AgendaStoreIface {
+	if r.Store != nil {
+		return r.Store(db)
+	}
+	return deepv1gorm.NewAgendaStore(db)
 }
 
 // Create persists in and returns the stored record.
@@ -121,6 +134,65 @@ func (r *GormAgendaRepository) toProto(ctx context.Context, m *deepv1gorm.Agenda
 // List returns one page of records.
 func (r *GormAgendaRepository) List(ctx context.Context, in repox.ListInput) ([]*deepv1.Agenda, string, error) {
 	return r.list(ctx, r.DB, in)
+}
+
+// Count returns how many records match in; its page fields are ignored.
+func (r *GormAgendaRepository) Count(ctx context.Context, in repox.ListInput) (int64, error) {
+	return r.count(ctx, r.DB, in)
+}
+
+// Facet counts the records matching in by the values of field; see
+// repox.FacetExpr for the fields it takes.
+func (r *GormAgendaRepository) Facet(ctx context.Context, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	return r.facet(ctx, r.DB, in, field, limit)
+}
+
+// filtered narrows scope to the records in's filter (and ShowDeleted)
+// selects, unpaged: what Count and Facet read.
+func (r *GormAgendaRepository) filtered(ctx context.Context, scope *gorm.DB, in repox.ListInput) (*gorm.DB, error) {
+	if !in.ShowDeleted {
+		scope = scope.Where("delete_time IS NULL")
+	}
+	conds, err := filterx.Parse(in.Filter)
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	eng := filterx.Gorm[deepv1gorm.Agenda](deepv1gorm.AgendaFilterSpec)
+	for f, h := range r.ListOverrides {
+		eng.Override(f, h)
+	}
+	where, args, err := eng.Where(append(conds, in.Where...))
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	q := scope.WithContext(ctx).Model(&deepv1gorm.Agenda{})
+	if where != "" {
+		q = q.Where(where, args...)
+	}
+	return q, nil
+}
+
+// count is Count over scope.
+func (r *GormAgendaRepository) count(ctx context.Context, scope *gorm.DB, in repox.ListInput) (int64, error) {
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	return n, repox.MapGormErr(q.Count(&n).Error)
+}
+
+// facet is Facet over scope.
+func (r *GormAgendaRepository) facet(ctx context.Context, scope *gorm.DB, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	expr, err := repox.FacetExpr(deepv1gorm.AgendaFilterSpec, field)
+	if err != nil {
+		return nil, err
+	}
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return nil, err
+	}
+	return repox.FacetGorm(ctx, q, expr, limit)
 }
 
 func (r *GormAgendaRepository) list(ctx context.Context, scope *gorm.DB, in repox.ListInput) ([]*deepv1.Agenda, string, error) {
@@ -288,7 +360,7 @@ func (r *GormAgendaRepository) updateTx(ctx context.Context, tx *gorm.DB, key st
 	existing.Slots = nil
 	existing.Notes = nil
 	existing.Etag = repox.Ptr(repox.NewULID())
-	if err := deepv1gorm.NewAgendaStore(tx).Update(ctx, &existing); err != nil {
+	if err := r.store(tx).Update(ctx, &existing); err != nil {
 		return err
 	}
 	if d18 := staleZone; d18 != nil {
@@ -340,7 +412,7 @@ func (r *GormAgendaRepository) newRow(in *deepv1.Agenda) (*deepv1gorm.Agenda, *d
 }
 
 // insertTx writes m inside tx with the value-object rows in carries: those
-// it points at first, then m, then its children.
+// it points at first, then m, then its children and its join rows.
 func (r *GormAgendaRepository) insertTx(ctx context.Context, tx *gorm.DB, in *deepv1.Agenda, m *deepv1gorm.Agenda) error {
 	id := m.ID
 	_ = id
@@ -354,7 +426,7 @@ func (r *GormAgendaRepository) insertTx(ctx context.Context, tx *gorm.DB, in *de
 			m.ZoneID = repox.Ptr(n2.ID)
 		}
 	}
-	if err := deepv1gorm.NewAgendaStore(tx).Create(ctx, m); err != nil {
+	if err := r.store(tx).Create(ctx, m); err != nil {
 		return err
 	}
 	for _, v4 := range in.GetSlots() {
@@ -467,7 +539,7 @@ func (r *GormAgendaRepository) purgeTx(ctx context.Context, tx *gorm.DB, key str
 	if err := tx.WithContext(ctx).Preload("Zone").Preload("Slots", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).Preload("Slots.Start").Preload("Slots.End").Preload("Notes", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).First(&existing, "id = ?", key).Error; err != nil {
 		return err
 	}
-	if err := deepv1gorm.NewAgendaStore(tx).DeleteByID(ctx, existing.ID); err != nil {
+	if err := r.store(tx).DeleteByID(ctx, existing.ID); err != nil {
 		return err
 	}
 	if d3 := existing.Zone; d3 != nil {
@@ -560,11 +632,24 @@ type GormMeetingRepository struct {
 	// ListOverrides substitute the generated dispatch for single filter fields
 	// (e.g. a derived state computed via subqueries).
 	ListOverrides map[string]filterx.SQLHandler
+	// Store, when set, builds the store the adapter writes
+	// through over db -- DB, or the transaction a write runs in: a decorator
+	// (a read-through cache, an instrumented store) over
+	// deepv1gorm.NewMeetingStore(db). Nil uses that store as it is.
+	Store func(db *gorm.DB) deepv1gorm.MeetingStoreIface
 }
 
 // NewGormMeetingRepository returns the GORM adapter bound to db.
 func NewGormMeetingRepository(db *gorm.DB) *GormMeetingRepository {
 	return &GormMeetingRepository{DB: db}
+}
+
+// store is the store over db the adapter goes through (see Store).
+func (r *GormMeetingRepository) store(db *gorm.DB) deepv1gorm.MeetingStoreIface {
+	if r.Store != nil {
+		return r.Store(db)
+	}
+	return deepv1gorm.NewMeetingStore(db)
 }
 
 // Create persists in under parent and returns the stored record.
@@ -650,17 +735,96 @@ func (r *GormMeetingRepository) toProto(ctx context.Context, m *deepv1gorm.Meeti
 
 // List returns one page of records under parent.
 func (r *GormMeetingRepository) List(ctx context.Context, parent string, in repox.ListInput) ([]*deepv1.Meeting, string, error) {
-	parentIDs, err := repox.SplitName(parent, "agendas")
+	scope, err := r.parentScope(parent)
 	if err != nil {
 		return nil, "", err
 	}
-	// AIP-159: "-" for the parent reads across every parent; narrow with a
-	// Where on the parent field instead.
-	if parentIDs[len(parentIDs)-1] == "-" {
-		return r.list(ctx, r.DB, in)
-	}
-	scope := r.DB.Where("agenda_id = ?", parentIDs[len(parentIDs)-1])
 	return r.list(ctx, scope, in)
+}
+
+// Count returns how many records under parent match in; its page fields are
+// ignored.
+func (r *GormMeetingRepository) Count(ctx context.Context, parent string, in repox.ListInput) (int64, error) {
+	scope, err := r.parentScope(parent)
+	if err != nil {
+		return 0, err
+	}
+	return r.count(ctx, scope, in)
+}
+
+// Facet counts the records under parent matching in by the values of field;
+// see repox.FacetExpr for the fields it takes.
+func (r *GormMeetingRepository) Facet(ctx context.Context, parent string, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	scope, err := r.parentScope(parent)
+	if err != nil {
+		return nil, err
+	}
+	return r.facet(ctx, scope, in, field, limit)
+}
+
+// parentScope is the query of the records under parent.
+func (r *GormMeetingRepository) parentScope(parent string) (*gorm.DB, error) {
+	parentIDs, err := repox.SplitName(parent, "agendas")
+	if err != nil {
+		return nil, err
+	}
+	// AIP-159: "-" for the parent reads across every parent; narrow with a
+	// Where on the parent field instead. A "-" widens only its own segment:
+	// under a parent naming some of its ancestors ("a/1/b/-"), the records'
+	// own names are matched, so they stay under those.
+	if parentIDs[len(parentIDs)-1] == "-" {
+		if repox.AllWild(parentIDs) {
+			return r.DB, nil
+		}
+		op, arg := repox.NameMatch(parent + "/meetings/-")
+		return r.DB.Where(`"deep_v1"."meetings"."name" `+op, arg), nil
+	}
+	return r.DB.Where("agenda_id = ?", parentIDs[len(parentIDs)-1]), nil
+}
+
+// filtered narrows scope to the records in's filter (and ShowDeleted)
+// selects, unpaged: what Count and Facet read.
+func (r *GormMeetingRepository) filtered(ctx context.Context, scope *gorm.DB, in repox.ListInput) (*gorm.DB, error) {
+	conds, err := filterx.Parse(in.Filter)
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	eng := filterx.Gorm[deepv1gorm.Meeting](deepv1gorm.MeetingFilterSpec)
+	for f, h := range r.ListOverrides {
+		eng.Override(f, h)
+	}
+	where, args, err := eng.Where(append(conds, in.Where...))
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	q := scope.WithContext(ctx).Model(&deepv1gorm.Meeting{})
+	if where != "" {
+		q = q.Where(where, args...)
+	}
+	return q, nil
+}
+
+// count is Count over scope.
+func (r *GormMeetingRepository) count(ctx context.Context, scope *gorm.DB, in repox.ListInput) (int64, error) {
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	return n, repox.MapGormErr(q.Count(&n).Error)
+}
+
+// facet is Facet over scope.
+func (r *GormMeetingRepository) facet(ctx context.Context, scope *gorm.DB, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	expr, err := repox.FacetExpr(deepv1gorm.MeetingFilterSpec, field)
+	if err != nil {
+		return nil, err
+	}
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return nil, err
+	}
+	return repox.FacetGorm(ctx, q, expr, limit)
 }
 
 func (r *GormMeetingRepository) list(ctx context.Context, scope *gorm.DB, in repox.ListInput) ([]*deepv1.Meeting, string, error) {
@@ -830,7 +994,7 @@ func (r *GormMeetingRepository) updateTx(ctx context.Context, tx *gorm.DB, key s
 	}
 	existing.Rule = nil
 	existing.Etag = repox.Ptr(repox.NewULID())
-	if err := deepv1gorm.NewMeetingStore(tx).Update(ctx, &existing); err != nil {
+	if err := r.store(tx).Update(ctx, &existing); err != nil {
 		return err
 	}
 	if staleStart != "" {
@@ -895,7 +1059,7 @@ func (r *GormMeetingRepository) newRow(parent string, in *deepv1.Meeting) (*deep
 }
 
 // insertTx writes m inside tx with the value-object rows in carries: those
-// it points at first, then m, then its children.
+// it points at first, then m, then its children and its join rows.
 func (r *GormMeetingRepository) insertTx(ctx context.Context, tx *gorm.DB, in *deepv1.Meeting, m *deepv1gorm.Meeting) error {
 	id := m.ID
 	_ = id
@@ -943,7 +1107,7 @@ func (r *GormMeetingRepository) insertTx(ctx context.Context, tx *gorm.DB, in *d
 		}
 		m.RuleID = repox.Ptr(n2.ID)
 	}
-	if err := deepv1gorm.NewMeetingStore(tx).Create(ctx, m); err != nil {
+	if err := r.store(tx).Create(ctx, m); err != nil {
 		return err
 	}
 	return nil
@@ -970,7 +1134,7 @@ func (r *GormMeetingRepository) purgeTx(ctx context.Context, tx *gorm.DB, key st
 	if err := tx.WithContext(ctx).Preload("Start").Preload("End").Preload("Rule").Preload("Rule.Until").Preload("Rule.Days", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).First(&existing, "name = ?", key).Error; err != nil {
 		return err
 	}
-	if err := deepv1gorm.NewMeetingStore(tx).DeleteByID(ctx, existing.ID); err != nil {
+	if err := r.store(tx).DeleteByID(ctx, existing.ID); err != nil {
 		return err
 	}
 	if existing.StartID != "" {
@@ -1016,8 +1180,9 @@ var _ MeetingRepository = (*GormMeetingRepository)(nil)
 // gormBatch is Batch on GORM: queued writes run in the Unit's transaction on
 // Commit.
 type gormBatch struct {
-	u  *repox.Unit
-	db *gorm.DB
+	u      *repox.Unit
+	db     *gorm.DB
+	stores storeFuncs
 }
 
 // Commit applies the Unit's writes; see repox.Unit.Commit.
@@ -1025,7 +1190,7 @@ func (b *gormBatch) Commit(ctx context.Context) error { return b.u.Commit(ctx) }
 
 // CreateAgenda queues a create and returns the name the record will have.
 func (b *gormBatch) CreateAgenda(in *deepv1.Agenda) (string, error) {
-	r := &GormAgendaRepository{DB: b.db}
+	r := &GormAgendaRepository{DB: b.db, Store: b.stores.agenda}
 	m, named, err := r.newRow(in)
 	if err != nil {
 		return "", err
@@ -1045,7 +1210,7 @@ func (b *gormBatch) CreateAgenda(in *deepv1.Agenda) (string, error) {
 // UpdateAgenda queues Update; in.Etag, when set, guards it, and a guard
 // that fails rolls the whole batch back.
 func (b *gormBatch) UpdateAgenda(in *deepv1.Agenda, paths []string) {
-	r := &GormAgendaRepository{DB: b.db}
+	r := &GormAgendaRepository{DB: b.db, Store: b.stores.agenda}
 	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
@@ -1061,7 +1226,7 @@ func (b *gormBatch) UpdateAgenda(in *deepv1.Agenda, paths []string) {
 // DeleteAgenda queues a soft delete. A record already deleted or gone is
 // not an error: two batches deleting the same record must not fail each other.
 func (b *gormBatch) DeleteAgenda(name string) {
-	r := &GormAgendaRepository{DB: b.db}
+	r := &GormAgendaRepository{DB: b.db, Store: b.stores.agenda}
 	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)
@@ -1079,7 +1244,7 @@ func (b *gormBatch) DeleteAgenda(name string) {
 // other.
 func (b *gormBatch) PurgeAgenda(name string) {
 	// A record something still refers to is kept, as Purge keeps it.
-	r := &GormAgendaRepository{DB: b.db, Refs: b.u.Conn().References}
+	r := &GormAgendaRepository{DB: b.db, Store: b.stores.agenda, Refs: b.u.Conn().References}
 	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)
@@ -1100,7 +1265,7 @@ func (b *gormBatch) PurgeAgenda(name string) {
 
 // CreateMeeting queues a create and returns the name the record will have.
 func (b *gormBatch) CreateMeeting(parent string, in *deepv1.Meeting) (string, error) {
-	r := &GormMeetingRepository{DB: b.db}
+	r := &GormMeetingRepository{DB: b.db, Store: b.stores.meeting}
 	m, named, err := r.newRow(parent, in)
 	if err != nil {
 		return "", err
@@ -1120,7 +1285,7 @@ func (b *gormBatch) CreateMeeting(parent string, in *deepv1.Meeting) (string, er
 // UpdateMeeting queues Update; in.Etag, when set, guards it, and a guard
 // that fails rolls the whole batch back.
 func (b *gormBatch) UpdateMeeting(in *deepv1.Meeting, paths []string) {
-	r := &GormMeetingRepository{DB: b.db}
+	r := &GormMeetingRepository{DB: b.db, Store: b.stores.meeting}
 	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
@@ -1137,7 +1302,7 @@ func (b *gormBatch) UpdateMeeting(in *deepv1.Meeting, paths []string) {
 // gone is not an error: two batches clearing the same row must not fail each
 // other.
 func (b *gormBatch) DeleteMeeting(name string) {
-	r := &GormMeetingRepository{DB: b.db}
+	r := &GormMeetingRepository{DB: b.db, Store: b.stores.meeting}
 	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)

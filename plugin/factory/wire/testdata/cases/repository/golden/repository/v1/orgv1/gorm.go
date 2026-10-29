@@ -43,11 +43,24 @@ type GormMemberRepository struct {
 	// ListOverrides substitute the generated dispatch for single filter fields
 	// (e.g. a derived state computed via subqueries).
 	ListOverrides map[string]filterx.SQLHandler
+	// Store, when set, builds the store the adapter writes
+	// through over db -- DB, or the transaction a write runs in: a decorator
+	// (a read-through cache, an instrumented store) over
+	// orgv1gorm.NewMemberStore(db). Nil uses that store as it is.
+	Store func(db *gorm.DB) orgv1gorm.MemberStoreIface
 }
 
 // NewGormMemberRepository returns the GORM adapter bound to db.
 func NewGormMemberRepository(db *gorm.DB) *GormMemberRepository {
 	return &GormMemberRepository{DB: db}
+}
+
+// store is the store over db the adapter goes through (see Store).
+func (r *GormMemberRepository) store(db *gorm.DB) orgv1gorm.MemberStoreIface {
+	if r.Store != nil {
+		return r.Store(db)
+	}
+	return orgv1gorm.NewMemberStore(db)
 }
 
 // Create persists in under parent and returns the stored record.
@@ -145,17 +158,96 @@ func (r *GormMemberRepository) toProto(ctx context.Context, m *orgv1gorm.Member)
 
 // List returns one page of records under parent.
 func (r *GormMemberRepository) List(ctx context.Context, parent string, in repox.ListInput) ([]*orgv1.Member, string, error) {
-	parentIDs, err := repox.SplitName(parent, "organisations")
+	scope, err := r.parentScope(parent)
 	if err != nil {
 		return nil, "", err
 	}
-	// AIP-159: "-" for the parent reads across every parent; narrow with a
-	// Where on the parent field instead.
-	if parentIDs[len(parentIDs)-1] == "-" {
-		return r.list(ctx, r.DB, in)
-	}
-	scope := r.DB.Where("organisation_id = ?", parentIDs[len(parentIDs)-1])
 	return r.list(ctx, scope, in)
+}
+
+// Count returns how many records under parent match in; its page fields are
+// ignored.
+func (r *GormMemberRepository) Count(ctx context.Context, parent string, in repox.ListInput) (int64, error) {
+	scope, err := r.parentScope(parent)
+	if err != nil {
+		return 0, err
+	}
+	return r.count(ctx, scope, in)
+}
+
+// Facet counts the records under parent matching in by the values of field;
+// see repox.FacetExpr for the fields it takes.
+func (r *GormMemberRepository) Facet(ctx context.Context, parent string, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	scope, err := r.parentScope(parent)
+	if err != nil {
+		return nil, err
+	}
+	return r.facet(ctx, scope, in, field, limit)
+}
+
+// parentScope is the query of the records under parent.
+func (r *GormMemberRepository) parentScope(parent string) (*gorm.DB, error) {
+	parentIDs, err := repox.SplitName(parent, "organisations")
+	if err != nil {
+		return nil, err
+	}
+	// AIP-159: "-" for the parent reads across every parent; narrow with a
+	// Where on the parent field instead. A "-" widens only its own segment:
+	// under a parent naming some of its ancestors ("a/1/b/-"), the records'
+	// own names are matched, so they stay under those.
+	if parentIDs[len(parentIDs)-1] == "-" {
+		if repox.AllWild(parentIDs) {
+			return r.DB, nil
+		}
+		op, arg := repox.NameMatch(parent + "/members/-")
+		return r.DB.Where(`"org_v1"."members"."name" `+op, arg), nil
+	}
+	return r.DB.Where("organisation_id = ?", parentIDs[len(parentIDs)-1]), nil
+}
+
+// filtered narrows scope to the records in's filter (and ShowDeleted)
+// selects, unpaged: what Count and Facet read.
+func (r *GormMemberRepository) filtered(ctx context.Context, scope *gorm.DB, in repox.ListInput) (*gorm.DB, error) {
+	conds, err := filterx.Parse(in.Filter)
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	eng := filterx.Gorm[orgv1gorm.Member](orgv1gorm.MemberFilterSpec)
+	for f, h := range r.ListOverrides {
+		eng.Override(f, h)
+	}
+	where, args, err := eng.Where(append(conds, in.Where...))
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	q := scope.WithContext(ctx).Model(&orgv1gorm.Member{})
+	if where != "" {
+		q = q.Where(where, args...)
+	}
+	return q, nil
+}
+
+// count is Count over scope.
+func (r *GormMemberRepository) count(ctx context.Context, scope *gorm.DB, in repox.ListInput) (int64, error) {
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	return n, repox.MapGormErr(q.Count(&n).Error)
+}
+
+// facet is Facet over scope.
+func (r *GormMemberRepository) facet(ctx context.Context, scope *gorm.DB, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	expr, err := repox.FacetExpr(orgv1gorm.MemberFilterSpec, field)
+	if err != nil {
+		return nil, err
+	}
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return nil, err
+	}
+	return repox.FacetGorm(ctx, q, expr, limit)
 }
 
 func (r *GormMemberRepository) list(ctx context.Context, scope *gorm.DB, in repox.ListInput) ([]*orgv1.Member, string, error) {
@@ -316,7 +408,7 @@ func (r *GormMemberRepository) updateTx(ctx context.Context, tx *gorm.DB, key st
 		}
 	}
 	existing.Etag = repox.Ptr(repox.NewULID())
-	if err := orgv1gorm.NewMemberStore(tx).Update(ctx, &existing); err != nil {
+	if err := r.store(tx).Update(ctx, &existing); err != nil {
 		return err
 	}
 	if staleWindow != "" {
@@ -371,7 +463,7 @@ func (r *GormMemberRepository) newRow(parent string, in *orgv1.Member) (*orgv1go
 }
 
 // insertTx writes m inside tx with the value-object rows in carries: those
-// it points at first, then m, then its children.
+// it points at first, then m, then its children and its join rows.
 func (r *GormMemberRepository) insertTx(ctx context.Context, tx *gorm.DB, in *orgv1.Member, m *orgv1gorm.Member) error {
 	id := m.ID
 	_ = id
@@ -395,7 +487,7 @@ func (r *GormMemberRepository) insertTx(ctx context.Context, tx *gorm.DB, in *or
 		c := orgv1gorm.MemberSpanCaseDateRange
 		m.SpanCase = &c
 	}
-	if err := orgv1gorm.NewMemberStore(tx).Create(ctx, m); err != nil {
+	if err := r.store(tx).Create(ctx, m); err != nil {
 		return err
 	}
 	return nil
@@ -422,7 +514,7 @@ func (r *GormMemberRepository) purgeTx(ctx context.Context, tx *gorm.DB, key str
 	if err := tx.WithContext(ctx).First(&existing, "name = ?", key).Error; err != nil {
 		return err
 	}
-	if err := orgv1gorm.NewMemberStore(tx).DeleteByID(ctx, existing.ID); err != nil {
+	if err := r.store(tx).DeleteByID(ctx, existing.ID); err != nil {
 		return err
 	}
 	if existing.WindowID != nil {
@@ -464,11 +556,24 @@ type GormOrganisationRepository struct {
 	// ListOverrides substitute the generated dispatch for single filter fields
 	// (e.g. a derived state computed via subqueries).
 	ListOverrides map[string]filterx.SQLHandler
+	// Store, when set, builds the store the adapter writes
+	// through over db -- DB, or the transaction a write runs in: a decorator
+	// (a read-through cache, an instrumented store) over
+	// orgv1gorm.NewOrganisationStore(db). Nil uses that store as it is.
+	Store func(db *gorm.DB) orgv1gorm.OrganisationStoreIface
 }
 
 // NewGormOrganisationRepository returns the GORM adapter bound to db.
 func NewGormOrganisationRepository(db *gorm.DB) *GormOrganisationRepository {
 	return &GormOrganisationRepository{DB: db}
+}
+
+// store is the store over db the adapter goes through (see Store).
+func (r *GormOrganisationRepository) store(db *gorm.DB) orgv1gorm.OrganisationStoreIface {
+	if r.Store != nil {
+		return r.Store(db)
+	}
+	return orgv1gorm.NewOrganisationStore(db)
 }
 
 // Create persists in and returns the stored record.
@@ -541,6 +646,62 @@ func (r *GormOrganisationRepository) toProto(ctx context.Context, m *orgv1gorm.O
 // List returns one page of records.
 func (r *GormOrganisationRepository) List(ctx context.Context, in repox.ListInput) ([]*orgv1.Organisation, string, error) {
 	return r.list(ctx, r.DB, in)
+}
+
+// Count returns how many records match in; its page fields are ignored.
+func (r *GormOrganisationRepository) Count(ctx context.Context, in repox.ListInput) (int64, error) {
+	return r.count(ctx, r.DB, in)
+}
+
+// Facet counts the records matching in by the values of field; see
+// repox.FacetExpr for the fields it takes.
+func (r *GormOrganisationRepository) Facet(ctx context.Context, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	return r.facet(ctx, r.DB, in, field, limit)
+}
+
+// filtered narrows scope to the records in's filter (and ShowDeleted)
+// selects, unpaged: what Count and Facet read.
+func (r *GormOrganisationRepository) filtered(ctx context.Context, scope *gorm.DB, in repox.ListInput) (*gorm.DB, error) {
+	conds, err := filterx.Parse(in.Filter)
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	eng := filterx.Gorm[orgv1gorm.Organisation](orgv1gorm.OrganisationFilterSpec)
+	for f, h := range r.ListOverrides {
+		eng.Override(f, h)
+	}
+	where, args, err := eng.Where(append(conds, in.Where...))
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	q := scope.WithContext(ctx).Model(&orgv1gorm.Organisation{})
+	if where != "" {
+		q = q.Where(where, args...)
+	}
+	return q, nil
+}
+
+// count is Count over scope.
+func (r *GormOrganisationRepository) count(ctx context.Context, scope *gorm.DB, in repox.ListInput) (int64, error) {
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	return n, repox.MapGormErr(q.Count(&n).Error)
+}
+
+// facet is Facet over scope.
+func (r *GormOrganisationRepository) facet(ctx context.Context, scope *gorm.DB, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	expr, err := repox.FacetExpr(orgv1gorm.OrganisationFilterSpec, field)
+	if err != nil {
+		return nil, err
+	}
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return nil, err
+	}
+	return repox.FacetGorm(ctx, q, expr, limit)
 }
 
 func (r *GormOrganisationRepository) list(ctx context.Context, scope *gorm.DB, in repox.ListInput) ([]*orgv1.Organisation, string, error) {
@@ -685,7 +846,7 @@ func (r *GormOrganisationRepository) updateTx(ctx context.Context, tx *gorm.DB, 
 		}
 	}
 	existing.Etag = repox.Ptr(repox.NewULID())
-	if err := orgv1gorm.NewOrganisationStore(tx).Update(ctx, &existing); err != nil {
+	if err := r.store(tx).Update(ctx, &existing); err != nil {
 		return err
 	}
 	if staleHq != "" {
@@ -735,7 +896,7 @@ func (r *GormOrganisationRepository) updateOutputOnlyTx(ctx context.Context, tx 
 			existing.State = next.State
 		}
 		existing.Etag = repox.Ptr(repox.NewULID())
-		return orgv1gorm.NewOrganisationStore(tx).Update(ctx, &existing)
+		return r.store(tx).Update(ctx, &existing)
 	}
 }
 
@@ -760,7 +921,7 @@ func (r *GormOrganisationRepository) newRow(in *orgv1.Organisation) (*orgv1gorm.
 }
 
 // insertTx writes m inside tx with the value-object rows in carries: those
-// it points at first, then m, then its children.
+// it points at first, then m, then its children and its join rows.
 func (r *GormOrganisationRepository) insertTx(ctx context.Context, tx *gorm.DB, in *orgv1.Organisation, m *orgv1gorm.Organisation) error {
 	id := m.ID
 	_ = id
@@ -772,7 +933,7 @@ func (r *GormOrganisationRepository) insertTx(ctx context.Context, tx *gorm.DB, 
 		}
 		m.HqID = repox.Ptr(vo.ID)
 	}
-	if err := orgv1gorm.NewOrganisationStore(tx).Create(ctx, m); err != nil {
+	if err := r.store(tx).Create(ctx, m); err != nil {
 		return err
 	}
 	return nil
@@ -799,7 +960,7 @@ func (r *GormOrganisationRepository) purgeTx(ctx context.Context, tx *gorm.DB, k
 	if err := tx.WithContext(ctx).First(&existing, "id = ?", key).Error; err != nil {
 		return err
 	}
-	if err := orgv1gorm.NewOrganisationStore(tx).DeleteByID(ctx, existing.ID); err != nil {
+	if err := r.store(tx).DeleteByID(ctx, existing.ID); err != nil {
 		return err
 	}
 	if existing.HqID != nil {
@@ -836,11 +997,24 @@ type GormUserRepository struct {
 	// ListOverrides substitute the generated dispatch for single filter fields
 	// (e.g. a derived state computed via subqueries).
 	ListOverrides map[string]filterx.SQLHandler
+	// Store, when set, builds the store the adapter writes and reads
+	// through over db -- DB, or the transaction a write runs in: a decorator
+	// (a read-through cache, an instrumented store) over
+	// orgv1gorm.NewUserStore(db). Nil uses that store as it is.
+	Store func(db *gorm.DB) orgv1gorm.UserStoreIface
 }
 
 // NewGormUserRepository returns the GORM adapter bound to db.
 func NewGormUserRepository(db *gorm.DB) *GormUserRepository {
 	return &GormUserRepository{DB: db}
+}
+
+// store is the store over db the adapter goes through (see Store).
+func (r *GormUserRepository) store(db *gorm.DB) orgv1gorm.UserStoreIface {
+	if r.Store != nil {
+		return r.Store(db)
+	}
+	return orgv1gorm.NewUserStore(db)
 }
 
 // Create persists in and returns the stored record.
@@ -864,7 +1038,7 @@ func (r *GormUserRepository) Create(ctx context.Context, in *orgv1.User) (*orgv1
 	m.ID = id
 	m.Name = in.GetName()
 	m.Etag = repox.Ptr(repox.NewULID())
-	if err := orgv1gorm.NewUserStore(r.DB).Create(ctx, m); err != nil {
+	if err := r.store(r.DB).Create(ctx, m); err != nil {
 		return nil, repox.MapGormErr(err)
 	}
 	return r.get(ctx, id)
@@ -891,6 +1065,15 @@ func (r *GormUserRepository) rowKey(name string) (string, error) {
 // get loads by row key (rowKey) — the private read every generated method
 // re-reads through, so Tier-2 overrides of Get never re-enter generated writes.
 func (r *GormUserRepository) get(ctx context.Context, key string) (*orgv1.User, error) {
+	if r.Store != nil {
+		// One row: read through the store, so a decorator (a read-through
+		// cache) serves it.
+		m, err := r.Store(r.DB).GetByID(ctx, key)
+		if err != nil {
+			return nil, repox.MapGormErr(err)
+		}
+		return r.toProto(ctx, m)
+	}
 	var m orgv1gorm.User
 	if err := r.DB.WithContext(ctx).First(&m, "id = ?", key).Error; err != nil {
 		return nil, repox.MapGormErr(err)
@@ -913,6 +1096,62 @@ func (r *GormUserRepository) toProto(ctx context.Context, m *orgv1gorm.User) (*o
 // List returns one page of records.
 func (r *GormUserRepository) List(ctx context.Context, in repox.ListInput) ([]*orgv1.User, string, error) {
 	return r.list(ctx, r.DB, in)
+}
+
+// Count returns how many records match in; its page fields are ignored.
+func (r *GormUserRepository) Count(ctx context.Context, in repox.ListInput) (int64, error) {
+	return r.count(ctx, r.DB, in)
+}
+
+// Facet counts the records matching in by the values of field; see
+// repox.FacetExpr for the fields it takes.
+func (r *GormUserRepository) Facet(ctx context.Context, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	return r.facet(ctx, r.DB, in, field, limit)
+}
+
+// filtered narrows scope to the records in's filter (and ShowDeleted)
+// selects, unpaged: what Count and Facet read.
+func (r *GormUserRepository) filtered(ctx context.Context, scope *gorm.DB, in repox.ListInput) (*gorm.DB, error) {
+	conds, err := filterx.Parse(in.Filter)
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	eng := filterx.Gorm[orgv1gorm.User](orgv1gorm.UserFilterSpec)
+	for f, h := range r.ListOverrides {
+		eng.Override(f, h)
+	}
+	where, args, err := eng.Where(append(conds, in.Where...))
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	q := scope.WithContext(ctx).Model(&orgv1gorm.User{})
+	if where != "" {
+		q = q.Where(where, args...)
+	}
+	return q, nil
+}
+
+// count is Count over scope.
+func (r *GormUserRepository) count(ctx context.Context, scope *gorm.DB, in repox.ListInput) (int64, error) {
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	return n, repox.MapGormErr(q.Count(&n).Error)
+}
+
+// facet is Facet over scope.
+func (r *GormUserRepository) facet(ctx context.Context, scope *gorm.DB, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	expr, err := repox.FacetExpr(orgv1gorm.UserFilterSpec, field)
+	if err != nil {
+		return nil, err
+	}
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return nil, err
+	}
+	return repox.FacetGorm(ctx, q, expr, limit)
 }
 
 func (r *GormUserRepository) list(ctx context.Context, scope *gorm.DB, in repox.ListInput) ([]*orgv1.User, string, error) {
@@ -1013,7 +1252,7 @@ func (r *GormUserRepository) updateTx(ctx context.Context, tx *gorm.DB, key stri
 	existing.Name = next.Name
 	existing.DisplayName = next.DisplayName
 	existing.Etag = repox.Ptr(repox.NewULID())
-	return orgv1gorm.NewUserStore(tx).Update(ctx, &existing)
+	return r.store(tx).Update(ctx, &existing)
 }
 
 // newRow builds the row a Batch inserts for in, and the
@@ -1051,7 +1290,7 @@ func (r *GormUserRepository) Delete(ctx context.Context, name string) error {
 	if err := r.DB.WithContext(ctx).First(&existing, "id = ?", key).Error; err != nil {
 		return repox.MapGormErr(err)
 	}
-	return repox.MapGormErr(orgv1gorm.NewUserStore(r.DB).DeleteByID(ctx, existing.ID))
+	return repox.MapGormErr(r.store(r.DB).DeleteByID(ctx, existing.ID))
 }
 
 // ListByKeys reads every record whose filter field field is one of keys; see
@@ -1068,8 +1307,9 @@ var _ UserRepository = (*GormUserRepository)(nil)
 // gormBatch is Batch on GORM: queued writes run in the Unit's transaction on
 // Commit.
 type gormBatch struct {
-	u  *repox.Unit
-	db *gorm.DB
+	u      *repox.Unit
+	db     *gorm.DB
+	stores storeFuncs
 }
 
 // Commit applies the Unit's writes; see repox.Unit.Commit.
@@ -1077,7 +1317,7 @@ func (b *gormBatch) Commit(ctx context.Context) error { return b.u.Commit(ctx) }
 
 // CreateMember queues a create and returns the name the record will have.
 func (b *gormBatch) CreateMember(parent string, in *orgv1.Member) (string, error) {
-	r := &GormMemberRepository{DB: b.db}
+	r := &GormMemberRepository{DB: b.db, Store: b.stores.member}
 	m, named, err := r.newRow(parent, in)
 	if err != nil {
 		return "", err
@@ -1097,7 +1337,7 @@ func (b *gormBatch) CreateMember(parent string, in *orgv1.Member) (string, error
 // UpdateMember queues Update; in.Etag, when set, guards it, and a guard
 // that fails rolls the whole batch back.
 func (b *gormBatch) UpdateMember(in *orgv1.Member, paths []string) {
-	r := &GormMemberRepository{DB: b.db}
+	r := &GormMemberRepository{DB: b.db, Store: b.stores.member}
 	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
@@ -1114,7 +1354,7 @@ func (b *gormBatch) UpdateMember(in *orgv1.Member, paths []string) {
 // gone is not an error: two batches clearing the same row must not fail each
 // other.
 func (b *gormBatch) DeleteMember(name string) {
-	r := &GormMemberRepository{DB: b.db}
+	r := &GormMemberRepository{DB: b.db, Store: b.stores.member}
 	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)
@@ -1132,7 +1372,7 @@ func (b *gormBatch) DeleteMember(name string) {
 
 // CreateOrganisation queues a create and returns the name the record will have.
 func (b *gormBatch) CreateOrganisation(in *orgv1.Organisation) (string, error) {
-	r := &GormOrganisationRepository{DB: b.db}
+	r := &GormOrganisationRepository{DB: b.db, Store: b.stores.organisation}
 	m, named, err := r.newRow(in)
 	if err != nil {
 		return "", err
@@ -1152,7 +1392,7 @@ func (b *gormBatch) CreateOrganisation(in *orgv1.Organisation) (string, error) {
 // UpdateOrganisation queues Update; in.Etag, when set, guards it, and a guard
 // that fails rolls the whole batch back.
 func (b *gormBatch) UpdateOrganisation(in *orgv1.Organisation, paths []string) {
-	r := &GormOrganisationRepository{DB: b.db}
+	r := &GormOrganisationRepository{DB: b.db, Store: b.stores.organisation}
 	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
@@ -1168,7 +1408,7 @@ func (b *gormBatch) UpdateOrganisation(in *orgv1.Organisation, paths []string) {
 // UpdateOrganisationWithOutputOnly queues UpdateWithOutputOnly; in.Etag, when
 // set, guards it, and a guard that fails rolls the whole batch back.
 func (b *gormBatch) UpdateOrganisationWithOutputOnly(in *orgv1.Organisation, paths, outputPaths []string) {
-	r := &GormOrganisationRepository{DB: b.db}
+	r := &GormOrganisationRepository{DB: b.db, Store: b.stores.organisation}
 	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
@@ -1183,7 +1423,7 @@ func (b *gormBatch) UpdateOrganisationWithOutputOnly(in *orgv1.Organisation, pat
 
 // UpdateOrganisationOutputOnly queues UpdateOutputOnly; in.Etag, when set, guards it.
 func (b *gormBatch) UpdateOrganisationOutputOnly(in *orgv1.Organisation, paths []string) {
-	r := &GormOrganisationRepository{DB: b.db}
+	r := &GormOrganisationRepository{DB: b.db, Store: b.stores.organisation}
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
 		return r.updateOutputOnlyTx(ctx, tx, in, paths)
 	})
@@ -1194,7 +1434,7 @@ func (b *gormBatch) UpdateOrganisationOutputOnly(in *orgv1.Organisation, paths [
 // gone is not an error: two batches clearing the same row must not fail each
 // other.
 func (b *gormBatch) DeleteOrganisation(name string) {
-	r := &GormOrganisationRepository{DB: b.db}
+	r := &GormOrganisationRepository{DB: b.db, Store: b.stores.organisation}
 	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)
@@ -1212,7 +1452,7 @@ func (b *gormBatch) DeleteOrganisation(name string) {
 
 // CreateUser queues a create and returns the name the record will have.
 func (b *gormBatch) CreateUser(in *orgv1.User) (string, error) {
-	r := &GormUserRepository{DB: b.db}
+	r := &GormUserRepository{DB: b.db, Store: b.stores.user}
 	m, named, err := r.newRow(in)
 	if err != nil {
 		return "", err
@@ -1223,7 +1463,7 @@ func (b *gormBatch) CreateUser(in *orgv1.User) (string, error) {
 	}
 	queueUserReferences(b.u, named, nil)
 	b.u.QueueGorm(locks, func(ctx context.Context, tx *gorm.DB) error {
-		return orgv1gorm.NewUserStore(tx).Create(ctx, m)
+		return r.store(tx).Create(ctx, m)
 	})
 	b.u.Record(repox.Change{Type: "org.v1/User", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
 	return named.GetName(), nil
@@ -1232,7 +1472,7 @@ func (b *gormBatch) CreateUser(in *orgv1.User) (string, error) {
 // UpdateUser queues Update; in.Etag, when set, guards it, and a guard
 // that fails rolls the whole batch back.
 func (b *gormBatch) UpdateUser(in *orgv1.User, paths []string) {
-	r := &GormUserRepository{DB: b.db}
+	r := &GormUserRepository{DB: b.db, Store: b.stores.user}
 	key, err := r.rowKey(in.GetName())
 	if err != nil {
 		b.u.Fail(err)
@@ -1249,7 +1489,7 @@ func (b *gormBatch) UpdateUser(in *orgv1.User, paths []string) {
 // gone is not an error: two batches clearing the same row must not fail each
 // other.
 func (b *gormBatch) DeleteUser(name string) {
-	r := &GormUserRepository{DB: b.db}
+	r := &GormUserRepository{DB: b.db, Store: b.stores.user}
 	key, err := r.rowKey(name)
 	if err != nil {
 		b.u.Fail(err)
