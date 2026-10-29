@@ -95,6 +95,20 @@ generate:
 			wantErr: "target: required",
 		},
 		{
+			name: "subgraph prefixes",
+			yaml: "graphql:\n  endpoint: http://x\n  root_field_prefix: aperio_\n  type_name_prefix: Aperio_\n",
+		},
+		{
+			name:    "root field prefix not a GraphQL name",
+			yaml:    "graphql:\n  endpoint: http://x\n  root_field_prefix: aperio-\n",
+			wantErr: "graphql.root_field_prefix",
+		},
+		{
+			name:    "type name prefix reserved",
+			yaml:    "graphql:\n  endpoint: http://x\n  type_name_prefix: __x\n",
+			wantErr: "graphql.type_name_prefix",
+		},
+		{
 			name:    "bad scalar form",
 			yaml:    "graphql:\n  endpoint: http://x\n  scalars: [\"UUID\"]\n",
 			wantErr: "Name=GoType form",

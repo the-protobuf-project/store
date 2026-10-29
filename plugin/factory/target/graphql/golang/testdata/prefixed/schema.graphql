@@ -1,0 +1,242 @@
+# Two DDN subgraphs in one supergraph, as `ddn supergraph build` composes
+# them: aperio (graphqlRootFieldPrefix aperio_, graphqlTypeNamePrefix Aperio_)
+# and other (other_, Other_). Both define the same tables, so every name
+# collides once a prefix is stripped. OrderBy and the built-in scalars are
+# shared and unprefixed. Each subgraph is ../hasura/schema.graphql with its
+# prefixes applied, as TestPrefixedSubgraphMatchesUnprefixed relies on.
+
+enum OrderBy {
+  ASC
+  DESC
+}
+
+enum Aperio_VenueKind {
+  VENUE_KIND_HALL
+  VENUE_KIND_ARENA
+}
+
+type Aperio_Venue {
+  id: ID!
+  "Human-readable name shown to guests."
+  displayName: String!
+  """
+  Maximum seated capacity.
+  Must be a positive integer.
+  """
+  capacity: Int
+  openAir: Boolean
+  kind: Aperio_VenueKind
+}
+
+type Aperio_VenueMutationResponse {
+  affectedRows: Int!
+  returning: [Aperio_Venue!]!
+}
+
+type Aperio_VenueAggregate {
+  count: Int!
+}
+
+input Aperio_StringComparisonExp {
+  _eq: String
+  _neq: String
+  _in: [String!]
+  _gt: String
+  _lt: String
+  _gte: String
+  _lte: String
+  _like: String
+}
+
+input Aperio_IntComparisonExp {
+  _eq: Int
+  _neq: Int
+  _in: [Int!]
+  _gt: Int
+  _lt: Int
+  _gte: Int
+  _lte: Int
+  _like: Int
+}
+
+input Aperio_BooleanComparisonExp {
+  _eq: Boolean
+  _neq: Boolean
+  _in: [Boolean!]
+  _gt: Boolean
+  _lt: Boolean
+  _gte: Boolean
+  _lte: Boolean
+  _like: Boolean
+}
+
+input Aperio_VenueKindComparisonExp {
+  _eq: Aperio_VenueKind
+  _neq: Aperio_VenueKind
+  _in: [Aperio_VenueKind!]
+  _gt: Aperio_VenueKind
+  _lt: Aperio_VenueKind
+  _gte: Aperio_VenueKind
+  _lte: Aperio_VenueKind
+  _like: Aperio_VenueKind
+}
+
+input Aperio_VenueBoolExp {
+  _and: [Aperio_VenueBoolExp!]
+  _or: [Aperio_VenueBoolExp!]
+  _not: Aperio_VenueBoolExp
+  id: Aperio_StringComparisonExp
+  displayName: Aperio_StringComparisonExp
+  capacity: Aperio_IntComparisonExp
+  openAir: Aperio_BooleanComparisonExp
+  kind: Aperio_VenueKindComparisonExp
+}
+
+input Aperio_VenueOrderByExp {
+  displayName: OrderBy
+  capacity: OrderBy
+}
+
+input Aperio_VenueInsertInput {
+  "Human-readable name shown to guests."
+  displayName: String!
+  capacity: Int
+  openAir: Boolean
+  kind: Aperio_VenueKind
+}
+
+input Aperio_VenueSetInput {
+  displayName: String
+  capacity: Int
+  openAir: Boolean
+}
+
+enum Other_VenueKind {
+  VENUE_KIND_HALL
+  VENUE_KIND_ARENA
+}
+
+type Other_Venue {
+  id: ID!
+  "Human-readable name shown to guests."
+  displayName: String!
+  """
+  Maximum seated capacity.
+  Must be a positive integer.
+  """
+  capacity: Int
+  openAir: Boolean
+  kind: Other_VenueKind
+}
+
+type Other_VenueMutationResponse {
+  affectedRows: Int!
+  returning: [Other_Venue!]!
+}
+
+type Other_VenueAggregate {
+  count: Int!
+}
+
+input Other_StringComparisonExp {
+  _eq: String
+  _neq: String
+  _in: [String!]
+  _gt: String
+  _lt: String
+  _gte: String
+  _lte: String
+  _like: String
+}
+
+input Other_IntComparisonExp {
+  _eq: Int
+  _neq: Int
+  _in: [Int!]
+  _gt: Int
+  _lt: Int
+  _gte: Int
+  _lte: Int
+  _like: Int
+}
+
+input Other_BooleanComparisonExp {
+  _eq: Boolean
+  _neq: Boolean
+  _in: [Boolean!]
+  _gt: Boolean
+  _lt: Boolean
+  _gte: Boolean
+  _lte: Boolean
+  _like: Boolean
+}
+
+input Other_VenueKindComparisonExp {
+  _eq: Other_VenueKind
+  _neq: Other_VenueKind
+  _in: [Other_VenueKind!]
+  _gt: Other_VenueKind
+  _lt: Other_VenueKind
+  _gte: Other_VenueKind
+  _lte: Other_VenueKind
+  _like: Other_VenueKind
+}
+
+input Other_VenueBoolExp {
+  _and: [Other_VenueBoolExp!]
+  _or: [Other_VenueBoolExp!]
+  _not: Other_VenueBoolExp
+  id: Other_StringComparisonExp
+  displayName: Other_StringComparisonExp
+  capacity: Other_IntComparisonExp
+  openAir: Other_BooleanComparisonExp
+  kind: Other_VenueKindComparisonExp
+}
+
+input Other_VenueOrderByExp {
+  displayName: OrderBy
+  capacity: OrderBy
+}
+
+input Other_VenueInsertInput {
+  "Human-readable name shown to guests."
+  displayName: String!
+  capacity: Int
+  openAir: Boolean
+  kind: Other_VenueKind
+}
+
+input Other_VenueSetInput {
+  displayName: String
+  capacity: Int
+  openAir: Boolean
+}
+
+type Query {
+  aperio_venues(where: Aperio_VenueBoolExp, orderBy: [Aperio_VenueOrderByExp!], limit: Int, offset: Int): [Aperio_Venue!]!
+  aperio_venuesById(id: ID!): Aperio_Venue
+  aperio_venuesAggregate(where: Aperio_VenueBoolExp): Aperio_VenueAggregate!
+  other_venues(where: Other_VenueBoolExp, orderBy: [Other_VenueOrderByExp!], limit: Int, offset: Int): [Other_Venue!]!
+  other_venuesById(id: ID!): Other_Venue
+  other_venuesAggregate(where: Other_VenueBoolExp): Other_VenueAggregate!
+}
+
+type Mutation {
+  aperio_insertVenues(objects: [Aperio_VenueInsertInput!]!): Aperio_VenueMutationResponse!
+  aperio_updateVenuesById(id: ID!, _set: Aperio_VenueSetInput, preCheck: Aperio_VenueBoolExp): Aperio_VenueMutationResponse
+  aperio_deleteVenuesById(id: ID!): Aperio_VenueMutationResponse
+  other_insertVenues(objects: [Other_VenueInsertInput!]!): Other_VenueMutationResponse!
+  other_updateVenuesById(id: ID!, _set: Other_VenueSetInput, preCheck: Other_VenueBoolExp): Other_VenueMutationResponse
+  other_deleteVenuesById(id: ID!): Other_VenueMutationResponse
+}
+
+type Subscription {
+  aperio_venues(where: Aperio_VenueBoolExp): [Aperio_Venue!]!
+  other_venues(where: Other_VenueBoolExp): [Other_Venue!]!
+}
+
+schema {
+  query: Query
+  mutation: Mutation
+  subscription: Subscription
+}

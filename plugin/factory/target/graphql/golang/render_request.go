@@ -76,7 +76,7 @@ func (r *renderer) expandFilter(a ir.Arg) []argSpec {
 			continue
 		}
 		s.parent = a.Name
-		s.parentType = a.Type.Base
+		s.parentType = r.names.Type(a.Type.Base)
 		out = append(out, s)
 	}
 	return out
@@ -86,22 +86,22 @@ func (r *renderer) specFor(a ir.Arg) argSpec {
 	base := a.Type.Base
 	switch {
 	case r.mapper.IsInput(base) && a.Type.List && r.isOrderBy(base):
-		return argSpec{role: roleOrder, goName: paramName(a.Name), goType: "[]graphql.OrderTerm", gqlType: listGQL(a), argName: a.Name}
+		return argSpec{role: roleOrder, goName: paramName(a.Name), goType: "[]graphql.OrderTerm", gqlType: r.wireType(a.Type), argName: a.Name}
 	case r.mapper.IsInput(base) && a.Type.List:
-		return argSpec{role: roleCreate, goName: "obj", goType: "CreateInput", gqlType: listGQL(a), argName: a.Name}
+		return argSpec{role: roleCreate, goName: "obj", goType: "CreateInput", gqlType: r.wireType(a.Type), argName: a.Name}
 	case r.isBoolExp(base):
-		return argSpec{role: rolePredicate, goName: paramName(a.Name), goType: "graphql.Predicate", gqlType: base, argName: a.Name}
+		return argSpec{role: rolePredicate, goName: paramName(a.Name), goType: "graphql.Predicate", gqlType: r.names.Type(base), argName: a.Name}
 	case r.mapper.IsInput(base) && r.containsBoolExp(base):
 		// A filter/aggregate wrapper (it nests a where BoolExp), not an update patch.
 		return argSpec{role: roleSkip}
 	case r.mapper.IsInput(base):
-		return argSpec{role: roleUpdate, goName: "patch", goType: "UpdateInput", gqlType: base, argName: a.Name}
+		return argSpec{role: roleUpdate, goName: "patch", goType: "UpdateInput", gqlType: r.names.Type(base), argName: a.Name}
 	case a.Type.List:
 		return argSpec{role: roleSkip}
 	case a.Type.NonNull:
-		return argSpec{role: roleScalar, goName: paramName(a.Name), goType: r.mapper.GoType(a.Type, qResource), gqlType: gqlType(a.Type), argName: a.Name}
+		return argSpec{role: roleScalar, goName: paramName(a.Name), goType: r.mapper.GoType(a.Type, qResource), gqlType: r.wireType(a.Type), argName: a.Name}
 	case r.isIntLeaf(base):
-		return argSpec{role: roleInt, goName: paramName(a.Name), goType: "int", gqlType: gqlType(a.Type), argName: a.Name}
+		return argSpec{role: roleInt, goName: paramName(a.Name), goType: "int", gqlType: r.wireType(a.Type), argName: a.Name}
 	default:
 		return argSpec{role: roleSkip}
 	}
@@ -113,15 +113,6 @@ func (r *renderer) isIntLeaf(base string) bool {
 		return true
 	}
 	return false
-}
-
-// listGQL renders the GraphQL list type for a list argument (e.g. "[InsertX!]").
-func listGQL(a ir.Arg) string {
-	elem := a.Type.Base
-	if a.Type.ElemNonNull {
-		elem += "!"
-	}
-	return "[" + elem + "]"
 }
 
 // optionalSpecs returns the specs that go into the request builder.

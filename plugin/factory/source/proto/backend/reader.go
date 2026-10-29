@@ -54,6 +54,10 @@ type Reader struct {
 	// repositories (the open-source posture).
 	gormModule    string
 	graphqlModule string
+	// graphqlRootFieldPrefix is the DDN subgraph's graphqlRootFieldPrefix,
+	// which the root fields the repository target names (the DDN reference
+	// plugin's mutations and by-id query) carry on the wire.
+	graphqlRootFieldPrefix string
 	// repositoryModule is the opensearch target's repository_module opt.
 	repositoryModule string
 }
@@ -76,6 +80,13 @@ func New(cfg *Config, goModule string, stores, telemetry, converters, filters bo
 // module paths (see the gorm_module / graphql_module plugin opts).
 func (r Reader) WithRepositoryModules(gormModule, graphqlModule string) Reader {
 	r.gormModule, r.graphqlModule = gormModule, graphqlModule
+	return r
+}
+
+// WithGraphQLRootFieldPrefix returns a copy of r carrying the repository
+// target's graphql_root_field_prefix opt.
+func (r Reader) WithGraphQLRootFieldPrefix(prefix string) Reader {
+	r.graphqlRootFieldPrefix = prefix
 	return r
 }
 
@@ -233,6 +244,9 @@ func (r Reader) Enrich(ir *protokit.IR) error {
 		db.Opts["filters"] = boolStr(r.filters)
 		db.Opts["gorm_module"] = r.gormModule
 		db.Opts["graphql_module"] = r.graphqlModule
+		if r.graphqlRootFieldPrefix != "" {
+			db.Opts["graphql_root_field_prefix"] = r.graphqlRootFieldPrefix
+		}
 		db.Opts["repository_module"] = r.repositoryModule
 		if r.cfg != nil && len(r.cfg.ReferenceServices) > 0 {
 			b, err := json.Marshal(r.cfg.ReferenceServices)

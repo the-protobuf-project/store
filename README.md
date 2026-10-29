@@ -838,6 +838,53 @@ runtime `graphql`/`runtime` import identifiers, the import is deterministically
 aliased (`gqlnet`/`rtnet`) and its references rewritten, so the output always
 compiles regardless of the source schema's naming.
 
+### One subgraph of a shared DDN engine
+
+Several apps can share one Hasura DDN engine whose supergraph holds a subgraph
+per app. Each subgraph's `subgraph.yaml` gives its GraphQL names a prefix, and
+the client of one app names that subgraph's prefixes in its `graphql:` block:
+
+```yaml
+# aperio/subgraph.yaml (DDN)
+definition:
+  name: aperio
+  generator:
+    graphqlRootFieldPrefix: aperio_
+    graphqlTypeNamePrefix: aperio_
+```
+
+```yaml
+# store.yaml
+graphql:
+  endpoint: http://localhost:3280/graphql
+  root_field_prefix: aperio_   # = graphqlRootFieldPrefix
+  type_name_prefix: aperio_    # = graphqlTypeNamePrefix
+```
+
+The ddn CLI prepends a prefix verbatim (no change of case) to every root field
+(`eventResource` → `aperio_eventResource`) and every type the subgraph defines:
+objects, inputs, enums, the connector's scalars, bool/order-by/aggregate
+expressions and mutation responses (`aperio_EventResourceBoolExp`,
+`aperio_Int32`). Field names, argument names and enum values keep theirs, as do
+the types no subgraph owns: the built-in scalars (`String`, `Int`, `Float`,
+`Boolean`, `ID`), the root operation types, and the globals subgraph's
+`OrderBy`.
+
+The target generates only the subgraph's root fields and types, plus the shared
+types they reach; every other subgraph is ignored. Go identifiers derive from
+the unprefixed names, so the client is the one an engine serving the subgraph
+alone would give — same packages, types and methods — and only the GraphQL
+text it sends (root fields, variable types like `$where:
+aperio_EventResourceBoolExp`) carries the prefixes. `scalars:` entries name
+scalars unprefixed. With no root-field prefix, the subgraph's root fields are
+the ones returning or taking its prefixed types. A prefix that matches nothing
+is an error, as is a stripped name colliding with a shared type. Both prefixes
+empty (the default) leaves the output unchanged. `dump_schema` writes the
+subgraph's part of the schema under its wire names.
+
+The repository target's DDN reference plugin config names root fields too: pass
+the same root-field prefix to it as the `graphql_root_field_prefix=` opt.
+
 ## Projections and search
 
 A **projection** is a table derived from other resources, kept current inside
@@ -1378,7 +1425,7 @@ datasources:
 | `strip_version` | bool | Drop a trailing API version from derived schema names — `bookstore.v1` → schema `bookstore` instead of `bookstore_v1`. Applies to resource-type-derived and config-derived schema names, **never** to an explicit `(entity.v1.datasource).schema` annotation. A per-rule `strip_version` overrides this default. |
 | `dedupe_schema_table` | bool | Rename a table whose name would stutter with its schema in a schema-qualified identifier (`booking` schema + `bookings` table → `bookingBookings` in tools that join schema+table, e.g. Hasura). The redundant leading schema word is stripped; for the schema's primary table — where stripping leaves nothing — the table is renamed to a generic word (`resource`, then `entity`, …). Only the generated table name changes; proto/model names are untouched. |
 | `telemetry` | map | **gorm only.** Tune the first-party telemetry instrumentation (see the [`telemetry` plugin opt](#plugin-options)). `enabled` (bool) overrides the opt's master switch. `metrics` (bool, default `true`) — set `false` to drop the per-operation ops counter/duration histogram tree-wide; narrow further per table with [`(telemetry.v1.telemetry).metrics`](#telemetryv1telemetry--message-level). `logs` (bool, default `true`) — set `false` to drop the telemetry adapter's trace-correlated error logging. |
-| `graphql` | map | Configures the [GraphQL source](#graphql-client-sdk): `endpoint` **xor** `schema` (a cached GraphQL SDL `.graphql` file), `admin_secret` (`env:VAR` or literal), `headers` (`Key: Value` list), `dialect` (default `hasura`), `max_depth`, `scalars` (`Name=GoType` list). Read by the `target=graphql` plugin entry. |
+| `graphql` | map | Configures the [GraphQL source](#graphql-client-sdk): `endpoint` **xor** `schema` (a cached GraphQL SDL `.graphql` file), `admin_secret` (`env:VAR` or literal), `headers` (`Key: Value` list), `dialect` (default `hasura`), `max_depth`, `scalars` (`Name=GoType` list), `root_field_prefix` / `type_name_prefix` (one [DDN subgraph's prefixes](#one-subgraph-of-a-shared-ddn-engine); default none). Read by the `target=graphql` plugin entry. |
 | `references` | list | Descriptor images (binary `FileDescriptorSet`s, e.g. `buf build buf.build/the-protobuf-project/rfc:<commit> -o rfc.binpb`) read **only** to discover the target of a `resource_reference` this run does not generate, so a reference into another module of the same server becomes a real foreign key. Nothing in them is generated. Paths are relative to where buf runs. The `references=a.binpb,b.binpb` plugin opt adds to it. |
 | `reference_services` | list | Deployment facts about resource types in other databases/services (see [Reference integrity](#reference-integrity)): `type` (AIP type), `get` (its AIP Get, `pkg.Service/GetThing`), `target` (gRPC dial target; `${ENV}` read at startup), `referrers` (this run's resource types that service refers to — it serves `store.v1.ReferenceService` for them), `database` (documentation). Rendered into `repox.ReferenceEndpoints` and the DDN plugin's config. |
 | `generate` | list | Per-target settings, keyed by `target`: `go_module`, `package`, `runtime_module`, `dump_schema` for the `graphql` target; the gorm knobs are set as plugin opts instead. buf owns each entry's output dir (`out:`), so it isn't set here. |
@@ -1471,6 +1518,7 @@ Passed via `opt:` in `buf.gen.yaml`.
 | `config` | Path to a [`store.yaml`](#configuration--ormyaml) layout config. |
 | `license_header` | Copyright/licence lines to place above the banner of every generated file — `\n`-separated, e.g. `license_header=Copyright 2026 Me.\nSPDX-License-Identifier: Apache-2.0`. Write them **without** comment markers: each target applies its own (`//` for Go, Prisma and TypeScript, `--` for SQL), so one value covers the whole output tree. Unset (the default) stamps nothing, because generated code belongs to whoever ran the generator, not to this plugin. |
 | `gorm_module` / `graphql_module` | **repository** (and `gorm_module` for **opensearch**): import paths of the generated gorm output and GraphQL client. |
+| `graphql_root_field_prefix` | **repository**: the DDN subgraph's `graphqlRootFieldPrefix` (the graphql target's `root_field_prefix`), carried by the root fields the DDN reference plugin's config names. Default none. |
 | `repository_module` | **opensearch only.** Import path of the generated repository output whose projections the indices copy. |
 | `references` | Comma-separated descriptor images for reference discovery, added to `store.yaml`'s [`references`](#top-level-keys). |
 | `M<proto>=<import>` | Go import-path mapping for a proto file, required when protos omit `option go_package`. |

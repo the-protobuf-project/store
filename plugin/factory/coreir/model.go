@@ -14,6 +14,7 @@ import (
 	"github.com/the-protobuf-project/protokit"
 	"github.com/the-protobuf-project/protokit/graphql/introspect"
 	"github.com/the-protobuf-project/protokit/graphql/ir"
+	"github.com/the-protobuf-project/store/plugin/factory/subgraph"
 )
 
 // Model is the unit of work handed from a Source to a Target. Exactly one facet
@@ -36,4 +37,9 @@ type Model struct {
 	// RawGraphQL is the introspection payload the GraphQL IR was built from,
 	// retained so `dump_schema` can persist the exact schema. Nil otherwise.
 	RawGraphQL *introspect.Schema
+	// GraphQLNames maps the bare names GraphQL carries back to their wire
+	// names, when the source was scoped to one prefixed subgraph of a shared
+	// engine (graphql.root_field_prefix / type_name_prefix). Nil otherwise:
+	// every name is its own wire name.
+	GraphQLNames *subgraph.Names
 }

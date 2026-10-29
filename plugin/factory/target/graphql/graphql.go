@@ -102,6 +102,7 @@ func (t *Target) Generate(_ factory.Ctx, m *coreir.Model, lang string) error {
 			Dialect:       t.cfg.Dialect,
 			Version:       t.cfg.Version,
 			Sink:          t.cfg.Sink,
+			Names:         m.GraphQLNames,
 		})
 	default:
 		return fmt.Errorf("graphql target: unsupported language %q (supported: %s)", lang, strings.Join(t.Languages(), ", "))

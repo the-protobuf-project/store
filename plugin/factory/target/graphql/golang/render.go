@@ -18,6 +18,7 @@ import (
 
 	"github.com/the-protobuf-project/protokit/graphql/dialect"
 	"github.com/the-protobuf-project/protokit/graphql/ir"
+	"github.com/the-protobuf-project/store/plugin/factory/subgraph"
 	"github.com/the-protobuf-project/store/plugin/factory/target/graphql/golang/selection"
 	"github.com/the-protobuf-project/store/plugin/factory/target/graphql/golang/typemap"
 )
@@ -56,6 +57,19 @@ type renderer struct {
 	mapper    *typemap.Mapper
 	selection *selection.Renderer
 	dialect   dialect.Dialect
+	// names maps the IR's bare names to the wire names the GraphQL text
+	// carries (root fields, variable types); nil when they are the same.
+	names *subgraph.Names
+}
+
+// wireField is the wire name of operation o's root field.
+func (r *renderer) wireField(o op) string { return r.names.RootField(o.Op.Name) }
+
+// wireType renders a variable's GraphQL type under wire names: ft as gqlType
+// writes it, its named type prefixed when the subgraph defines it.
+func (r *renderer) wireType(ft ir.FieldType) string {
+	ft.Base = r.names.Type(ft.Base)
+	return gqlType(ft)
 }
 
 // comparisonMarker is the field whose presence marks an input as a scalar

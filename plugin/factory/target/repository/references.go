@@ -267,7 +267,10 @@ func referenceServices(db *schema.Database) ([]referenceService, error) {
 // DDN reference plugin (ddn/ddnrefs) checks: inserts and updates that may set
 // an external reference, and every delete of a typed resource (the plugin
 // asks referrers only about types a reference_services: entry lists).
-func ddnMutations(s *schema.Schema, rs []*resource) []ddnrefs.Mutation {
+//
+// The names are wire names: root fields carry the subgraph's
+// graphql_root_field_prefix, as the requests the plugin sees and sends do.
+func ddnMutations(s *schema.Schema, rs []*resource, rootPrefix string) []ddnrefs.Mutation {
 	var out []ddnrefs.Mutation
 	for _, r := range rs {
 		model := clientModelName(s, r.Table)
@@ -280,13 +283,13 @@ func ddnMutations(s *schema.Schema, rs []*resource) []ddnrefs.Mutation {
 				})
 			}
 			out = append(out,
-				ddnrefs.Mutation{Field: "insert" + model, Kind: "insert", ResourceType: r.Type, References: refs},
-				ddnrefs.Mutation{Field: "update" + model + "ById", Kind: "update", ResourceType: r.Type, References: refs})
+				ddnrefs.Mutation{Field: rootPrefix + "insert" + model, Kind: "insert", ResourceType: r.Type, References: refs},
+				ddnrefs.Mutation{Field: rootPrefix + "update" + model + "ById", Kind: "update", ResourceType: r.Type, References: refs})
 		}
 		if r.Type != "" {
 			out = append(out, ddnrefs.Mutation{
-				Field: "delete" + model + "ById", Kind: "delete", ResourceType: r.Type,
-				Pattern: r.Pattern, KeyArgument: "keyId", ByIDQuery: naming.CamelFirst(model) + "ById",
+				Field: rootPrefix + "delete" + model + "ById", Kind: "delete", ResourceType: r.Type,
+				Pattern: r.Pattern, KeyArgument: "keyId", ByIDQuery: rootPrefix + naming.CamelFirst(model) + "ById",
 			})
 		}
 	}

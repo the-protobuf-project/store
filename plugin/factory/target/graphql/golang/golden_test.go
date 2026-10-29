@@ -4,8 +4,10 @@
 package golang_test
 
 // Golden test for the GraphQL-client renderer. Each directory under
-// testdata/ is a case with a schema.json (a GraphQL introspection payload); the
-// renderer's full output is compared byte-for-byte against <case>/golden/.
+// testdata/ is a case with a schema.graphql (GraphQL SDL); the renderer's full
+// output is compared byte-for-byte against <case>/golden/. A case with a
+// prefixes file (root_field_prefix=..., type_name_prefix=... lines) is scoped
+// to that DDN subgraph first, as the graphql source does.
 // This is the regression fence for the dialect refactor: capture the golden
 // from the pre-refactor renderer, then require the hasura dialect to reproduce
 // it exactly.
@@ -18,6 +20,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/the-protobuf-project/protokit/graphql/dialect"
@@ -25,6 +28,7 @@ import (
 	"github.com/the-protobuf-project/protokit/graphql/ir"
 	"github.com/the-protobuf-project/protokit/header"
 	"github.com/the-protobuf-project/store/plugin/factory/provenance"
+	"github.com/the-protobuf-project/store/plugin/factory/subgraph"
 	"github.com/the-protobuf-project/store/plugin/factory/target/graphql/golang"
 )
 
@@ -61,30 +65,8 @@ func TestGenerateGolden(t *testing.T) {
 		name := c.Name()
 		t.Run(name, func(t *testing.T) {
 			dir := filepath.Join("testdata", name)
-			raw, err := os.ReadFile(filepath.Join(dir, "schema.graphql"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			schema, err := introspect.ParseSDL("schema.graphql", string(raw))
-			if err != nil {
-				t.Fatalf("parse SDL: %v", err)
-			}
-			out := t.TempDir()
-			d := dialect.Default()
-			err = golang.Generate(golang.Options{
-				Schema:        ir.Build(schema, d),
-				OutDir:        out,
-				Package:       testPackage,
-				GoModule:      testGoModule,
-				RuntimeModule: testRuntimeModule,
-				MaxDepth:      1,
-				Dialect:       d,
-			})
-			if err != nil {
-				t.Fatalf("generate: %v", err)
-			}
 			goldenDir := filepath.Join(dir, "golden")
-			got := collect(t, filepath.Join(out, testPackage))
+			got := generateCase(t, dir)
 			if *update {
 				writeGolden(t, goldenDir, got)
 				return
@@ -93,6 +75,85 @@ func TestGenerateGolden(t *testing.T) {
 			compare(t, want, got)
 		})
 	}
+}
+
+// generateCase renders case dir's schema.graphql, scoped by its prefixes file
+// when it has one, and returns the generated files.
+func generateCase(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(dir, "schema.graphql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema, err := introspect.ParseSDL("schema.graphql", string(raw))
+	if err != nil {
+		t.Fatalf("parse SDL: %v", err)
+	}
+	root, typ := casePrefixes(t, dir)
+	scoped, err := subgraph.Scope(schema, root, typ)
+	if err != nil {
+		t.Fatalf("scope: %v", err)
+	}
+	out := t.TempDir()
+	d := dialect.Default()
+	err = golang.Generate(golang.Options{
+		Schema:        ir.Build(scoped.Bare, d),
+		OutDir:        out,
+		Package:       testPackage,
+		GoModule:      testGoModule,
+		RuntimeModule: testRuntimeModule,
+		MaxDepth:      1,
+		Dialect:       d,
+		Names:         scoped.Names,
+	})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	return collect(t, filepath.Join(out, testPackage))
+}
+
+// casePrefixes reads a case's prefixes file; both empty when it has none.
+func casePrefixes(t *testing.T, dir string) (root, typ string) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(dir, "prefixes"))
+	if os.IsNotExist(err) {
+		return "", ""
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		key, value, _ := strings.Cut(strings.TrimSpace(line), "=")
+		switch key {
+		case "root_field_prefix":
+			root = value
+		case "type_name_prefix":
+			typ = value
+		}
+	}
+	return root, typ
+}
+
+// The prefixed case is the hasura case twice over, as two prefixed subgraphs
+// of one engine. Scoped to one of them, the client must be the hasura client:
+// the same files and Go identifiers, with only the GraphQL wire names (root
+// fields and variable types, in strings and the comments quoting them)
+// carrying the prefixes. Removing them must give the hasura golden exactly.
+func TestPrefixedSubgraphMatchesUnprefixed(t *testing.T) {
+	got := generateCase(t, filepath.Join("testdata", "prefixed"))
+	want := collect(t, filepath.Join("testdata", "hasura", "golden"))
+	wire := 0
+	for rel, content := range got {
+		wire += strings.Count(content, `"aperio_`) + strings.Count(content, "Aperio_")
+		if strings.Contains(content, "other_") || strings.Contains(content, "Other_") {
+			t.Errorf("%s: the other subgraph's names leaked into the client", rel)
+		}
+		got[rel] = strings.NewReplacer(`"aperio_`, `"`, "Aperio_", "").Replace(content)
+	}
+	if wire == 0 {
+		t.Fatal("no wire name carries a prefix")
+	}
+	compare(t, want, got)
 }
 
 // collect walks root and returns a map of relative path -> file contents.

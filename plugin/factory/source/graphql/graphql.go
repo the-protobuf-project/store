@@ -20,6 +20,7 @@ import (
 	"github.com/the-protobuf-project/protokit/graphql/introspect"
 	"github.com/the-protobuf-project/protokit/graphql/ir"
 	"github.com/the-protobuf-project/store/plugin/factory/coreir"
+	"github.com/the-protobuf-project/store/plugin/factory/subgraph"
 )
 
 // Config selects the introspection input and conventions for a GraphQL build.
@@ -35,6 +36,11 @@ type Config struct {
 	Headers []string
 	// Dialect supplies engine conventions; defaults to dialect.Default().
 	Dialect dialect.Dialect
+	// RootFieldPrefix and TypeNamePrefix scope a shared engine's schema to one
+	// subgraph: its DDN graphqlRootFieldPrefix and graphqlTypeNamePrefix. Empty
+	// leaves the schema whole (see the subgraph package).
+	RootFieldPrefix string
+	TypeNamePrefix  string
 }
 
 // Source builds the GraphQL IR from an endpoint or cached schema.
@@ -51,15 +57,21 @@ func New(cfg Config) *Source {
 // Name identifies this source in the registry and config.
 func (s *Source) Name() string { return "graphql" }
 
-// Build loads the introspection schema and normalizes it to the IR.
+// Build loads the introspection schema, scopes it to the configured subgraph
+// (a no-op without prefixes), and normalizes it to the IR under bare names.
 func (s *Source) Build(_ factory.Ctx) (*coreir.Model, error) {
 	schema, err := s.loadSchema()
 	if err != nil {
 		return nil, err
 	}
+	scoped, err := subgraph.Scope(schema, s.cfg.RootFieldPrefix, s.cfg.TypeNamePrefix)
+	if err != nil {
+		return nil, err
+	}
 	return &coreir.Model{
-		GraphQL:    ir.Build(schema, s.cfg.Dialect),
-		RawGraphQL: schema,
+		GraphQL:      ir.Build(scoped.Bare, s.cfg.Dialect),
+		RawGraphQL:   scoped.Wire,
+		GraphQLNames: scoped.Names,
 	}, nil
 }
 

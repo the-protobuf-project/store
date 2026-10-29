@@ -57,6 +57,6 @@ func (r *renderer) opMethod(recv string, o op) string {
 	fmt.Fprintf(&b, "// batch commits. Queue it with svc.Mutation.Tx().Add(...) to commit several mutations atomically.\n")
 	fmt.Fprintf(&b, "func (h *%s) %sOp(%s) runtime.BatchOp {\n", recv, o.Name, r.opParams(o))
 	b.WriteString(r.argsBlock(o))
-	fmt.Fprintf(&b, "\treturn runtime.BatchOp{Field: %q, Args: args, Result: result}\n}\n", o.Op.Name)
+	fmt.Fprintf(&b, "\treturn runtime.BatchOp{Field: %q, Args: args, Result: result}\n}\n", r.wireField(o))
 	return b.String()
 }

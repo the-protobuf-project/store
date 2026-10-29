@@ -16,15 +16,18 @@ import (
 )
 
 // NewGraphQLSource builds the GraphQL source from an endpoint (or cached SDL/JSON
-// schema file), the auth secret + headers, and the dialect. Returned as the
+// schema file), the auth secret + headers, the dialect, and the subgraph's
+// root-field and type-name prefixes (empty: the whole schema). Returned as the
 // factory.Source[*coreir.Model] interface so callers need not import the graphql source package.
-func NewGraphQLSource(endpoint, schemaFile, adminSecret string, headers []string, d dialect.Dialect) factory.Source[*coreir.Model] {
+func NewGraphQLSource(endpoint, schemaFile, adminSecret string, headers []string, d dialect.Dialect, rootFieldPrefix, typeNamePrefix string) factory.Source[*coreir.Model] {
 	return graphql.New(graphql.Config{
-		Endpoint:    endpoint,
-		SchemaFile:  schemaFile,
-		AdminSecret: adminSecret,
-		Headers:     headers,
-		Dialect:     d,
+		Endpoint:        endpoint,
+		SchemaFile:      schemaFile,
+		AdminSecret:     adminSecret,
+		Headers:         headers,
+		Dialect:         d,
+		RootFieldPrefix: rootFieldPrefix,
+		TypeNamePrefix:  typeNamePrefix,
 	})
 }
 

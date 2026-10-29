@@ -19,10 +19,10 @@ func (r *renderer) iface(name, doc string, ops []op) string {
 	fmt.Fprintf(&b, "// %s\ntype %s interface {\n", doc, name)
 	for _, o := range ops {
 		if o.FindOne {
-			fmt.Fprintf(&b, "\t// %s runs the %q query and returns the first match, or nil if none.\n\t%s\n", o.Name, o.Op.Name, r.signature(o))
+			fmt.Fprintf(&b, "\t// %s runs the %q query and returns the first match, or nil if none.\n\t%s\n", o.Name, r.wireField(o), r.signature(o))
 			continue
 		}
-		fmt.Fprintf(&b, "\t// %s runs the %q %s.\n\t%s\n", o.Name, o.Op.Name, o.Op.Kind, r.signature(o))
+		fmt.Fprintf(&b, "\t// %s runs the %q %s.\n\t%s\n", o.Name, r.wireField(o), o.Op.Kind, r.signature(o))
 		if sig := r.updateIfMatchSig(o); sig != "" {
 			fmt.Fprintf(&b, "\t// %sIfMatch runs %s guarded by an optimistic-concurrency precondition (e.g.\n\t// Etag.Eq(prev)), returning graphql.ErrConflict when no row matched.\n\t%s\n", o.Name, o.Name, sig)
 		}
@@ -101,12 +101,12 @@ func (r *renderer) method(recv string, o op) string {
 	b.WriteString(r.argsBlock(o))
 	switch o.Op.Kind {
 	case "subscription":
-		fmt.Fprintf(&b, "\treturn h.gql.SubscribeFields(ctx, %q, &out, args)\n}\n", o.Op.Name)
+		fmt.Fprintf(&b, "\treturn h.gql.SubscribeFields(ctx, %q, &out, args)\n}\n", r.wireField(o))
 		return b.String()
 	case "mutation":
-		fmt.Fprintf(&b, "\tres := <-h.gql.MutateFields(ctx, %q, &out, args)\n", o.Op.Name)
+		fmt.Fprintf(&b, "\tres := <-h.gql.MutateFields(ctx, %q, &out, args)\n", r.wireField(o))
 	default:
-		fmt.Fprintf(&b, "\tres := <-h.gql.QueryFields(ctx, %q, &out, args)\n", o.Op.Name)
+		fmt.Fprintf(&b, "\tres := <-h.gql.QueryFields(ctx, %q, &out, args)\n", r.wireField(o))
 	}
 	b.WriteString("\treturn out, res.Error\n}\n")
 	return b.String()
@@ -123,7 +123,7 @@ func (r *renderer) findOneMethod(recv string, o op) string {
 	if lt := limitGQLType(r.classify(o)); lt != "" {
 		fmt.Fprintf(&b, "\targs[\"limit\"] = graphql.VarPtr(1, %q)\n", lt)
 	}
-	fmt.Fprintf(&b, "\tres := <-h.gql.QueryFields(ctx, %q, &out, args)\n", o.Op.Name)
+	fmt.Fprintf(&b, "\tres := <-h.gql.QueryFields(ctx, %q, &out, args)\n", r.wireField(o))
 	b.WriteString("\tif res.Error != nil {\n\t\treturn nil, res.Error\n\t}\n")
 	b.WriteString("\tif len(out) == 0 {\n\t\treturn nil, nil\n\t}\n")
 	b.WriteString("\treturn &out[0], nil\n}\n")

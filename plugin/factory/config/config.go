@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -49,6 +50,17 @@ type GraphQL struct {
 	Dialect     string   `yaml:"dialect"`
 	MaxDepth    *int     `yaml:"max_depth"`
 	Scalars     []string `yaml:"scalars"`
+
+	// RootFieldPrefix and TypeNamePrefix pick one subgraph out of a DDN engine
+	// whose supergraph holds several: the subgraph.yaml's
+	// definition.generator.graphqlRootFieldPrefix and graphqlTypeNamePrefix.
+	// Only that subgraph's root fields and types (and the shared types they
+	// reach) are generated, under Go names derived from the unprefixed GraphQL
+	// names; the GraphQL text sent carries the prefixes. Scalars entries name
+	// scalars unprefixed. Both empty (the default): the whole schema, as
+	// before.
+	RootFieldPrefix string `yaml:"root_field_prefix"`
+	TypeNamePrefix  string `yaml:"type_name_prefix"`
 }
 
 // GenerateEntry is one target invocation in the `generate:` list.
@@ -114,6 +126,10 @@ func langOK(t factory.Target[*coreir.Model], lang string) bool {
 	return false
 }
 
+// graphqlName matches a valid GraphQL name prefix: a GraphQL Name
+// ([_A-Za-z][_0-9A-Za-z]*) that does not start with the reserved "__".
+var graphqlName = regexp.MustCompile(`^(?:[A-Za-z][_0-9A-Za-z]*|_[0-9A-Za-z][_0-9A-Za-z]*|_)$`)
+
 // Validate checks the config against the registered sources/targets and the
 // dialect registry, returning all problems joined into one error (nil if valid).
 func (c *Config) Validate(reg *factory.Registry[*coreir.Model]) error {
@@ -141,6 +157,11 @@ func (c *Config) Validate(reg *factory.Registry[*coreir.Model]) error {
 		for i, h := range g.Headers {
 			if !strings.Contains(h, ":") {
 				add("graphql.headers[%d]: %q must be in 'Key: Value' form", i, h)
+			}
+		}
+		for _, p := range [][2]string{{"root_field_prefix", g.RootFieldPrefix}, {"type_name_prefix", g.TypeNamePrefix}} {
+			if p[1] != "" && !graphqlName.MatchString(p[1]) {
+				add("graphql.%s: %q is not a GraphQL name prefix (letters, digits and _, not starting with a digit or __)", p[0], p[1])
 			}
 		}
 	}

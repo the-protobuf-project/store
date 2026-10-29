@@ -140,6 +140,10 @@ func main() {
 	graphqlModule := flags.String("graphql_module", "",
 		"repository target only: Go import path of the generated GraphQL client the "+
 			"graphql repository adapters compose; empty emits gorm-only repositories")
+	graphqlRootFieldPrefix := flags.String("graphql_root_field_prefix", "",
+		"repository target only: the DDN subgraph's graphqlRootFieldPrefix (as the graphql "+
+			"target's root_field_prefix), carried by the root fields the DDN reference plugin "+
+			"config names; empty for an unprefixed subgraph")
 	repositoryModule := flags.String("repository_module", "",
 		"opensearch target only: Go import path of the generated repository output whose "+
 			"projections (store.v1.projection) the OpenSearch indices copy")
@@ -192,6 +196,7 @@ func main() {
 		// buf selects exactly one target via opt: [target=...] and owns the output dir.
 		reader := backend.New(cfg, *goModule, *stores, *telemetry, *converters, *filters).
 			WithRepositoryModules(*gormModule, *graphqlModule).
+			WithGraphQLRootFieldPrefix(*graphqlRootFieldPrefix).
 			WithSearchModules(*repositoryModule)
 		reg := wire.Registry(
 			protokit.Options{Target: *target, Strict: *strict, Version: v, References: referenceImages(cfg, *references)},
@@ -268,7 +273,7 @@ func runGraphQL(p *protogen.Plugin, configPath, goModuleOpt, version string) err
 
 	// Construct the graphql source and target through wire so main imports neither
 	// same-named graphql package (see wire/graphqlsource.go, graphqltarget.go).
-	source := wire.NewGraphQLSource(g.Endpoint, g.Schema, secret, g.Headers, dl)
+	source := wire.NewGraphQLSource(g.Endpoint, g.Schema, secret, g.Headers, dl, g.RootFieldPrefix, g.TypeNamePrefix)
 	target := wire.NewGraphQLTarget(entry.Package, goModule, entry.RuntimeModule, version, maxDepth, parseScalars(g.Scalars), dl, sink)
 
 	model, err := source.Build(factory.Ctx{})

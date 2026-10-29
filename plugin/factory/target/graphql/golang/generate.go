@@ -20,6 +20,7 @@ import (
 	"github.com/the-protobuf-project/protokit/graphql/ir"
 	"github.com/the-protobuf-project/protokit/header"
 	"github.com/the-protobuf-project/store/plugin/factory/provenance"
+	"github.com/the-protobuf-project/store/plugin/factory/subgraph"
 	"github.com/the-protobuf-project/store/plugin/factory/target/graphql/golang/selection"
 	"github.com/the-protobuf-project/store/plugin/factory/target/graphql/golang/typemap"
 )
@@ -38,6 +39,10 @@ type Options struct {
 	Scalars       map[string]string // GraphQL scalar -> Go type overrides
 	Dialect       dialect.Dialect   // engine conventions; defaults to dialect.Default()
 	Version       string            // plugin version stamped into generated banners
+	// Names maps the Schema's bare names back to the wire names of a prefixed
+	// DDN subgraph (see the subgraph package); nil when they are the same. Go
+	// identifiers derive from the bare names, GraphQL text from the wire ones.
+	Names *subgraph.Names
 
 	// Sink, when set, receives each generated file as (path relative to the
 	// package root, formatted content) instead of writing to OutDir on disk. The
@@ -89,6 +94,7 @@ func Generate(opts Options) error {
 			mapper:    mapper,
 			selection: selection.New(opts.Schema, mapper, opts.MaxDepth, qModels),
 			dialect:   opts.Dialect,
+			names:     opts.Names,
 		},
 	}
 	g.plan()

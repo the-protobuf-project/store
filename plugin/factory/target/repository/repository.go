@@ -159,7 +159,7 @@ func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 			}
 			if dbGraphQLModule(db) != "" {
 				ddnDB = db
-				ddnMuts = append(ddnMuts, ddnMutations(s, sortedResources(s, resources))...)
+				ddnMuts = append(ddnMuts, ddnMutations(s, sortedResources(s, resources), db.Opt("graphql_root_field_prefix"))...)
 				gqlViews, needs, err := gqlResourceViews(pb, db, s, resources, gormViews)
 				if err != nil {
 					return err
