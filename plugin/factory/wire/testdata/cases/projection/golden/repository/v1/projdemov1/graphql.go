@@ -204,18 +204,21 @@ func (r *GraphQLBookingRepository) count(ctx context.Context, in repox.ListInput
 }
 
 // facet is Facet over scope, counted from the matching rows, at most
-// repox.GraphQLScanLimit of them.
+// repox.GraphQLScanLimit of them (more fail with repox.ErrInvalidArgument, as
+// count's do). A field reached through another table -- a value object's, a
+// join table's -- is counted from that table's rows the matching rows reach
+// (repox.FacetVia).
 func (r *GraphQLBookingRepository) facet(ctx context.Context, in repox.ListInput, field string, limit int, scope ...graphql.Predicate) ([]repox.Bucket, error) {
 	spec := projdemov1gorm.BookingFilterSpec
 	if _, err := repox.FacetExpr(spec, field); err != nil {
 		return nil, err
 	}
-	if f, ok := spec.Fields[field]; ok && f.Via != nil {
-		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
-	}
 	eng, conds, err := r.engine(in, scope...)
 	if err != nil {
 		return nil, err
+	}
+	if f, ok := spec.Fields[field]; ok && f.Via != nil {
+		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
 	}
 	counts := map[string]int64{}
 	if err := r.scan(ctx, eng, conds, func(row *bookingsql.ProjdemoV1Bookings) {
@@ -566,18 +569,21 @@ func (r *GraphQLRoomRepository) count(ctx context.Context, in repox.ListInput, s
 }
 
 // facet is Facet over scope, counted from the matching rows, at most
-// repox.GraphQLScanLimit of them.
+// repox.GraphQLScanLimit of them (more fail with repox.ErrInvalidArgument, as
+// count's do). A field reached through another table -- a value object's, a
+// join table's -- is counted from that table's rows the matching rows reach
+// (repox.FacetVia).
 func (r *GraphQLRoomRepository) facet(ctx context.Context, in repox.ListInput, field string, limit int, scope ...graphql.Predicate) ([]repox.Bucket, error) {
 	spec := projdemov1gorm.RoomFilterSpec
 	if _, err := repox.FacetExpr(spec, field); err != nil {
 		return nil, err
 	}
-	if f, ok := spec.Fields[field]; ok && f.Via != nil {
-		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
-	}
 	eng, conds, err := r.engine(in, scope...)
 	if err != nil {
 		return nil, err
+	}
+	if f, ok := spec.Fields[field]; ok && f.Via != nil {
+		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
 	}
 	counts := map[string]int64{}
 	if err := r.scan(ctx, eng, conds, func(row *roomsql.ProjdemoV1Rooms) {

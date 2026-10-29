@@ -234,18 +234,35 @@ func (r *GraphQLBookingRepository) count(ctx context.Context, in repox.ListInput
 }
 
 // facet is Facet over scope, counted from the matching rows, at most
-// repox.GraphQLScanLimit of them.
+// repox.GraphQLScanLimit of them (more fail with repox.ErrInvalidArgument, as
+// count's do). A field reached through another table -- a value object's, a
+// join table's -- is counted from that table's rows the matching rows reach
+// (repox.FacetVia).
 func (r *GraphQLBookingRepository) facet(ctx context.Context, in repox.ListInput, field string, limit int, scope ...graphql.Predicate) ([]repox.Bucket, error) {
 	spec := stayv1.BookingFilterSpec
 	if _, err := repox.FacetExpr(spec, field); err != nil {
 		return nil, err
 	}
-	if f, ok := spec.Fields[field]; ok && f.Via != nil {
-		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
-	}
 	eng, conds, err := r.engine(in, scope...)
 	if err != nil {
 		return nil, err
+	}
+	if f, ok := spec.Fields[field]; ok && f.Via != nil {
+		var refs []string
+		if err := r.scan(ctx, eng, conds, func(row *bookingsql.StayV1Bookings) {
+			if ref := repox.ViaRef(spec, field, repox.RowMap(row)); ref != "" {
+				refs = append(refs, ref)
+			}
+		}); err != nil {
+			return nil, err
+		}
+		counts, err := repox.FacetVia(ctx, spec, field, refs, func(ctx context.Context, keys []string) ([]map[string]any, error) {
+			return r.viaRows(ctx, field, keys)
+		})
+		if err != nil {
+			return nil, err
+		}
+		return repox.SortBuckets(counts, limit), nil
 	}
 	counts := map[string]int64{}
 	if err := r.scan(ctx, eng, conds, func(row *bookingsql.StayV1Bookings) {
@@ -256,6 +273,27 @@ func (r *GraphQLBookingRepository) facet(ctx context.Context, in repox.ListInput
 		return nil, err
 	}
 	return repox.SortBuckets(counts, limit), nil
+}
+
+// viaRows reads the rows of the table field is reached through (filterx.Via)
+// whose key is one of keys, as maps (repox.RowMap): what a facet by field
+// counts.
+func (r *GraphQLBookingRepository) viaRows(ctx context.Context, field string, keys []string) ([]map[string]any, error) {
+	head, _, _ := strings.Cut(field, ".")
+	var out []map[string]any
+	switch head {
+	case "note":
+		rows, err := r.Svc.Query.StayV1.Notes.List(ctx, notesql.List().Where(notesql.Id.In(keys...)))
+		if err != nil {
+			return nil, mapGraphQLErr(err)
+		}
+		for i := range rows {
+			out = append(out, repox.RowMap(&rows[i]))
+		}
+	default:
+		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
+	}
+	return out, nil
 }
 
 // scan calls f for every row eng matches under conds, failing past

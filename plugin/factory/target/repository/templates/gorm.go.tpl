@@ -797,6 +797,11 @@ func (r *Gorm{{.Model}}Repository) Delete(ctx context.Context, name string) erro
 			return err
 		}
 	}
+	{{- if .JoinReferencedSQL}}
+	if err := r.refuseJoined(ctx, r.DB, key, name); err != nil {
+		return err
+	}
+	{{- end}}
 	{{- if .SoftDelete}}
 	_, err = r.purge(ctx, r.DB, key, name, true)
 	return repox.MapGormErr(err)
@@ -810,6 +815,28 @@ func (r *Gorm{{.Model}}Repository) Delete(ctx context.Context, name string) erro
 	return repox.MapGormErr(r.store(r.DB).DeleteByID(ctx, existing.{{.PKField}}))
 	{{- end}}
 }
+{{- if .JoinReferencedSQL}}
+
+// refuseJoined refuses to delete the row found by key (rowKey), named name,
+// through db while a join table's row names it (repox.ReferencedByJoin), as
+// a singular reference's constraint refuses it: the join's key would
+// cascade, taking the record out of the repeated reference.
+func (r *Gorm{{.Model}}Repository) refuseJoined(ctx context.Context, db *gorm.DB, key, name string) error {
+	var referenced bool
+	if err := db.WithContext(ctx).Raw({{.LowerModel}}JoinReferencedSQL, key).Scan(&referenced).Error; err != nil {
+		return repox.MapGormErr(err)
+	}
+	if referenced {
+		return repox.ReferencedByJoin({{printf "%q" .Type}}, name)
+	}
+	return nil
+}
+
+// {{.LowerModel}}JoinReferencedSQL asks whether a join table's row, its
+// owner deleted or not, still names the {{.Model}} row with the given key
+// (rowKey).
+const {{.LowerModel}}JoinReferencedSQL = `{{.JoinReferencedSQL}}`
+{{- end}}
 {{- if .HasVOs}}
 
 // purgeTx removes the row found by key (rowKey) inside tx, with the
@@ -1073,6 +1100,11 @@ func (b *gormBatch) {{if .SoftDelete}}Purge{{else}}Delete{{end}}{{.Model}}(name 
 	{{- else if .HasVOs}}
 	queue{{.Model}}Delete(b.u, name, true)
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
+		{{- if .JoinReferencedSQL}}
+		if err := r.refuseJoined(ctx, tx, key, name); err != nil {
+			return err
+		}
+		{{- end}}
 		if err := r.purgeTx(ctx, tx, key); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
@@ -1081,6 +1113,11 @@ func (b *gormBatch) {{if .SoftDelete}}Purge{{else}}Delete{{end}}{{.Model}}(name 
 	{{- else}}
 	queue{{.Model}}Delete(b.u, name, true)
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
+		{{- if .JoinReferencedSQL}}
+		if err := r.refuseJoined(ctx, tx, key, name); err != nil {
+			return err
+		}
+		{{- end}}
 		return tx.WithContext(ctx).Delete(&{{$.GormPkg}}.{{.Model}}{}, "{{.KeyColumn}} = ?", key).Error
 	})
 	{{- end}}

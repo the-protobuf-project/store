@@ -70,6 +70,9 @@ func (r *GormBookRepository) store(db *gorm.DB) catalog.BookStoreIface {
 // bookFiledUnderJoin is the join table keeping Book.filed_under: one row per element.
 var bookFiledUnderJoin = repox.Join{Field: "filed_under", Table: `"catalog"."book_filed_under"`, Key: "id", Owner: "book_id", Target: "shelf_id", Name: "", TargetTable: `"catalog"."shelves"`, TargetKey: "id", TargetName: "", Collection: "shelves"}
 
+// bookGenresJoin is the join table keeping Book.genres: one row per element.
+var bookGenresJoin = repox.Join{Field: "genres", Table: `"catalog"."book_genres"`, Key: "id", Owner: "book_id", Target: "genre_id", Name: "", TargetTable: `"catalog"."genres"`, TargetKey: "id", TargetName: "", Collection: "genres"}
+
 // Create persists in under parent and returns the stored record.
 func (r *GormBookRepository) Create(ctx context.Context, parent string, in *catalogv1.Book) (*catalogv1.Book, error) {
 	parentIDs, err := repox.SplitName(parent, "shelves")
@@ -160,6 +163,7 @@ func (r *GormBookRepository) toProto(ctx context.Context, m *catalog.Book, joine
 		}
 	}
 	out.FiledUnder = joined["filed_under"][m.ID]
+	out.Genres = joined["genres"][m.ID]
 	if h := r.Hooks.AfterRead; h != nil {
 		if err := h(ctx, out); err != nil {
 			return nil, err
@@ -321,6 +325,13 @@ func (r *GormBookRepository) readJoins(ctx context.Context, db *gorm.DB, mask []
 		}
 		joined["filed_under"] = got
 	}
+	if repox.Reads(mask, "genres") {
+		got, err := bookGenresJoin.Read(ctx, db, keys)
+		if err != nil {
+			return nil, repox.MapGormErr(err)
+		}
+		joined["genres"] = got
+	}
 	return joined, nil
 }
 
@@ -395,6 +406,7 @@ func (r *GormBookRepository) updateTx(ctx context.Context, tx *gorm.DB, key stri
 		return err
 	}
 	existingPB.FiledUnder = joined["filed_under"][id]
+	existingPB.Genres = joined["genres"][id]
 	merged := proto.Clone(existingPB).(*catalogv1.Book)
 	applyBookMask(merged, in, paths)
 	repox.CopyFields(merged, in, outputPaths)
@@ -415,6 +427,11 @@ func (r *GormBookRepository) updateTx(ctx context.Context, tx *gorm.DB, key stri
 	}
 	if repox.InMask(paths, "filed_under") {
 		if err := bookFiledUnderJoin.Write(ctx, tx, id, merged.GetFiledUnder()); err != nil {
+			return err
+		}
+	}
+	if repox.InMask(paths, "genres") {
+		if err := bookGenresJoin.Write(ctx, tx, id, merged.GetGenres()); err != nil {
 			return err
 		}
 	}
@@ -506,6 +523,9 @@ func (r *GormBookRepository) insertTx(ctx context.Context, tx *gorm.DB, in *cata
 		return err
 	}
 	if err := bookFiledUnderJoin.Write(ctx, tx, id, in.GetFiledUnder()); err != nil {
+		return err
+	}
+	if err := bookGenresJoin.Write(ctx, tx, id, in.GetGenres()); err != nil {
 		return err
 	}
 	return nil
@@ -617,7 +637,7 @@ func (r *GormBookRepository) purge(ctx context.Context, db *gorm.DB, key, name s
 
 // bookReferencedSQL asks whether any row, deleted or not, still
 // holds a foreign key to the Book row with the given key (rowKey).
-const bookReferencedSQL = `SELECT EXISTS (SELECT 1 FROM "catalog"."pages" r0 WHERE r0."book_id" = t."id") OR EXISTS (SELECT 1 FROM "lending"."loans" r1 WHERE r1."book" = t."name") FROM "catalog"."books" t WHERE t."name" = ?`
+const bookReferencedSQL = `SELECT EXISTS (SELECT 1 FROM "catalog"."pages" r0 WHERE r0."book_id" = t."id") OR EXISTS (SELECT 1 FROM "catalog"."shelf_featured" r1 WHERE r1."book_id" = t."id") OR EXISTS (SELECT 1 FROM "lending"."loans" r2 WHERE r2."book" = t."name") FROM "catalog"."books" t WHERE t."name" = ?`
 
 // PurgeExpired removes for good every deleted record whose expire_time is at
 // or before now, keeping the ones something still refers to (see purge).
@@ -671,6 +691,342 @@ func (r *GormBookRepository) ListByKeys(ctx context.Context, field string, keys 
 
 // Compile-time proof the adapter satisfies the interface.
 var _ BookRepository = (*GormBookRepository)(nil)
+
+// GormGenreRepository is the GORM adapter of GenreRepository: flat
+// CRUD over the generated model, store, converters, and filterx spec. Exported
+// fields and helpers are the Tier-2 seam — embed it and override whole methods
+// for behavior the schema cannot express; generated methods only call private
+// helpers, never the public interface, so overrides never re-enter generated
+// code.
+type GormGenreRepository struct {
+	DB    *gorm.DB
+	Hooks GenreHooks
+	// Refs, when set, is asked before a purge whether anything in another
+	// database or service still refers to the record (see Purge).
+	Refs *repox.References
+	// ListOverrides substitute the generated dispatch for single filter fields
+	// (e.g. a derived state computed via subqueries).
+	ListOverrides map[string]filterx.SQLHandler
+	// Store, when set, builds the store the adapter writes and reads
+	// through over db -- DB, or the transaction a write runs in: a decorator
+	// (a read-through cache, an instrumented store) over
+	// catalog.NewGenreStore(db). Nil uses that store as it is.
+	Store func(db *gorm.DB) catalog.GenreStoreIface
+}
+
+// NewGormGenreRepository returns the GORM adapter bound to db.
+func NewGormGenreRepository(db *gorm.DB) *GormGenreRepository {
+	return &GormGenreRepository{DB: db}
+}
+
+// store is the store over db the adapter goes through (see Store).
+func (r *GormGenreRepository) store(db *gorm.DB) catalog.GenreStoreIface {
+	if r.Store != nil {
+		return r.Store(db)
+	}
+	return catalog.NewGenreStore(db)
+}
+
+// Create persists in and returns the stored record.
+func (r *GormGenreRepository) Create(ctx context.Context, in *catalogv1.Genre) (*catalogv1.Genre, error) {
+	id := repox.NewULID()
+	if in.GetName() != "" {
+		ids, err := repox.SplitName(in.GetName(), "genres")
+		if err != nil {
+			return nil, err
+		}
+		id = ids[len(ids)-1]
+	}
+	in = proto.Clone(in).(*catalogv1.Genre)
+	in.Name = FormatGenreName(id)
+	if h := r.Hooks.BeforeCreate; h != nil {
+		if err := h(ctx, in); err != nil {
+			return nil, err
+		}
+	}
+	m := catalog.GenreFromProto(in)
+	m.ID = id
+	m.Name = in.GetName()
+	if err := r.store(r.DB).Create(ctx, m); err != nil {
+		return nil, repox.MapGormErr(err)
+	}
+	return r.get(ctx, id)
+}
+
+// Get returns the record addressed by its resource name.
+func (r *GormGenreRepository) Get(ctx context.Context, name string) (*catalogv1.Genre, error) {
+	key, err := r.rowKey(name)
+	if err != nil {
+		return nil, err
+	}
+	return r.get(ctx, key)
+}
+
+// rowKey validates name and returns what its row is found by: the bare id.
+func (r *GormGenreRepository) rowKey(name string) (string, error) {
+	ids, err := repox.SplitName(name, "genres")
+	if err != nil {
+		return "", err
+	}
+	return ids[len(ids)-1], nil
+}
+
+// get loads by row key (rowKey) — the private read every generated method
+// re-reads through, so Tier-2 overrides of Get never re-enter generated writes.
+func (r *GormGenreRepository) get(ctx context.Context, key string) (*catalogv1.Genre, error) {
+	if r.Store != nil {
+		// One row: read through the store, so a decorator (a read-through
+		// cache) serves it.
+		m, err := r.Store(r.DB).GetByID(ctx, key)
+		if err != nil {
+			return nil, repox.MapGormErr(err)
+		}
+		return r.toProto(ctx, m)
+	}
+	var m catalog.Genre
+	if err := r.DB.WithContext(ctx).First(&m, "id = ?", key).Error; err != nil {
+		return nil, repox.MapGormErr(err)
+	}
+	return r.toProto(ctx, &m)
+}
+
+// toProto converts a loaded row, decorating reference names and running the
+// AfterRead hook.
+func (r *GormGenreRepository) toProto(ctx context.Context, m *catalog.Genre) (*catalogv1.Genre, error) {
+	out := catalog.GenreToProto(m)
+	if h := r.Hooks.AfterRead; h != nil {
+		if err := h(ctx, out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// List returns one page of records.
+func (r *GormGenreRepository) List(ctx context.Context, in repox.ListInput) ([]*catalogv1.Genre, string, error) {
+	return r.list(ctx, r.DB, in)
+}
+
+// Count returns how many records match in; its page fields are ignored.
+func (r *GormGenreRepository) Count(ctx context.Context, in repox.ListInput) (int64, error) {
+	return r.count(ctx, r.DB, in)
+}
+
+// Facet counts the records matching in by the values of field; see
+// repox.FacetExpr for the fields it takes.
+func (r *GormGenreRepository) Facet(ctx context.Context, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	return r.facet(ctx, r.DB, in, field, limit)
+}
+
+// filtered narrows scope to the records in's filter (and ShowDeleted)
+// selects, unpaged: what Count and Facet read.
+func (r *GormGenreRepository) filtered(ctx context.Context, scope *gorm.DB, in repox.ListInput) (*gorm.DB, error) {
+	conds, err := filterx.Parse(in.Filter)
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	eng := filterx.Gorm[catalog.Genre](catalog.GenreFilterSpec)
+	for f, h := range r.ListOverrides {
+		eng.Override(f, h)
+	}
+	where, args, err := eng.Where(append(conds, in.Where...))
+	if err != nil {
+		return nil, repox.MapFilterxErr(err)
+	}
+	q := scope.WithContext(ctx).Model(&catalog.Genre{})
+	if where != "" {
+		q = q.Where(where, args...)
+	}
+	return q, nil
+}
+
+// count is Count over scope.
+func (r *GormGenreRepository) count(ctx context.Context, scope *gorm.DB, in repox.ListInput) (int64, error) {
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	return n, repox.MapGormErr(q.Count(&n).Error)
+}
+
+// facet is Facet over scope.
+func (r *GormGenreRepository) facet(ctx context.Context, scope *gorm.DB, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	expr, err := repox.FacetExpr(catalog.GenreFilterSpec, field)
+	if err != nil {
+		return nil, err
+	}
+	q, err := r.filtered(ctx, scope, in)
+	if err != nil {
+		return nil, err
+	}
+	return repox.FacetGorm(ctx, q, expr, limit)
+}
+
+func (r *GormGenreRepository) list(ctx context.Context, scope *gorm.DB, in repox.ListInput) ([]*catalogv1.Genre, string, error) {
+	conds, err := filterx.Parse(in.Filter)
+	if err != nil {
+		return nil, "", repox.MapFilterxErr(err)
+	}
+	conds = append(conds, in.Where...)
+	eng := filterx.Gorm[catalog.Genre](catalog.GenreFilterSpec)
+	for f, h := range r.ListOverrides {
+		eng.Override(f, h)
+	}
+	if err := repox.CheckReadMask((*catalogv1.Genre)(nil), in.ReadMask); err != nil {
+		return nil, "", err
+	}
+	rows, next, err := eng.List(ctx, r.reads(scope, in), filterx.ListInput{
+		PageSize:  in.PageSize,
+		PageToken: in.PageToken,
+		OrderBy:   in.OrderBy,
+		Filter:    conds,
+	})
+	if err != nil {
+		return nil, "", repox.MapFilterxErr(err)
+	}
+	items := make([]*catalogv1.Genre, 0, len(rows))
+	for i := range rows {
+		out, err := r.toProto(ctx, &rows[i])
+		if err != nil {
+			return nil, "", err
+		}
+		repox.Narrow(out, in.ReadMask)
+		items = append(items, out)
+	}
+	return items, next, nil
+}
+
+// reads is the query a List reads rows through: every column and value object
+// without a read mask; with one, only the columns and value objects of the
+// fields it names, and the columns the page is sorted by.
+func (r *GormGenreRepository) reads(db *gorm.DB, in repox.ListInput) *gorm.DB {
+	if len(in.ReadMask) == 0 {
+		return db
+	}
+	if omit := repox.Unread(genreColumns, in.ReadMask, repox.OrderColumns(catalog.GenreFilterSpec, in.OrderBy)...); len(omit) > 0 {
+		db = db.Omit(omit...)
+	}
+	return db
+}
+
+// genreColumns are the row's columns by the field each stores, for
+// a read mask to leave out.
+var genreColumns = map[string][]string{
+	"display_name": {"display_name"},
+}
+
+// Update persists the masked fields of in; an empty mask replaces every
+// mutable field. The write happens in one transaction guarded by in.Etag.
+func (r *GormGenreRepository) Update(ctx context.Context, in *catalogv1.Genre, paths []string) (*catalogv1.Genre, error) {
+	key, err := r.rowKey(in.GetName())
+	if err != nil {
+		return nil, err
+	}
+	err = r.DB.Transaction(func(tx *gorm.DB) error { return r.updateTx(ctx, tx, key, in, paths, nil) })
+	if err != nil {
+		return nil, repox.MapGormErr(err)
+	}
+	return r.get(ctx, key)
+}
+
+// updateTx is Update's write inside tx, which a Batch shares with other
+// writes. The row is read FOR UPDATE: a concurrent update of the same record
+// waits for this transaction and then sees the etag it wrote, so two writers
+// holding the same etag cannot both pass the guard. outputPaths names the
+// server-owned fields written alongside (UpdateWithOutputOnly); nil for Update.
+func (r *GormGenreRepository) updateTx(ctx context.Context, tx *gorm.DB, key string, in *catalogv1.Genre, paths, outputPaths []string) error {
+	var existing catalog.Genre
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "id = ?", key).Error; err != nil {
+		return err
+	}
+	id := existing.ID
+	_ = id
+	existingPB := catalog.GenreToProto(&existing)
+	merged := proto.Clone(existingPB).(*catalogv1.Genre)
+	applyGenreMask(merged, in, paths)
+	if h := r.Hooks.BeforeUpdate; h != nil {
+		if err := h(ctx, existingPB, merged, paths); err != nil {
+			return err
+		}
+	}
+	next := catalog.GenreFromProto(merged)
+	_ = next
+	existing.Name = next.Name
+	existing.DisplayName = next.DisplayName
+	return r.store(tx).Update(ctx, &existing)
+}
+
+// newRow builds the row a Batch inserts for in, and the
+// record it stands for, named: the same resolution Create applies.
+func (r *GormGenreRepository) newRow(in *catalogv1.Genre) (*catalog.Genre, *catalogv1.Genre, error) {
+	id := repox.NewULID()
+	if in.GetName() != "" {
+		ids, err := repox.SplitName(in.GetName(), "genres")
+		if err != nil {
+			return nil, nil, err
+		}
+		id = ids[len(ids)-1]
+	}
+	in = proto.Clone(in).(*catalogv1.Genre)
+	in.Name = FormatGenreName(id)
+	m := catalog.GenreFromProto(in)
+	m.ID = id
+	m.Name = in.GetName()
+	return m, in, nil
+}
+
+// Delete removes the record addressed by its resource name.
+func (r *GormGenreRepository) Delete(ctx context.Context, name string) error {
+	key, err := r.rowKey(name)
+	if err != nil {
+		return err
+	}
+	if h := r.Hooks.BeforeDelete; h != nil {
+		if err := h(ctx, name); err != nil {
+			return err
+		}
+	}
+	if err := r.refuseJoined(ctx, r.DB, key, name); err != nil {
+		return err
+	}
+	var existing catalog.Genre
+	if err := r.DB.WithContext(ctx).First(&existing, "id = ?", key).Error; err != nil {
+		return repox.MapGormErr(err)
+	}
+	return repox.MapGormErr(r.store(r.DB).DeleteByID(ctx, existing.ID))
+}
+
+// refuseJoined refuses to delete the row found by key (rowKey), named name,
+// through db while a join table's row names it (repox.ReferencedByJoin), as
+// a singular reference's constraint refuses it: the join's key would
+// cascade, taking the record out of the repeated reference.
+func (r *GormGenreRepository) refuseJoined(ctx context.Context, db *gorm.DB, key, name string) error {
+	var referenced bool
+	if err := db.WithContext(ctx).Raw(genreJoinReferencedSQL, key).Scan(&referenced).Error; err != nil {
+		return repox.MapGormErr(err)
+	}
+	if referenced {
+		return repox.ReferencedByJoin("catalog.example.com/Genre", name)
+	}
+	return nil
+}
+
+// genreJoinReferencedSQL asks whether a join table's row, its
+// owner deleted or not, still names the Genre row with the given key
+// (rowKey).
+const genreJoinReferencedSQL = `SELECT EXISTS (SELECT 1 FROM "catalog"."book_genres" r0 WHERE r0."genre_id" = t."id") FROM "catalog"."genres" t WHERE t."id" = ?`
+
+// ListByKeys reads every record whose filter field field is one of keys; see
+// repox.ListByKeys.
+func (r *GormGenreRepository) ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*catalogv1.Genre, error) {
+	return repox.ListByKeys(ctx, field, keys, in, func(ctx context.Context, in repox.ListInput) ([]*catalogv1.Genre, string, error) {
+		return r.List(ctx, in)
+	})
+}
+
+// Compile-time proof the adapter satisfies the interface.
+var _ GenreRepository = (*GormGenreRepository)(nil)
 
 // GormPageRepository is the GORM adapter of PageRepository: flat
 // CRUD over the generated model, store, converters, and filterx spec. Exported
@@ -1594,7 +1950,7 @@ func (r *GormShelfRepository) purge(ctx context.Context, db *gorm.DB, key, name 
 
 // shelfReferencedSQL asks whether any row, deleted or not, still
 // holds a foreign key to the Shelf row with the given key (rowKey).
-const shelfReferencedSQL = `SELECT EXISTS (SELECT 1 FROM "catalog"."books" r0 WHERE r0."shelf_id" = t."id") OR EXISTS (SELECT 1 FROM "catalog"."pages" r1 WHERE r1."shelf_id" = t."id") FROM "catalog"."shelves" t WHERE t."id" = ?`
+const shelfReferencedSQL = `SELECT EXISTS (SELECT 1 FROM "catalog"."book_filed_under" r0 WHERE r0."shelf_id" = t."id") OR EXISTS (SELECT 1 FROM "catalog"."books" r1 WHERE r1."shelf_id" = t."id") OR EXISTS (SELECT 1 FROM "catalog"."pages" r2 WHERE r2."shelf_id" = t."id") FROM "catalog"."shelves" t WHERE t."id" = ?`
 
 // PurgeExpired removes for good every deleted record whose expire_time is at
 // or before now, keeping the ones something still refers to (see purge).
@@ -1759,6 +2115,61 @@ func (b *gormBatch) PurgeBook(name string) {
 		return nil
 	})
 	b.u.Record(repox.Change{Type: "catalog.example.com/Book", Name: name, Op: repox.ChangePurge, LoadPrior: repox.PriorOf(name, getBook)})
+}
+
+// CreateGenre queues a create and returns the name the record will have.
+func (b *gormBatch) CreateGenre(in *catalogv1.Genre) (string, error) {
+	r := &GormGenreRepository{DB: b.db, Store: b.stores.genre}
+	m, named, err := r.newRow(in)
+	if err != nil {
+		return "", err
+	}
+	var locks []string
+	if k, ok := any(m).(interface{ NoOverlapKeys() []string }); ok {
+		locks = k.NoOverlapKeys()
+	}
+	queueGenreReferences(b.u, named, nil)
+	b.u.QueueGorm(locks, func(ctx context.Context, tx *gorm.DB) error {
+		return r.store(tx).Create(ctx, m)
+	})
+	b.u.Record(repox.Change{Type: "catalog.example.com/Genre", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
+	return named.GetName(), nil
+}
+
+// UpdateGenre queues Update; in.Etag, when set, guards it, and a guard
+// that fails rolls the whole batch back.
+func (b *gormBatch) UpdateGenre(in *catalogv1.Genre, paths []string) {
+	r := &GormGenreRepository{DB: b.db, Store: b.stores.genre}
+	key, err := r.rowKey(in.GetName())
+	if err != nil {
+		b.u.Fail(err)
+		return
+	}
+	queueGenreReferences(b.u, in, paths)
+	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
+		return r.updateTx(ctx, tx, key, in, paths, nil)
+	})
+	b.u.Record(repox.Change{Type: "catalog.example.com/Genre", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getGenre)})
+}
+
+// DeleteGenre queues the record's removal for good. A record already
+// gone is not an error: two batches clearing the same row must not fail each
+// other.
+func (b *gormBatch) DeleteGenre(name string) {
+	r := &GormGenreRepository{DB: b.db, Store: b.stores.genre}
+	key, err := r.rowKey(name)
+	if err != nil {
+		b.u.Fail(err)
+		return
+	}
+	queueGenreDelete(b.u, name, true)
+	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
+		if err := r.refuseJoined(ctx, tx, key, name); err != nil {
+			return err
+		}
+		return tx.WithContext(ctx).Delete(&catalog.Genre{}, "id = ?", key).Error
+	})
+	b.u.Record(repox.Change{Type: "catalog.example.com/Genre", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getGenre)})
 }
 
 // CreatePage queues a create and returns the name the record will have.

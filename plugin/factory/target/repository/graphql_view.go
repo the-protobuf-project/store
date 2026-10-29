@@ -89,6 +89,12 @@ type gqlResourceView struct {
 	// ViaLookups let the list engine filter through the value objects the row
 	// points at (filterx.HasuraEngine.Via).
 	ViaLookups []viaLookup
+	// GQLReferrers are the foreign keys of this database into the resource's
+	// table (referrerFK) a purge asks first, as the GORM adapter's
+	// ReferencedSQL does: one whose action cascades or sets null would not
+	// refuse the delete (graphql_referrers.go.tpl). Without soft delete, the
+	// join tables' keys a Delete asks, as JoinReferencedSQL.
+	GQLReferrers []gqlReferrer
 
 	// Deep value-object graph fragments (graph_gql.go); empty without one.
 	HasDeep             bool
@@ -117,6 +123,54 @@ type gqlParentLookup struct {
 	NameField                string // the name column's predicate field, e.g. "Name"
 	KeyField                 string // the row's key field, e.g. "Id"
 	Func                     string // the lookups' base name, e.g. "rateplanResource"
+}
+
+// gqlReferrer is one foreign key into a resource's table that a GraphQL purge
+// asks about: does a row of From, deleted or not, hold the record's key?
+// Its function lives in the referring schema's graphql_referrers_<schema>.go,
+// the only file importing that table's client package.
+type gqlReferrer struct {
+	Domain, Resource, ResPkg string
+	DomPkg                   string // the referring schema's client package
+	Field                    string // the referring column's predicate field
+	Table                    string // schema.table.column, for the comment
+	Func                     string // e.g. "catalogFixedPackageSpacesHoldsSpaceId"
+	Value                    string // what purge holds the key in: "id" or "name"
+}
+
+// gqlReferrersOf lists the referrers of r a GraphQL purge can ask -- or with
+// joinsOnly, a delete of a resource without soft delete: the join tables'
+// rows (referrerFK.Join) -- those of db (its client), whose key is the
+// record's id or name; any other is left to the constraint.
+func gqlReferrersOf(db *schema.Database, r *resource, joinsOnly bool) []gqlReferrer {
+	var out []gqlReferrer
+	seen := map[string]bool{}
+	for _, f := range r.ReferencedBy {
+		if f.DB != db || f.From == nil || (joinsOnly && !f.Join) {
+			continue
+		}
+		val := ""
+		switch {
+		case r.Cols.PK != nil && f.RefColumn == r.Cols.PK.Name:
+			val = "id"
+		case f.RefColumn == nameColumn(r):
+			val = "name"
+		default:
+			continue
+		}
+		nm := gqlNamesOf(f.From)
+		field := export(camel(f.Column))
+		fn := naming.CamelFirst(nm.Domain+nm.Resource) + "Holds" + field
+		if seen[fn] {
+			continue
+		}
+		seen[fn] = true
+		out = append(out, gqlReferrer{
+			Domain: nm.Domain, Resource: nm.Resource, ResPkg: nm.ResPkg, DomPkg: nm.DomPkg,
+			Field: field, Table: f.Schema + "." + f.Table + "." + f.Column, Func: fn, Value: val,
+		})
+	}
+	return out
 }
 
 // parentLookupOf is the lookup of nested ancestor table t.
@@ -335,7 +389,9 @@ func gqlResourceViews(pb *pbIndex, db *schema.Database, s *schema.Schema, resour
 				v.ParentLookups = append(v.ParentLookups, *j.Lookup)
 			}
 		}
+		v.ViaLookups = lastViaLookups(v.ViaLookups)
 		v.PKInputField = export(camel(r.Cols.PK.Name))
+		v.GQLReferrers = gqlReferrersOf(db, r, !v.SoftDelete)
 		gg := graphGQLFragments(pb, r)
 		if len(r.Graph) > 0 {
 			v.HasDeep = true
@@ -965,6 +1021,23 @@ func enumValuesPrefixed(e *protogen.Enum, prefix string) bool {
 // viaLookup is one value object the GraphQL list engine can filter through:
 // the reference field the filter spec names it by and the client handler of
 // its table.
+// lastViaLookups keeps the last lookup of each field, in order: the one the
+// list engine ends up with (HasuraEngine.Via replaces), and the only one a
+// facet's switch over the fields may name.
+func lastViaLookups(ls []viaLookup) []viaLookup {
+	last := map[string]int{}
+	for i, l := range ls {
+		last[l.Field] = i
+	}
+	var out []viaLookup
+	for i, l := range ls {
+		if last[l.Field] == i {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
 type viaLookup struct {
 	Field    string // e.g. "start"
 	Domain   string

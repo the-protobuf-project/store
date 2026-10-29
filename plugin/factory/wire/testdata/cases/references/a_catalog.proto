@@ -82,6 +82,30 @@ message Book {
     (google.api.field_behavior) = OPTIONAL,
     (google.api.resource_reference) = {type: "catalog.example.com/Shelf"}
   ];
+
+  // The book's genres: a repeated reference to a resource deleted outright
+  // (no soft delete), which a delete refuses while a book names it.
+  repeated string genres = 7 [
+    (google.api.field_behavior) = OPTIONAL,
+    (google.api.resource_reference) = {type: "catalog.example.com/Genre"}
+  ];
+}
+
+// A genre books are classed under: deleted outright, with no soft delete.
+message Genre {
+  option (google.api.resource) = {
+    type: "catalog.example.com/Genre"
+    pattern: "genres/{genre}"
+    singular: "genre"
+    plural: "genres"
+  };
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
+
+  // The genre's resource name.
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  // The genre as it is shown.
+  string display_name = 2 [(google.api.field_behavior) = REQUIRED];
 }
 
 // A page of a book: nested two deep, so the row it hangs off is a nested

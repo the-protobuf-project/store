@@ -334,18 +334,35 @@ func (r *GraphQLMemberRepository) count(ctx context.Context, in repox.ListInput,
 }
 
 // facet is Facet over scope, counted from the matching rows, at most
-// repox.GraphQLScanLimit of them.
+// repox.GraphQLScanLimit of them (more fail with repox.ErrInvalidArgument, as
+// count's do). A field reached through another table -- a value object's, a
+// join table's -- is counted from that table's rows the matching rows reach
+// (repox.FacetVia).
 func (r *GraphQLMemberRepository) facet(ctx context.Context, in repox.ListInput, field string, limit int, scope ...graphql.Predicate) ([]repox.Bucket, error) {
 	spec := orgv1gorm.MemberFilterSpec
 	if _, err := repox.FacetExpr(spec, field); err != nil {
 		return nil, err
 	}
-	if f, ok := spec.Fields[field]; ok && f.Via != nil {
-		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
-	}
 	eng, conds, err := r.engine(in, scope...)
 	if err != nil {
 		return nil, err
+	}
+	if f, ok := spec.Fields[field]; ok && f.Via != nil {
+		var refs []string
+		if err := r.scan(ctx, eng, conds, func(row *membersql.OrgV1Members) {
+			if ref := repox.ViaRef(spec, field, repox.RowMap(row)); ref != "" {
+				refs = append(refs, ref)
+			}
+		}); err != nil {
+			return nil, err
+		}
+		counts, err := repox.FacetVia(ctx, spec, field, refs, func(ctx context.Context, keys []string) ([]map[string]any, error) {
+			return r.viaRows(ctx, field, keys)
+		})
+		if err != nil {
+			return nil, err
+		}
+		return repox.SortBuckets(counts, limit), nil
 	}
 	counts := map[string]int64{}
 	if err := r.scan(ctx, eng, conds, func(row *membersql.OrgV1Members) {
@@ -356,6 +373,35 @@ func (r *GraphQLMemberRepository) facet(ctx context.Context, in repox.ListInput,
 		return nil, err
 	}
 	return repox.SortBuckets(counts, limit), nil
+}
+
+// viaRows reads the rows of the table field is reached through (filterx.Via)
+// whose key is one of keys, as maps (repox.RowMap): what a facet by field
+// counts.
+func (r *GraphQLMemberRepository) viaRows(ctx context.Context, field string, keys []string) ([]map[string]any, error) {
+	head, _, _ := strings.Cut(field, ".")
+	var out []map[string]any
+	switch head {
+	case "window":
+		rows, err := r.Svc.Query.OrgV1.TimeWindows.List(ctx, timewindowsql.List().Where(timewindowsql.Id.In(keys...)))
+		if err != nil {
+			return nil, mapGraphQLErr(err)
+		}
+		for i := range rows {
+			out = append(out, repox.RowMap(&rows[i]))
+		}
+	case "date_range":
+		rows, err := r.Svc.Query.OrgV1.DateStretches.List(ctx, datestretchesql.List().Where(datestretchesql.Id.In(keys...)))
+		if err != nil {
+			return nil, mapGraphQLErr(err)
+		}
+		for i := range rows {
+			out = append(out, repox.RowMap(&rows[i]))
+		}
+	default:
+		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
+	}
+	return out, nil
 }
 
 // scan calls f for every row eng matches under conds, failing past
@@ -895,18 +941,35 @@ func (r *GraphQLOrganisationRepository) count(ctx context.Context, in repox.List
 }
 
 // facet is Facet over scope, counted from the matching rows, at most
-// repox.GraphQLScanLimit of them.
+// repox.GraphQLScanLimit of them (more fail with repox.ErrInvalidArgument, as
+// count's do). A field reached through another table -- a value object's, a
+// join table's -- is counted from that table's rows the matching rows reach
+// (repox.FacetVia).
 func (r *GraphQLOrganisationRepository) facet(ctx context.Context, in repox.ListInput, field string, limit int, scope ...graphql.Predicate) ([]repox.Bucket, error) {
 	spec := orgv1gorm.OrganisationFilterSpec
 	if _, err := repox.FacetExpr(spec, field); err != nil {
 		return nil, err
 	}
-	if f, ok := spec.Fields[field]; ok && f.Via != nil {
-		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
-	}
 	eng, conds, err := r.engine(in, scope...)
 	if err != nil {
 		return nil, err
+	}
+	if f, ok := spec.Fields[field]; ok && f.Via != nil {
+		var refs []string
+		if err := r.scan(ctx, eng, conds, func(row *organisationsql.OrgV1Organisations) {
+			if ref := repox.ViaRef(spec, field, repox.RowMap(row)); ref != "" {
+				refs = append(refs, ref)
+			}
+		}); err != nil {
+			return nil, err
+		}
+		counts, err := repox.FacetVia(ctx, spec, field, refs, func(ctx context.Context, keys []string) ([]map[string]any, error) {
+			return r.viaRows(ctx, field, keys)
+		})
+		if err != nil {
+			return nil, err
+		}
+		return repox.SortBuckets(counts, limit), nil
 	}
 	counts := map[string]int64{}
 	if err := r.scan(ctx, eng, conds, func(row *organisationsql.OrgV1Organisations) {
@@ -917,6 +980,27 @@ func (r *GraphQLOrganisationRepository) facet(ctx context.Context, in repox.List
 		return nil, err
 	}
 	return repox.SortBuckets(counts, limit), nil
+}
+
+// viaRows reads the rows of the table field is reached through (filterx.Via)
+// whose key is one of keys, as maps (repox.RowMap): what a facet by field
+// counts.
+func (r *GraphQLOrganisationRepository) viaRows(ctx context.Context, field string, keys []string) ([]map[string]any, error) {
+	head, _, _ := strings.Cut(field, ".")
+	var out []map[string]any
+	switch head {
+	case "hq":
+		rows, err := r.Svc.Query.OrgV1.Locations.List(ctx, locationsql.List().Where(locationsql.Id.In(keys...)))
+		if err != nil {
+			return nil, mapGraphQLErr(err)
+		}
+		for i := range rows {
+			out = append(out, repox.RowMap(&rows[i]))
+		}
+	default:
+		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
+	}
+	return out, nil
 }
 
 // scan calls f for every row eng matches under conds, failing past
@@ -1412,18 +1496,21 @@ func (r *GraphQLUserRepository) count(ctx context.Context, in repox.ListInput, s
 }
 
 // facet is Facet over scope, counted from the matching rows, at most
-// repox.GraphQLScanLimit of them.
+// repox.GraphQLScanLimit of them (more fail with repox.ErrInvalidArgument, as
+// count's do). A field reached through another table -- a value object's, a
+// join table's -- is counted from that table's rows the matching rows reach
+// (repox.FacetVia).
 func (r *GraphQLUserRepository) facet(ctx context.Context, in repox.ListInput, field string, limit int, scope ...graphql.Predicate) ([]repox.Bucket, error) {
 	spec := orgv1gorm.UserFilterSpec
 	if _, err := repox.FacetExpr(spec, field); err != nil {
 		return nil, err
 	}
-	if f, ok := spec.Fields[field]; ok && f.Via != nil {
-		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
-	}
 	eng, conds, err := r.engine(in, scope...)
 	if err != nil {
 		return nil, err
+	}
+	if f, ok := spec.Fields[field]; ok && f.Via != nil {
+		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
 	}
 	counts := map[string]int64{}
 	if err := r.scan(ctx, eng, conds, func(row *usersql.OrgV1Users) {

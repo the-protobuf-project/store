@@ -138,7 +138,10 @@ type Book struct {
 	ExpireTime *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=expire_time,json=expireTime,proto3" json:"expire_time,omitempty"`
 	// Shelves the book is also filed under: a repeated reference to a
 	// top-level resource, kept in a join table by the shelves' ids.
-	FiledUnder    []string `protobuf:"bytes,6,rep,name=filed_under,json=filedUnder,proto3" json:"filed_under,omitempty"`
+	FiledUnder []string `protobuf:"bytes,6,rep,name=filed_under,json=filedUnder,proto3" json:"filed_under,omitempty"`
+	// The book's genres: a repeated reference to a resource deleted outright
+	// (no soft delete), which a delete refuses while a book names it.
+	Genres        []string `protobuf:"bytes,7,rep,name=genres,proto3" json:"genres,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -215,6 +218,68 @@ func (x *Book) GetFiledUnder() []string {
 	return nil
 }
 
+func (x *Book) GetGenres() []string {
+	if x != nil {
+		return x.Genres
+	}
+	return nil
+}
+
+// A genre books are classed under: deleted outright, with no soft delete.
+type Genre struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The genre's resource name.
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// The genre as it is shown.
+	DisplayName   string `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Genre) Reset() {
+	*x = Genre{}
+	mi := &file_refdemo_catalog_v1_catalog_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Genre) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Genre) ProtoMessage() {}
+
+func (x *Genre) ProtoReflect() protoreflect.Message {
+	mi := &file_refdemo_catalog_v1_catalog_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Genre.ProtoReflect.Descriptor instead.
+func (*Genre) Descriptor() ([]byte, []int) {
+	return file_refdemo_catalog_v1_catalog_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *Genre) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *Genre) GetDisplayName() string {
+	if x != nil {
+		return x.DisplayName
+	}
+	return ""
+}
+
 // A page of a book: nested two deep, so the row it hangs off is a nested
 // resource's, found by its name.
 type Page struct {
@@ -229,7 +294,7 @@ type Page struct {
 
 func (x *Page) Reset() {
 	*x = Page{}
-	mi := &file_refdemo_catalog_v1_catalog_proto_msgTypes[2]
+	mi := &file_refdemo_catalog_v1_catalog_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -241,7 +306,7 @@ func (x *Page) String() string {
 func (*Page) ProtoMessage() {}
 
 func (x *Page) ProtoReflect() protoreflect.Message {
-	mi := &file_refdemo_catalog_v1_catalog_proto_msgTypes[2]
+	mi := &file_refdemo_catalog_v1_catalog_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -254,7 +319,7 @@ func (x *Page) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Page.ProtoReflect.Descriptor instead.
 func (*Page) Descriptor() ([]byte, []int) {
-	return file_refdemo_catalog_v1_catalog_proto_rawDescGZIP(), []int{2}
+	return file_refdemo_catalog_v1_catalog_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *Page) GetName() string {
@@ -286,7 +351,7 @@ const file_refdemo_catalog_v1_catalog_proto_rawDesc = "" +
 	"expireTime\x12<\n" +
 	"\bfeatured\x18\x06 \x03(\tB \xe0A\x01\xfaA\x1a\n" +
 	"\x18catalog.example.com/BookR\bfeatured:E\xeaA<\n" +
-	"\x19catalog.example.com/Shelf\x12\x0fshelves/{shelf}*\ashelves2\x05shelf\xca\xf3\x18\x02\x18\x01\"\xeb\x02\n" +
+	"\x19catalog.example.com/Shelf\x12\x0fshelves/{shelf}*\ashelves2\x05shelf\xca\xf3\x18\x02\x18\x01\"\xa6\x03\n" +
 	"\x04Book\x12\x17\n" +
 	"\x04name\x18\x01 \x01(\tB\x03\xe0A\bR\x04name\x12\x19\n" +
 	"\x05title\x18\x02 \x01(\tB\x03\xe0A\x02R\x05title\x12\x17\n" +
@@ -297,8 +362,14 @@ const file_refdemo_catalog_v1_catalog_proto_rawDesc = "" +
 	"expireTime\x12B\n" +
 	"\vfiled_under\x18\x06 \x03(\tB!\xe0A\x01\xfaA\x1b\n" +
 	"\x19catalog.example.com/ShelfR\n" +
-	"filedUnder:N\xeaAE\n" +
-	"\x18catalog.example.com/Book\x12\x1cshelves/{shelf}/books/{book}*\x05books2\x04book\xca\xf3\x18\x02\x18\x01\"\x90\x01\n" +
+	"filedUnder\x129\n" +
+	"\x06genres\x18\a \x03(\tB!\xe0A\x01\xfaA\x1b\n" +
+	"\x19catalog.example.com/GenreR\x06genres:N\xeaAE\n" +
+	"\x18catalog.example.com/Book\x12\x1cshelves/{shelf}/books/{book}*\x05books2\x04book\xca\xf3\x18\x02\x18\x01\"\x8d\x01\n" +
+	"\x05Genre\x12\x17\n" +
+	"\x04name\x18\x01 \x01(\tB\x03\xe0A\bR\x04name\x12&\n" +
+	"\fdisplay_name\x18\x02 \x01(\tB\x03\xe0A\x02R\vdisplayName:C\xeaA:\n" +
+	"\x19catalog.example.com/Genre\x12\x0egenres/{genre}*\x06genres2\x05genre\xca\xf3\x18\x02\x18\x01\"\x90\x01\n" +
 	"\x04Page\x12\x17\n" +
 	"\x04name\x18\x01 \x01(\tB\x03\xe0A\bR\x04name\x12\x12\n" +
 	"\x04text\x18\x02 \x01(\tR\x04text:[\xeaAR\n" +
@@ -317,18 +388,19 @@ func file_refdemo_catalog_v1_catalog_proto_rawDescGZIP() []byte {
 	return file_refdemo_catalog_v1_catalog_proto_rawDescData
 }
 
-var file_refdemo_catalog_v1_catalog_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_refdemo_catalog_v1_catalog_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_refdemo_catalog_v1_catalog_proto_goTypes = []any{
 	(*Shelf)(nil),                 // 0: refdemo.catalog.v1.Shelf
 	(*Book)(nil),                  // 1: refdemo.catalog.v1.Book
-	(*Page)(nil),                  // 2: refdemo.catalog.v1.Page
-	(*timestamppb.Timestamp)(nil), // 3: google.protobuf.Timestamp
+	(*Genre)(nil),                 // 2: refdemo.catalog.v1.Genre
+	(*Page)(nil),                  // 3: refdemo.catalog.v1.Page
+	(*timestamppb.Timestamp)(nil), // 4: google.protobuf.Timestamp
 }
 var file_refdemo_catalog_v1_catalog_proto_depIdxs = []int32{
-	3, // 0: refdemo.catalog.v1.Shelf.delete_time:type_name -> google.protobuf.Timestamp
-	3, // 1: refdemo.catalog.v1.Shelf.expire_time:type_name -> google.protobuf.Timestamp
-	3, // 2: refdemo.catalog.v1.Book.delete_time:type_name -> google.protobuf.Timestamp
-	3, // 3: refdemo.catalog.v1.Book.expire_time:type_name -> google.protobuf.Timestamp
+	4, // 0: refdemo.catalog.v1.Shelf.delete_time:type_name -> google.protobuf.Timestamp
+	4, // 1: refdemo.catalog.v1.Shelf.expire_time:type_name -> google.protobuf.Timestamp
+	4, // 2: refdemo.catalog.v1.Book.delete_time:type_name -> google.protobuf.Timestamp
+	4, // 3: refdemo.catalog.v1.Book.expire_time:type_name -> google.protobuf.Timestamp
 	4, // [4:4] is the sub-list for method output_type
 	4, // [4:4] is the sub-list for method input_type
 	4, // [4:4] is the sub-list for extension type_name
@@ -347,7 +419,7 @@ func file_refdemo_catalog_v1_catalog_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_refdemo_catalog_v1_catalog_proto_rawDesc), len(file_refdemo_catalog_v1_catalog_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

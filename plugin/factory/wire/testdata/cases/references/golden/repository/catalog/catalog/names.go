@@ -36,6 +36,22 @@ func ParseBookName(name string) (shelf, book string, err error) {
 	return
 }
 
+// FormatGenreName builds "genres/{genre}" from bare ids.
+func FormatGenreName(genre string) string {
+	return "genres" + "/" + genre
+}
+
+// ParseGenreName splits a "genres/{genre}" resource name into its bare ids,
+// rejecting other shapes with repox.ErrInvalidArgument.
+func ParseGenreName(name string) (genre string, err error) {
+	ids, err := repox.SplitName(name, "genres")
+	if err != nil {
+		return
+	}
+	genre = ids[0]
+	return
+}
+
 // FormatPageName builds "shelves/{shelf}/books/{book}/pages/{page}" from bare ids.
 func FormatPageName(shelf, book, page string) string {
 	return "shelves" + "/" + shelf + "/" + "books" + "/" + book + "/" + "pages" + "/" + page

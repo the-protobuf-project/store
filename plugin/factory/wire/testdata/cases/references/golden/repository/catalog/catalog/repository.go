@@ -105,6 +105,59 @@ type BookHooks struct {
 	BeforeDelete func(ctx context.Context, name string) error
 }
 
+// GenreRepository is the provider-agnostic persistence surface for
+// Genre (genres/{genre}): full-message writes, AIP-160/AIP-132 lists with
+// opaque page tokens, field-mask updates, and etag optimistic concurrency.
+type GenreRepository interface {
+	// Create persists m and returns the stored record.
+	Create(ctx context.Context, m *refdemov1.Genre) (*refdemov1.Genre, error)
+	// Get returns the record addressed by its resource name, or
+	// repox.ErrNotFound.
+	Get(ctx context.Context, name string) (*refdemov1.Genre, error)
+	// List returns one page of records.
+	List(ctx context.Context, in repox.ListInput) ([]*refdemov1.Genre, string, error)
+	// Count returns how many records match in (its filter and ShowDeleted;
+	// its page fields are ignored).
+	Count(ctx context.Context, in repox.ListInput) (int64, error)
+	// Facet counts the records matching in by the values of field -- a
+	// filter field (a column, each element of a repeated one, a value
+	// object's or a join table's), or a JSON path -- most frequent first, at
+	// most limit values (all when limit is not positive). On GraphQL it is
+	// answered from the rows, at most repox.GraphQLScanLimit of them, and
+	// takes no field reached through another table.
+	Facet(ctx context.Context, in repox.ListInput, field string, limit int) ([]repox.Bucket, error)
+	// ListByKeys reads every record whose filter field field is one of keys
+	// -- a batched read by name, by parent, by any text, enum or reference
+	// field -- in statements of at most repox.KeysPerRead keys, at most
+	// repox.ReadParallelism at once. in narrows
+	// each read; its page fields are ignored. See repox.ListByKeys for the
+	// order records come back in.
+	ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*refdemov1.Genre, error)
+	// Update persists the masked fields of m; an empty mask replaces every
+	// mutable field. m.Etag, when set, guards against concurrent writes
+	// (repox.ErrConflict).
+	Update(ctx context.Context, m *refdemov1.Genre, paths []string) (*refdemov1.Genre, error)
+	// Delete removes the record addressed by its resource name.
+	Delete(ctx context.Context, name string) error
+}
+
+// GenreHooks lets custom logic run inside the generated Genre
+// adapters without editing them: normalization/derivation before writes,
+// derived fields after reads, and guards before deletes. Nil funcs are skipped.
+type GenreHooks struct {
+	// BeforeCreate runs after name/id resolution, before the row is written.
+	BeforeCreate func(ctx context.Context, m *refdemov1.Genre) error
+	// AfterRead runs on every record a read returns (Get, List, and the
+	// re-reads writes return).
+	AfterRead func(ctx context.Context, m *refdemov1.Genre) error
+	// BeforeUpdate runs after the mask is applied to the merged record,
+	// before it is written.
+	BeforeUpdate func(ctx context.Context, existing, merged *refdemov1.Genre, paths []string) error
+	// BeforeDelete runs before the row is removed (or, with soft delete,
+	// marked deleted); returning an error vetoes.
+	BeforeDelete func(ctx context.Context, name string) error
+}
+
 // PageRepository is the provider-agnostic persistence surface for
 // Page (shelves/{shelf}/books/{book}/pages/{page}): full-message writes, AIP-160/AIP-132 lists with
 // opaque page tokens, field-mask updates, and etag optimistic concurrency.
@@ -240,6 +293,7 @@ type ShelfHooks struct {
 // Repositories bundles this schema's repository surfaces behind one factory.
 type Repositories struct {
 	Books  BookRepository
+	Genres GenreRepository
 	Pages  PageRepository
 	Shelfs ShelfRepository
 }
@@ -268,6 +322,15 @@ type Batch interface {
 	// PurgeBook queues the record's removal for good; a record already
 	// gone is not an error.
 	PurgeBook(name string)
+	// CreateGenre queues a create and returns the name the record will have.
+	CreateGenre(m *refdemov1.Genre) (string, error)
+	// UpdateGenre queues Update: the masked fields of m, every mutable
+	// field when paths is empty. m.Etag, when set, guards it; a guard that
+	// fails fails the whole Commit with repox.ErrConflict.
+	UpdateGenre(m *refdemov1.Genre, paths []string)
+	// DeleteGenre queues the record's removal for good; a record already
+	// gone is not an error.
+	DeleteGenre(name string)
 	// CreatePage queues a create and returns the name the record will have.
 	CreatePage(parent string, m *refdemov1.Page) (string, error)
 	// UpdatePage queues Update: the masked fields of m, every mutable
@@ -329,6 +392,7 @@ func NewBatchIn(u *repox.Unit, opts ...Option) Batch {
 // resource.
 type storeFuncs struct {
 	book  func(db *gorm.DB) catalog.BookStoreIface
+	genre func(db *gorm.DB) catalog.GenreStoreIface
 	page  func(db *gorm.DB) catalog.PageStoreIface
 	shelf func(db *gorm.DB) catalog.ShelfStoreIface
 }
@@ -341,11 +405,14 @@ type options struct {
 	stores            storeFuncs
 	bookHooks         BookHooks
 	bookOverrides     map[string]filterx.SQLHandler
+	genreHooks        GenreHooks
+	genreOverrides    map[string]filterx.SQLHandler
 	pageHooks         PageHooks
 	pageOverrides     map[string]filterx.SQLHandler
 	shelfHooks        ShelfHooks
 	shelfOverrides    map[string]filterx.SQLHandler
 	bookGQLOverrides  map[string]filterx.GraphQLHandler
+	genreGQLOverrides map[string]filterx.GraphQLHandler
 	pageGQLOverrides  map[string]filterx.GraphQLHandler
 	shelfGQLOverrides map[string]filterx.GraphQLHandler
 	retention         time.Duration
@@ -401,6 +468,33 @@ func WithBookListOverride(field string, h filterx.SQLHandler) Option {
 			o.bookOverrides = map[string]filterx.SQLHandler{}
 		}
 		o.bookOverrides[field] = h
+	}
+}
+
+// WithGenreHooks installs h on the Genre adapters.
+func WithGenreHooks(h GenreHooks) Option {
+	return func(o *options) { o.genreHooks = h }
+}
+
+// WithGenreStore has the GORM adapters go through the store f builds
+// over a handle -- the repository's, or the transaction a write runs in --
+// instead of catalog.NewGenreStore's: a decorator over that one,
+// such as a protoc-gen-cache read-through cache or an instrumented store
+// (NewGenreStore(db).WithTelemetry(t)). A one-row read goes through it
+// too, so a cache serves Get. f runs for every write and read, so it should
+// be cheap.
+func WithGenreStore(f func(db *gorm.DB) catalog.GenreStoreIface) Option {
+	return func(o *options) { o.stores.genre = f }
+}
+
+// WithGenreListOverride substitutes the generated filter dispatch for one
+// Genre filter field (e.g. a derived state computed via subqueries).
+func WithGenreListOverride(field string, h filterx.SQLHandler) Option {
+	return func(o *options) {
+		if o.genreOverrides == nil {
+			o.genreOverrides = map[string]filterx.SQLHandler{}
+		}
+		o.genreOverrides[field] = h
 	}
 }
 
@@ -469,6 +563,17 @@ func WithBookGraphQLListOverride(field string, h filterx.GraphQLHandler) Option 
 	}
 }
 
+// WithGenreGraphQLListOverride substitutes the generated filter dispatch
+// for one Genre filter field on the GraphQL adapters.
+func WithGenreGraphQLListOverride(field string, h filterx.GraphQLHandler) Option {
+	return func(o *options) {
+		if o.genreGQLOverrides == nil {
+			o.genreGQLOverrides = map[string]filterx.GraphQLHandler{}
+		}
+		o.genreGQLOverrides[field] = h
+	}
+}
+
 // WithPageGraphQLListOverride substitutes the generated filter dispatch
 // for one Page filter field on the GraphQL adapters.
 func WithPageGraphQLListOverride(field string, h filterx.GraphQLHandler) Option {
@@ -512,6 +617,7 @@ func NewGraphQL(svc *genql.Service, opts ...Option) Repositories {
 	}
 	repos := Repositories{
 		Books:  &GraphQLBookRepository{Svc: svc, Hooks: o.bookHooks, Refs: o.references, ListOverrides: o.bookGQLOverrides, Retention: o.retention},
+		Genres: &GraphQLGenreRepository{Svc: svc, Hooks: o.genreHooks, Refs: o.references, ListOverrides: o.genreGQLOverrides},
 		Pages:  &GraphQLPageRepository{Svc: svc, Hooks: o.pageHooks, Refs: o.references, ListOverrides: o.pageGQLOverrides},
 		Shelfs: &GraphQLShelfRepository{Svc: svc, Hooks: o.shelfHooks, Refs: o.references, ListOverrides: o.shelfGQLOverrides, Retention: o.retention},
 	}
@@ -519,6 +625,16 @@ func NewGraphQL(svc *genql.Service, opts ...Option) Repositories {
 		if p.Watches("catalog.example.com/Book") {
 			r := repos.Books
 			repos.Books = &projectedBookRepository{BookRepository: r, run: func(ctx context.Context, f func(BookRepository) ([]repox.Change, error)) error {
+				changes, err := f(r)
+				if err != nil {
+					return err
+				}
+				return p.ProjectGraphQLAfter(ctx, repox.Conn{GraphQL: svc}, changes)
+			}}
+		}
+		if p.Watches("catalog.example.com/Genre") {
+			r := repos.Genres
+			repos.Genres = &projectedGenreRepository{GenreRepository: r, run: func(ctx context.Context, f func(GenreRepository) ([]repox.Change, error)) error {
 				changes, err := f(r)
 				if err != nil {
 					return err
@@ -558,6 +674,7 @@ func NewGorm(db *gorm.DB, opts ...Option) Repositories {
 	}
 	repos := Repositories{
 		Books:  &GormBookRepository{DB: db, Hooks: o.bookHooks, Refs: o.references, ListOverrides: o.bookOverrides, Store: o.stores.book, Retention: o.retention},
+		Genres: &GormGenreRepository{DB: db, Hooks: o.genreHooks, Refs: o.references, ListOverrides: o.genreOverrides, Store: o.stores.genre},
 		Pages:  &GormPageRepository{DB: db, Hooks: o.pageHooks, Refs: o.references, ListOverrides: o.pageOverrides, Store: o.stores.page},
 		Shelfs: &GormShelfRepository{DB: db, Hooks: o.shelfHooks, Refs: o.references, ListOverrides: o.shelfOverrides, Store: o.stores.shelf, Retention: o.retention},
 	}
@@ -565,6 +682,30 @@ func NewGorm(db *gorm.DB, opts ...Option) Repositories {
 		if p.Watches("catalog.example.com/Book") {
 			g := repos.Books.(*GormBookRepository)
 			repos.Books = &projectedBookRepository{BookRepository: g, run: func(ctx context.Context, f func(BookRepository) ([]repox.Change, error)) error {
+				// The write and its projections in one transaction: the
+				// adapter is rebound to it, so its own transactions nest as
+				// savepoints and its re-reads see the write. The feed hears
+				// of it once it commits.
+				var committed []repox.Committed
+				err := repox.MapGormErr(db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+					bound := *g
+					bound.DB = tx
+					changes, err := f(&bound)
+					if err != nil {
+						return err
+					}
+					committed, err = p.Gorm(ctx, tx, changes)
+					return err
+				}))
+				if err == nil {
+					p.Publish(ctx, committed)
+				}
+				return err
+			}}
+		}
+		if p.Watches("catalog.example.com/Genre") {
+			g := repos.Genres.(*GormGenreRepository)
+			repos.Genres = &projectedGenreRepository{GenreRepository: g, run: func(ctx context.Context, f func(GenreRepository) ([]repox.Change, error)) error {
 				// The write and its projections in one transaction: the
 				// adapter is rebound to it, so its own transactions nest as
 				// savepoints and its re-reads see the write. The feed hears
@@ -654,6 +795,7 @@ func guard(repos Repositories, refs *repox.References) Repositories {
 	}
 	return Repositories{
 		Books:  &guardedBookRepository{BookRepository: repos.Books, refs: refs},
+		Genres: &guardedGenreRepository{GenreRepository: repos.Genres, refs: refs},
 		Pages:  &guardedPageRepository{PageRepository: repos.Pages, refs: refs},
 		Shelfs: &guardedShelfRepository{ShelfRepository: repos.Shelfs, refs: refs},
 	}
@@ -672,6 +814,7 @@ func observe(repos Repositories, changes repox.ChangeObserver) Repositories {
 	}
 	return Repositories{
 		Books:  &observedBookRepository{BookRepository: repos.Books, changes: changes},
+		Genres: &observedGenreRepository{GenreRepository: repos.Genres, changes: changes},
 		Pages:  &observedPageRepository{PageRepository: repos.Pages, changes: changes},
 		Shelfs: &observedShelfRepository{ShelfRepository: repos.Shelfs, changes: changes},
 	}
@@ -749,6 +892,48 @@ func (o *observedBookRepository) PurgeExpired(ctx context.Context, now time.Time
 		o.changes.Changed(ctx, name)
 	}
 	return res, err
+}
+
+// observedGenreRepository reports every Genre write to a ChangeObserver.
+//
+// It reports a write that returned an error too, whenever the name is known.
+// An error does not prove nothing was written -- the adapters re-read after
+// writing, and that re-read can fail -- and an observer told about a write
+// that did not happen only drops something it did not need to, while one not
+// told about a write that did keeps serving what the write replaced.
+type observedGenreRepository struct {
+	GenreRepository
+	changes repox.ChangeObserver
+}
+
+func (o *observedGenreRepository) Create(ctx context.Context, m *refdemov1.Genre) (*refdemov1.Genre, error) {
+	out, err := o.GenreRepository.Create(ctx, m)
+	o.created(ctx, m, out)
+	return out, err
+}
+
+// created reports a Create: by the stored record's name, or failing that by
+// the name the caller asked for. A Create that failed before naming anything
+// wrote nothing.
+func (o *observedGenreRepository) created(ctx context.Context, m, out *refdemov1.Genre) {
+	switch {
+	case out.GetName() != "":
+		o.changes.Changed(ctx, out.GetName())
+	case m.GetName() != "":
+		o.changes.Changed(ctx, m.GetName())
+	}
+}
+
+func (o *observedGenreRepository) Update(ctx context.Context, m *refdemov1.Genre, paths []string) (*refdemov1.Genre, error) {
+	out, err := o.GenreRepository.Update(ctx, m, paths)
+	o.changes.Changed(ctx, m.GetName())
+	return out, err
+}
+
+func (o *observedGenreRepository) Delete(ctx context.Context, name string) error {
+	err := o.GenreRepository.Delete(ctx, name)
+	o.changes.Changed(ctx, name)
+	return err
 }
 
 // observedPageRepository reports every Page write to a ChangeObserver.
@@ -977,6 +1162,60 @@ func (p *projectedBookRepository) PurgeExpired(ctx context.Context, now time.Tim
 	return res, err
 }
 
+// projectedGenreRepository runs the connection's projections over every
+// Genre write; see WithProjections. run performs a write through the
+// repository it hands f and projects the changes f reports.
+type projectedGenreRepository struct {
+	GenreRepository
+	run func(ctx context.Context, f func(GenreRepository) ([]repox.Change, error)) error
+}
+
+// getGenre reads name through read, for a queued write's
+// Change.LoadPrior (repox.PriorOf).
+func getGenre(ctx context.Context, read repox.Conn, name string) (*refdemov1.Genre, error) {
+	return New(read).Genres.Get(ctx, name)
+}
+
+// changedGenre is the change one write of a Genre makes.
+func changedGenre(name string, op repox.ChangeOp, rec *refdemov1.Genre) []repox.Change {
+	c := repox.Change{Type: "catalog.example.com/Genre", Name: name, Op: op}
+	if rec != nil {
+		c.Record = rec
+	}
+	return []repox.Change{c}
+}
+
+func (p *projectedGenreRepository) Create(ctx context.Context, m *refdemov1.Genre) (out *refdemov1.Genre, err error) {
+	err = p.run(ctx, func(r GenreRepository) ([]repox.Change, error) {
+		var err error
+		out, err = r.Create(ctx, m)
+		return changedGenre(out.GetName(), repox.ChangeCreate, out), err
+	})
+	return out, err
+}
+
+func (p *projectedGenreRepository) Update(ctx context.Context, m *refdemov1.Genre, paths []string) (out *refdemov1.Genre, err error) {
+	err = p.run(ctx, func(r GenreRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, m.GetName()))
+		if err != nil {
+			return nil, err
+		}
+		out, err = r.Update(ctx, m, paths)
+		return repox.WithPrior(changedGenre(m.GetName(), repox.ChangeUpdate, out), prior), err
+	})
+	return out, err
+}
+
+func (p *projectedGenreRepository) Delete(ctx context.Context, name string) error {
+	return p.run(ctx, func(r GenreRepository) ([]repox.Change, error) {
+		prior, err := repox.Prior(r.Get(ctx, name))
+		if err != nil {
+			return nil, err
+		}
+		return repox.WithPrior(changedGenre(name, repox.ChangeDelete, nil), prior), r.Delete(ctx, name)
+	})
+}
+
 // projectedPageRepository runs the connection's projections over every
 // Page write; see WithProjections. run performs a write through the
 // repository it hands f and projects the changes f reports.
@@ -1197,6 +1436,51 @@ func queueBookPurge(u *repox.Unit, name string) (keep *bool) {
 		})
 	}
 	return keep
+}
+
+// guardedGenreRepository keeps Genre's references whole; see guard.
+type guardedGenreRepository struct {
+	GenreRepository
+	refs *repox.References
+}
+
+func (g *guardedGenreRepository) Delete(ctx context.Context, name string) error {
+	check, err := g.refs.CheckDelete(ctx, "catalog.example.com/Genre", name)
+	if err != nil {
+		return err
+	}
+	if err := g.GenreRepository.Delete(ctx, name); err != nil {
+		return err
+	}
+	check.Done(ctx, true)
+	return nil
+}
+
+// resolveGenreReferences proves, through refs, that every external
+// reference m sets within paths (all of them for an empty mask) names a
+// resource that exists.
+func resolveGenreReferences(ctx context.Context, refs *repox.References, m *refdemov1.Genre, paths []string) error {
+	return nil
+}
+
+// queueGenreReferences makes u resolve m's external references within
+// paths before it commits, as guard does for the repositories.
+func queueGenreReferences(u *repox.Unit, m *refdemov1.Genre, paths []string) {
+}
+
+// queueGenreDelete makes u consult name's referrers before it commits
+// and publish the NOTIFY event after, as guard does for Delete.
+func queueGenreDelete(u *repox.Unit, name string, purged bool) {
+	refs := u.Conn().References
+	if refs == nil {
+		return
+	}
+	var check *repox.DeleteCheck
+	u.Before(func(ctx context.Context) (err error) {
+		check, err = refs.CheckDelete(ctx, "catalog.example.com/Genre", name)
+		return err
+	})
+	u.After(func(ctx context.Context) { check.Done(ctx, purged) })
 }
 
 // guardedPageRepository keeps Page's references whole; see guard.

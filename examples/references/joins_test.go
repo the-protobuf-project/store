@@ -7,7 +7,9 @@ package references_test
 // shelf's featured books (a nested target, kept by name) and a book's shelves
 // (a top-level target, kept by id) -- round-trip through Create, Get, List,
 // Update and a Batch, and filter; that a parent with a "-" in it widens only
-// its own segment; and that Count and Facet agree with List.
+// its own segment; that Count and Facet agree with List; and that a record
+// join rows name is kept by a purge, or refused by a delete, as a singular
+// reference keeps or refuses it.
 
 import (
 	"context"
@@ -15,6 +17,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/the-protobuf-project/store/examples/references/gen/gorm/filterx"
 	"github.com/the-protobuf-project/store/examples/references/gen/pb/catalogv1"
 	"github.com/the-protobuf-project/store/examples/references/gen/repository/catalog/catalog"
 	"github.com/the-protobuf-project/store/examples/references/gen/repository/repox"
@@ -171,6 +174,155 @@ func TestCountAndFacet(t *testing.T) {
 	}
 	if _, err := w.cat.Shelfs.Facet(ctx, repox.ListInput{}, "nope", 0); !errors.Is(err, repox.ErrInvalidArgument) {
 		t.Fatalf("facet by an unknown field: %v, want ErrInvalidArgument", err)
+	}
+}
+
+// TestTimestampFacetIsCanonical: a timestamp's facet value is RFC 3339 in
+// UTC to the microsecond (repox.FacetTimeLayout) -- in SQL, and from the ISO
+// forms a GraphQL engine returns.
+func TestTimestampFacetIsCanonical(t *testing.T) {
+	for in, want := range map[string]string{
+		"2026-10-29T08:30:00+05:30":        "2026-10-29T03:00:00.000000Z",
+		"2026-10-29T03:00:00.123456+00:00": "2026-10-29T03:00:00.123456Z",
+		"2026-10-29T03:00:00.5Z":           "2026-10-29T03:00:00.500000Z",
+		"2026-10-29 03:00:00+00":           "2026-10-29T03:00:00.000000Z",
+	} {
+		if got := repox.FacetValue(filterx.KindTimestamp, in); got != want {
+			t.Errorf("FacetValue(%q) = %q, want %q", in, got, want)
+		}
+	}
+	w := newWorld(t)
+	ctx := context.Background()
+	s, err := w.cat.Shelfs.Create(ctx, &catalogv1.Shelf{DisplayName: "gone"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.cat.Shelfs.Delete(ctx, s.GetName()); err != nil {
+		t.Fatal(err)
+	}
+	page, _, err := w.cat.Shelfs.List(ctx, repox.ListInput{ShowDeleted: true})
+	if err != nil || len(page) != 1 {
+		t.Fatalf("list deleted: %v %v", page, err)
+	}
+	buckets, err := w.cat.Shelfs.Facet(ctx, repox.ListInput{ShowDeleted: true}, "delete_time", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := page[0].GetDeleteTime().AsTime().UTC().Format(repox.FacetTimeLayout)
+	if !slices.Equal(buckets, []repox.Bucket{{Value: want, Count: 1}}) {
+		t.Fatalf("facet delete_time: %v, want %s", buckets, want)
+	}
+}
+
+// TestPurgeKeepsJoinTargets: a record a join table's rows name -- a shelf a
+// book is filed under, a book a shelf features -- is a referrer's target: a
+// purge keeps it, and the field keeps naming it, until the owner lets it go.
+func TestPurgeKeepsJoinTargets(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	_, book := w.book(t)
+	target, err := w.cat.Shelfs.Create(ctx, &catalogv1.Shelf{DisplayName: "classics"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if book, err = w.cat.Books.Update(ctx, &catalogv1.Book{Name: book.GetName(), FiledUnder: []string{target.GetName()}}, []string{"filed_under"}); err != nil {
+		t.Fatal(err)
+	}
+	picks, err := w.cat.Shelfs.Create(ctx, &catalogv1.Shelf{DisplayName: "picks", Featured: []string{book.GetName()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, purge := range []func() error{
+		func() error { return w.cat.Shelfs.Purge(ctx, target.GetName()) },
+		func() error {
+			b := catalog.NewBatch(w.conn)
+			b.PurgeShelf(target.GetName())
+			return b.Commit(ctx)
+		},
+	} {
+		if err := purge(); err != nil {
+			t.Fatalf("a purge never fails because of a referrer: %v", err)
+		}
+		if _, err := w.cat.Shelfs.Get(ctx, target.GetName()); err != nil {
+			t.Fatalf("shelf purged from under the book filed under it: %v", err)
+		}
+		if got, err := w.cat.Books.Get(ctx, book.GetName()); err != nil || !slices.Equal(got.GetFiledUnder(), []string{target.GetName()}) {
+			t.Fatalf("book after the purge: filed_under %v %v, want [%s]", got.GetFiledUnder(), err, target.GetName())
+		}
+	}
+	if err := w.cat.Books.Delete(ctx, book.GetName()); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.cat.Books.Purge(ctx, book.GetName()); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := w.cat.Shelfs.Get(ctx, picks.GetName()); err != nil || !slices.Equal(got.GetFeatured(), []string{book.GetName()}) {
+		t.Fatalf("book purged from under the shelf featuring it: %v %v", got.GetFeatured(), err)
+	}
+	want := []string{target.GetName() + ":foreign key", target.GetName() + ":foreign key", book.GetName() + ":foreign key"}
+	if !slices.Equal(w.kept, want) {
+		t.Fatalf("kept %v, want %v", w.kept, want)
+	}
+
+	// Once the owners let go, the purge goes ahead.
+	if err := w.cat.Shelfs.Purge(ctx, picks.GetName()); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.cat.Books.Purge(ctx, book.GetName()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.cat.Books.Get(ctx, book.GetName()); !errors.Is(err, repox.ErrNotFound) {
+		t.Fatalf("book not purged once nothing names it: %v", err)
+	}
+	if err := w.cat.Shelfs.Purge(ctx, target.GetName()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.cat.Shelfs.Get(ctx, target.GetName()); !errors.Is(err, repox.ErrNotFound) {
+		t.Fatalf("shelf not purged once nothing names it: %v", err)
+	}
+}
+
+// TestDeleteRefusesJoinTargets: a record deleted outright (no soft delete)
+// that a join table's rows name -- a genre a book is classed under -- is
+// refused with ErrForeignKey, as a singular reference's constraint refuses
+// it, rather than cascaded out of the books; once the book lets go it goes.
+func TestDeleteRefusesJoinTargets(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	_, book := w.book(t)
+	g, err := w.cat.Genres.Create(ctx, &catalogv1.Genre{DisplayName: "Science fiction"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = w.cat.Books.Update(ctx, &catalogv1.Book{Name: book.GetName(), Genres: []string{g.GetName()}}, []string{"genres"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, del := range []func() error{
+		func() error { return w.cat.Genres.Delete(ctx, g.GetName()) },
+		func() error {
+			b := catalog.NewBatch(w.conn)
+			b.DeleteGenre(g.GetName())
+			return b.Commit(ctx)
+		},
+	} {
+		err := del()
+		var re *repox.ReferenceError
+		if !errors.Is(err, repox.ErrForeignKey) || !errors.As(err, &re) || re.Name != g.GetName() {
+			t.Fatalf("delete of a genre a book names: %v, want ErrForeignKey naming %s", err, g.GetName())
+		}
+		if got, err := w.cat.Books.Get(ctx, book.GetName()); err != nil || !slices.Equal(got.GetGenres(), []string{g.GetName()}) {
+			t.Fatalf("book after the refused delete: genres %v %v", got.GetGenres(), err)
+		}
+	}
+	if _, err := w.cat.Books.Update(ctx, &catalogv1.Book{Name: book.GetName()}, []string{"genres"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.cat.Genres.Delete(ctx, g.GetName()); err != nil {
+		t.Fatalf("delete once nothing names it: %v", err)
+	}
+	if _, err := w.cat.Genres.Get(ctx, g.GetName()); !errors.Is(err, repox.ErrNotFound) {
+		t.Fatalf("genre not deleted: %v", err)
 	}
 }
 

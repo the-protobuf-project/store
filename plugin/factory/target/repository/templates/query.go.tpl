@@ -4,8 +4,8 @@ package repox
 
 // query.go is the shared runtime the generated repositories read and count
 // through beyond List: repeated references kept in join tables (Join), counts
-// and facets of a resource's records (FacetExpr, FacetRows), and AIP-159
-// wildcard parents (AllWild).
+// and facets of a resource's records (FacetExpr, FacetValues, FacetVia), and
+// AIP-159 wildcard parents (AllWild).
 
 import (
 	"context"
@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -189,26 +190,54 @@ func (j Join) Read(ctx context.Context, db *gorm.DB, owners []string) (map[strin
 	return out, nil
 }
 
+// FacetTimeLayout is the form a timestamp's facet value takes on every
+// backend: RFC 3339 in UTC, to the microsecond PostgreSQL keeps, so the text
+// sorts as the instants do ("2026-10-29T08:30:00.000000Z").
+const FacetTimeLayout = "2006-01-02T15:04:05.000000Z"
+
+// FacetText is the SQL rendering expr (a column of kind) as its facet value:
+// a timestamp in FacetTimeLayout, anything else as text.
+func FacetText(expr string, kind filterx.Kind) string {
+	if kind == filterx.KindTimestamp {
+		return "to_char(" + expr + ` AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`
+	}
+	return expr + "::text"
+}
+
+// FacetValue is v, a column of kind read from a GraphQL row (RowMap), as its
+// facet value, the text FacetText renders in SQL: a timestamp in
+// FacetTimeLayout, anything else printed.
+func FacetValue(kind filterx.Kind, v any) string {
+	if s, ok := v.(string); ok && kind == filterx.KindTimestamp {
+		for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.999999999Z07", "2006-01-02 15:04:05.999999999Z07:00", "2006-01-02 15:04:05.999999999Z07"} {
+			if t, err := time.Parse(layout, s); err == nil {
+				return t.UTC().Format(FacetTimeLayout)
+			}
+		}
+	}
+	return fmt.Sprint(v)
+}
+
 // FacetExpr is the SQL expression yielding a filter field's values, one row
-// per value: a column (cast to text), each element of an array, the value of
-// a value object the row points at, each element of a repeated reference kept
-// in a join table, or a path under a JSON document.
+// per value: a column (as FacetText renders it), each element of an array,
+// the value of a value object the row points at, each element of a repeated
+// reference kept in a join table, or a path under a JSON document.
 func FacetExpr(spec filterx.Spec, field string) (string, error) {
 	col := func(c string) string { return spec.Table + `."` + c + `"` }
 	if f, ok := spec.Fields[field]; ok {
 		switch {
 		case f.Via != nil && f.Via.Many:
-			return "unnest(ARRAY(SELECT " + f.Via.Table + `."` + f.Via.Column + `"::text FROM ` + f.Via.Table +
+			return "unnest(ARRAY(SELECT " + FacetText(f.Via.Table+`."`+f.Via.Column+`"`, f.Kind) + " FROM " + f.Via.Table +
 				" WHERE " + f.Via.Table + `."` + f.Via.Key + `" = ` + col(f.Column) + "))", nil
 		case f.Via != nil:
-			return "(SELECT " + f.Via.Table + `."` + f.Via.Column + `"::text FROM ` + f.Via.Table +
+			return "(SELECT " + FacetText(f.Via.Table+`."`+f.Via.Column+`"`, f.Kind) + " FROM " + f.Via.Table +
 				" WHERE " + f.Via.Table + `."` + f.Via.Key + `" = ` + col(f.Column) + ")", nil
 		case f.Kind == filterx.KindTags:
 			return "unnest(" + col(f.Column) + ")::text", nil
 		case f.Kind == filterx.KindJSON:
 			return "", fmt.Errorf("%w: facet on a path under %q, not the document", ErrInvalidArgument, field)
 		default:
-			return col(f.Column) + "::text", nil
+			return FacetText(col(f.Column), f.Kind), nil
 		}
 	}
 	path, ok, err := filterx.LookupJSON(spec, field)
@@ -274,9 +303,9 @@ func AnyHint(conds []filterx.Condition) bool {
 }
 
 // FacetValues returns the facet values of field in a GraphQL row read into a
-// map (RowMap), matching FacetExpr: a column's value, each element of an
-// array, or a path under a JSON document. A field reached through another
-// table yields nothing here; the caller supplies those values.
+// map (RowMap), matching FacetExpr: a column's value (FacetValue), each
+// element of an array, or a path under a JSON document. A field reached
+// through another table yields nothing here: see ViaRef and FacetVia.
 func FacetValues(spec filterx.Spec, field string, row map[string]any) []string {
 	if f, ok := spec.Fields[field]; ok {
 		if f.Via != nil {
@@ -293,7 +322,7 @@ func FacetValues(spec filterx.Spec, field string, row map[string]any) []string {
 			}
 			return out
 		}
-		return []string{fmt.Sprint(v)}
+		return []string{FacetValue(f.Kind, v)}
 	}
 	path, ok, _ := filterx.LookupJSON(spec, field)
 	if !ok {
@@ -325,6 +354,61 @@ func FacetValues(spec filterx.Spec, field string, row map[string]any) []string {
 	}
 	b, _ := json.Marshal(doc)
 	return []string{string(b)}
+}
+
+// ViaRef is the key a GraphQL row (RowMap) reaches field through, for a field
+// reached through another table (filterx.Via): its reference column, or for
+// a join-table field the row's own key. Empty when it reaches nothing.
+func ViaRef(spec filterx.Spec, field string, row map[string]any) string {
+	f, ok := spec.Fields[field]
+	if !ok || f.Via == nil {
+		return ""
+	}
+	s, _ := row[filterx.CamelCase(f.Column)].(string)
+	return s
+}
+
+// ViaReader reads the rows of the table a field is reached through
+// (filterx.Via) whose key is one of keys, as maps (RowMap).
+type ViaReader func(ctx context.Context, keys []string) ([]map[string]any, error)
+
+// viaBatch bounds the keys FacetVia reads at a time.
+const viaBatch = 500
+
+// FacetVia counts the values of field, reached through another table
+// (filterx.Via), over refs -- the ViaRef of each matching row, a repeat once
+// per row -- as FacetExpr does in SQL: the value object's value, or each
+// element of a join-table field. It reads that table through read.
+func FacetVia(ctx context.Context, spec filterx.Spec, field string, refs []string, read ViaReader) (map[string]int64, error) {
+	f, ok := spec.Fields[field]
+	if !ok || f.Via == nil {
+		return nil, fmt.Errorf("%w: %q is not reached through another table", ErrInvalidArgument, field)
+	}
+	rows := map[string]int64{}
+	var keys []string
+	for _, r := range refs {
+		if rows[r] == 0 {
+			keys = append(keys, r)
+		}
+		rows[r]++
+	}
+	key, col := filterx.CamelCase(f.Via.Key), filterx.CamelCase(f.Via.Column)
+	counts := map[string]int64{}
+	for len(keys) > 0 {
+		batch := keys[:min(len(keys), viaBatch)]
+		keys = keys[len(batch):]
+		got, err := read(ctx, batch)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range got {
+			k, _ := row[key].(string)
+			if v := row[col]; v != nil && rows[k] > 0 {
+				counts[FacetValue(f.Kind, v)] += rows[k]
+			}
+		}
+	}
+	return counts, nil
 }
 
 // SortBuckets orders counts most frequent first, then by value, keeping at

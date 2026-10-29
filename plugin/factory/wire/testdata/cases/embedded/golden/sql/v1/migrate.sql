@@ -98,7 +98,7 @@ ALTER TABLE "embedded_v1"."metadatas" ADD CONSTRAINT "fk_metadatas_owner" FOREIG
 ALTER TABLE "embedded_v1"."event_attendees" DROP CONSTRAINT IF EXISTS "fk_event_attendees_event_id";
 ALTER TABLE "embedded_v1"."event_attendees" ADD CONSTRAINT "fk_event_attendees_event_id" FOREIGN KEY ("event_id") REFERENCES "embedded_v1"."events"("id") ON DELETE CASCADE;
 ALTER TABLE "embedded_v1"."event_attendees" DROP CONSTRAINT IF EXISTS "fk_event_attendees_attendee_id";
-ALTER TABLE "embedded_v1"."event_attendees" ADD CONSTRAINT "fk_event_attendees_attendee_id" FOREIGN KEY ("attendee_id") REFERENCES "embedded_v1"."attendees"("id") ON DELETE CASCADE;
+ALTER TABLE "embedded_v1"."event_attendees" ADD CONSTRAINT "fk_event_attendees_attendee_id" FOREIGN KEY ("attendee_id") REFERENCES "embedded_v1"."attendees"("id");
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS "idx_events_location_id" ON "embedded_v1"."events" ("location_id");

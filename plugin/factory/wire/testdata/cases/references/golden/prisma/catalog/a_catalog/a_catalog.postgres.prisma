@@ -87,12 +87,35 @@ model Book {
   /// Back-relation: BookFiledUnder records that reference this model via book_id.
   bookFiledUnder BookFiledUnder[]
 
+  /// Back-relation: BookGenres records that reference this model via book_id.
+  bookGenres BookGenres[]
+
   /// Index on [delete_time].
   @@index([deleteTime])
   /// Composite index on [shelf_id, id].
   @@index([shelfID, id])
   /// Maps the model to the "books" table in the database.
   @@map("books")
+  /// Maps the model to the "catalog" schema in the database.
+  @@schema("catalog")
+}
+
+/// A genre books are classed under: deleted outright, with no soft delete.
+model Genre {
+  /// Unique identifier for the record.
+  id String @id @default(ulid()) @map("id")
+
+  /// The genre's resource name.
+  name String @unique @map("name")
+
+  /// The genre as it is shown.
+  displayName String @map("display_name")
+
+  /// Back-relation: BookGenres records that reference this model via genre_id.
+  bookGenres BookGenres[]
+
+  /// Maps the model to the "genres" table in the database.
+  @@map("genres")
   /// Maps the model to the "catalog" schema in the database.
   @@schema("catalog")
 }
@@ -145,7 +168,7 @@ model ShelfFeatured {
   bookID String @map("book_id")
 
   /// Relation to Book via book_id.
-  book Book @relation(fields: [bookID], references: [id], onDelete: Cascade)
+  book Book @relation(fields: [bookID], references: [id])
 
   /// Full resource name of the referenced Book, capturing the parent hierarchy the book_id id alone omits.
   bookName String @map("book_name")
@@ -175,7 +198,7 @@ model BookFiledUnder {
   shelfID String @map("shelf_id")
 
   /// Relation to Shelf via shelf_id.
-  shelf Shelf @relation(fields: [shelfID], references: [id], onDelete: Cascade)
+  shelf Shelf @relation(fields: [shelfID], references: [id])
 
   /// Unique constraint on [book_id, shelf_id].
   @@unique([bookID, shelfID])
@@ -183,6 +206,33 @@ model BookFiledUnder {
   @@index([shelfID])
   /// Maps the model to the "book_filed_under" table in the database.
   @@map("book_filed_under")
+  /// Maps the model to the "catalog" schema in the database.
+  @@schema("catalog")
+}
+
+/// Join table for the many-to-many relation Book.genres ↔ Genre.
+model BookGenres {
+  /// Unique identifier for the record.
+  id String @id @default(ulid()) @map("id")
+
+  /// Foreign key to Book.
+  bookID String @map("book_id")
+
+  /// Relation to Book via book_id.
+  book Book @relation(fields: [bookID], references: [id], onDelete: Cascade)
+
+  /// Foreign key to Genre.
+  genreID String @map("genre_id")
+
+  /// Relation to Genre via genre_id.
+  genre Genre @relation(fields: [genreID], references: [id])
+
+  /// Unique constraint on [book_id, genre_id].
+  @@unique([bookID, genreID])
+  /// Index on [genre_id].
+  @@index([genreID])
+  /// Maps the model to the "book_genres" table in the database.
+  @@map("book_genres")
   /// Maps the model to the "catalog" schema in the database.
   @@schema("catalog")
 }

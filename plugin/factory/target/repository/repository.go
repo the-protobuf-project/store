@@ -181,6 +181,14 @@ func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 						view any
 					}{"graphql_parent.go.tpl", view}
 				}
+				// The referrers a purge asks about, likewise in a file per
+				// referring schema.
+				for name, view := range graphqlReferrerViews(db, s, pkg, gqlViews) {
+					files[name] = struct {
+						tpl  string
+						view any
+					}{"graphql_referrers.go.tpl", view}
+				}
 				// protobuf.go mirrors the gorm output's converter file name: the
 				// proto↔row/input mappers for the graphql side.
 				files["protobuf.go"] = struct {

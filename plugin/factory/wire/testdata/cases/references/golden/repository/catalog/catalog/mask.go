@@ -35,6 +35,23 @@ func applyBookMask(merged, in *refdemov1.Book, paths []string) {
 	if repox.InMask(paths, "filed_under") {
 		merged.FiledUnder = in.GetFiledUnder()
 	}
+	if repox.InMask(paths, "genres") {
+		merged.Genres = in.GetGenres()
+	}
+}
+
+// applyGenreMask merges the masked fields of in onto merged. An empty
+// mask replaces every mutable field; identity, parentage, timestamps, and etag
+// are repository-managed and never masked. Message-typed fields are replaced
+// wholesale when the mask touches them or any of their subpaths, and a oneof is
+// replaced whole when the mask touches any of its arms — it holds at most one.
+func applyGenreMask(merged, in *refdemov1.Genre, paths []string) {
+	if repox.InMask(paths, "name") {
+		merged.Name = in.GetName()
+	}
+	if repox.InMask(paths, "display_name") {
+		merged.DisplayName = in.GetDisplayName()
+	}
 }
 
 // applyPageMask merges the masked fields of in onto merged. An empty

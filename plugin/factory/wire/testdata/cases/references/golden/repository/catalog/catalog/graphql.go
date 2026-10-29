@@ -22,7 +22,9 @@ import (
 	"example.com/test/gen/repox"
 	"example.com/test/genql"
 	"example.com/test/genql/catalogql/bookfiledunderql"
+	"example.com/test/genql/catalogql/bookgenresql"
 	"example.com/test/genql/catalogql/booksql"
+	"example.com/test/genql/catalogql/genresql"
 	"example.com/test/genql/catalogql/pagesql"
 	"example.com/test/genql/catalogql/shelffeaturedql"
 	"example.com/test/genql/catalogql/shelvesql"
@@ -125,6 +127,15 @@ func (r *GraphQLBookRepository) Create(ctx context.Context, parent string, in *r
 			gtx.Add(op)
 		}
 	}
+	{
+		var ops repox.Ops
+		if err := r.bookGenresJoinOps(ctx, &ops, ci.Id, in.GetGenres(), false); err != nil {
+			return nil, err
+		}
+		for _, op := range ops {
+			gtx.Add(op)
+		}
+	}
 	if err := gtx.Commit(ctx); err != nil {
 		return nil, mapGraphQLErr(err)
 	}
@@ -193,6 +204,7 @@ func (r *GraphQLBookRepository) toProto(ctx context.Context, row *booksql.Catalo
 		}
 	}
 	out.FiledUnder = joined["filed_under"][row.Id]
+	out.Genres = joined["genres"][row.Id]
 	if h := r.Hooks.AfterRead; h != nil {
 		if err := h(ctx, out); err != nil {
 			return nil, err
@@ -273,6 +285,14 @@ func (r *GraphQLBookRepository) engine(in repox.ListInput, scope ...graphql.Pred
 		}
 		return ids, err
 	})
+	eng.Via("genres", func(ctx context.Context, keys []string, where graphql.Predicate) ([]string, error) {
+		rows, err := r.Svc.Query.Catalog.BookGenres.List(ctx, bookgenresql.List().Where(graphql.And(bookgenresql.BookId.In(keys...), where)))
+		ids := make([]string, 0, len(rows))
+		for i := range rows {
+			ids = append(ids, rows[i].BookId)
+		}
+		return ids, err
+	})
 	return eng, conds, nil
 }
 
@@ -308,18 +328,35 @@ func (r *GraphQLBookRepository) count(ctx context.Context, in repox.ListInput, s
 }
 
 // facet is Facet over scope, counted from the matching rows, at most
-// repox.GraphQLScanLimit of them.
+// repox.GraphQLScanLimit of them (more fail with repox.ErrInvalidArgument, as
+// count's do). A field reached through another table -- a value object's, a
+// join table's -- is counted from that table's rows the matching rows reach
+// (repox.FacetVia).
 func (r *GraphQLBookRepository) facet(ctx context.Context, in repox.ListInput, field string, limit int, scope ...graphql.Predicate) ([]repox.Bucket, error) {
 	spec := catalog.BookFilterSpec
 	if _, err := repox.FacetExpr(spec, field); err != nil {
 		return nil, err
 	}
-	if f, ok := spec.Fields[field]; ok && f.Via != nil {
-		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
-	}
 	eng, conds, err := r.engine(in, scope...)
 	if err != nil {
 		return nil, err
+	}
+	if f, ok := spec.Fields[field]; ok && f.Via != nil {
+		var refs []string
+		if err := r.scan(ctx, eng, conds, func(row *booksql.CatalogBooks) {
+			if ref := repox.ViaRef(spec, field, repox.RowMap(row)); ref != "" {
+				refs = append(refs, ref)
+			}
+		}); err != nil {
+			return nil, err
+		}
+		counts, err := repox.FacetVia(ctx, spec, field, refs, func(ctx context.Context, keys []string) ([]map[string]any, error) {
+			return r.viaRows(ctx, field, keys)
+		})
+		if err != nil {
+			return nil, err
+		}
+		return repox.SortBuckets(counts, limit), nil
 	}
 	counts := map[string]int64{}
 	if err := r.scan(ctx, eng, conds, func(row *booksql.CatalogBooks) {
@@ -330,6 +367,35 @@ func (r *GraphQLBookRepository) facet(ctx context.Context, in repox.ListInput, f
 		return nil, err
 	}
 	return repox.SortBuckets(counts, limit), nil
+}
+
+// viaRows reads the rows of the table field is reached through (filterx.Via)
+// whose key is one of keys, as maps (repox.RowMap): what a facet by field
+// counts.
+func (r *GraphQLBookRepository) viaRows(ctx context.Context, field string, keys []string) ([]map[string]any, error) {
+	head, _, _ := strings.Cut(field, ".")
+	var out []map[string]any
+	switch head {
+	case "filed_under":
+		rows, err := r.Svc.Query.Catalog.BookFiledUnder.List(ctx, bookfiledunderql.List().Where(bookfiledunderql.BookId.In(keys...)))
+		if err != nil {
+			return nil, mapGraphQLErr(err)
+		}
+		for i := range rows {
+			out = append(out, repox.RowMap(&rows[i]))
+		}
+	case "genres":
+		rows, err := r.Svc.Query.Catalog.BookGenres.List(ctx, bookgenresql.List().Where(bookgenresql.BookId.In(keys...)))
+		if err != nil {
+			return nil, mapGraphQLErr(err)
+		}
+		for i := range rows {
+			out = append(out, repox.RowMap(&rows[i]))
+		}
+	default:
+		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
+	}
+	return out, nil
 }
 
 // scan calls f for every row eng matches under conds, failing past
@@ -419,6 +485,7 @@ func (r *GraphQLBookRepository) update(ctx context.Context, in *refdemov1.Book, 
 		return nil, err
 	}
 	existingPB.FiledUnder = joined["filed_under"][id]
+	existingPB.Genres = joined["genres"][id]
 	merged := proto.Clone(existingPB).(*refdemov1.Book)
 	applyBookMask(merged, in, paths)
 	repox.CopyFields(merged, in, outputPaths)
@@ -464,6 +531,11 @@ func (r *GraphQLBookRepository) writeJoins(ctx context.Context, owner string, in
 			return err
 		}
 	}
+	if repox.InMask(paths, "genres") {
+		if err := r.bookGenresJoinOps(ctx, &ops, owner, in.GetGenres(), true); err != nil {
+			return err
+		}
+	}
 	if len(ops) == 0 {
 		return nil
 	}
@@ -492,6 +564,17 @@ func (r *GraphQLBookRepository) readJoins(ctx context.Context, mask []string, ke
 			got[rows[i].BookId] = append(got[rows[i].BookId], "shelves/"+rows[i].ShelfId)
 		}
 		joined["filed_under"] = got
+	}
+	if repox.Reads(mask, "genres") {
+		rows, err := r.Svc.Query.Catalog.BookGenres.List(ctx, bookgenresql.List().Where(bookgenresql.BookId.In(keys...)).OrderBy(bookgenresql.Id.Asc()))
+		if err != nil {
+			return nil, mapGraphQLErr(err)
+		}
+		got := map[string][]string{}
+		for i := range rows {
+			got[rows[i].BookId] = append(got[rows[i].BookId], "genres/"+rows[i].GenreId)
+		}
+		joined["genres"] = got
 	}
 	return joined, nil
 }
@@ -523,6 +606,37 @@ func (r *GraphQLBookRepository) bookFiledUnderJoinOps(ctx context.Context, ops *
 		ops.Add(r.Svc.Mutation.Catalog.BookFiledUnder.CreateOp(bookfiledunderql.CreateInput{
 			Id: repox.NewULID(), BookId: owner, ShelfId: key,
 		}, new(bookfiledunderql.InsertCatalogBookFiledUnderResponse)))
+	}
+	return nil
+}
+
+// bookGenresJoinOps queues onto ops the join rows keeping genres for the row
+// keyed owner, one per name in order (a repeat keeps its first place), after
+// removing the rows it holds when replace is set. A name no record holds is
+// repox.ErrForeignKey.
+func (r *GraphQLBookRepository) bookGenresJoinOps(ctx context.Context, ops *repox.Ops, owner string, names []string, replace bool) error {
+	if replace {
+		rows, err := r.Svc.Query.Catalog.BookGenres.List(ctx, bookgenresql.List().Where(bookgenresql.BookId.Eq(owner)))
+		if err != nil {
+			return mapGraphQLErr(err)
+		}
+		for i := range rows {
+			ops.Add(r.Svc.Mutation.Catalog.BookGenres.DeleteOp(rows[i].Id, new(bookgenresql.DeleteCatalogBookGenresByIdResponse)))
+		}
+	}
+	seen := map[string]bool{}
+	for _, n := range names {
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		if !strings.HasPrefix(n, "genres/") {
+			return fmt.Errorf("%w: genres: %q is not a genres name", repox.ErrInvalidArgument, n)
+		}
+		key := repox.LastSegment(n)
+		ops.Add(r.Svc.Mutation.Catalog.BookGenres.CreateOp(bookgenresql.CreateInput{
+			Id: repox.NewULID(), BookId: owner, GenreId: key,
+		}, new(bookgenresql.InsertCatalogBookGenresResponse)))
 	}
 	return nil
 }
@@ -568,6 +682,9 @@ func (r *GraphQLBookRepository) insertOps(ctx context.Context, gtx *repox.Ops, i
 	if err := r.bookFiledUnderJoinOps(ctx, gtx, ci.Id, in.GetFiledUnder(), false); err != nil {
 		return nil, err
 	}
+	if err := r.bookGenresJoinOps(ctx, gtx, ci.Id, in.GetGenres(), false); err != nil {
+		return nil, err
+	}
 	return nil, nil
 }
 
@@ -611,6 +728,11 @@ func (r *GraphQLBookRepository) updateOps(ctx context.Context, ops *repox.Ops, i
 	}
 	if repox.InMask(paths, "filed_under") {
 		if err := r.bookFiledUnderJoinOps(ctx, &atx, id, merged.GetFiledUnder(), true); err != nil {
+			return nil, err
+		}
+	}
+	if repox.InMask(paths, "genres") {
+		if err := r.bookGenresJoinOps(ctx, &atx, id, merged.GetGenres(), true); err != nil {
 			return nil, err
 		}
 	}
@@ -754,12 +876,19 @@ func (r *GraphQLBookRepository) Purge(ctx context.Context, name string) error {
 }
 
 // purge removes row id, named name, for good -- unless something still
-// refers to it, when it keeps the row and reports kept: when askReferrers, a
-// referrer in another database or service (r.Refs), and, caught from the
-// database's own refusal, a row holding a foreign key to it. A purge never
-// fails, and never cascades, because of a referrer. repox.ErrNotFound when
-// there is no such row.
+// refers to it, when it keeps the row and reports kept: a row of this
+// database holding a foreign key to it (asked first, see referenced, then caught
+// again from the database's own refusal), or, when askReferrers, a referrer
+// in another database or service (r.Refs). A purge never fails, and never
+// cascades, because of a referrer. repox.ErrNotFound when there is no such
+// row.
 func (r *GraphQLBookRepository) purge(ctx context.Context, id, name string, askReferrers bool) (kept bool, err error) {
+	if referenced, err := r.referenced(ctx, id, name); err != nil {
+		return false, err
+	} else if referenced {
+		r.Refs.Kept(ctx, name, "foreign key")
+		return true, nil
+	}
 	if askReferrers && r.Refs.KeepOnPurge(ctx, "catalog.example.com/Book", name) {
 		return true, nil
 	}
@@ -828,6 +957,26 @@ func (r *GraphQLBookRepository) remove(ctx context.Context, id string) error {
 	return nil
 }
 
+// referenced reports whether a row of this database, deleted or not, still
+// holds a foreign key to row id, named name -- what the GORM adapter asks
+// with its ReferencedSQL. A key whose action cascades or
+// sets null (a join table's, a reference Prisma made optional) would not
+// refuse the delete.
+func (r *GraphQLBookRepository) referenced(ctx context.Context, id, name string) (bool, error) {
+	for _, holds := range []struct {
+		f   func(context.Context, *genql.Service, string) (bool, error)
+		key string
+	}{
+		{catalogPagesHoldsBookId, id},
+		{catalogShelfFeaturedHoldsBookId, id},
+	} {
+		if found, err := holds.f(ctx, r.Svc, holds.key); err != nil || found {
+			return found, err
+		}
+	}
+	return false, nil
+}
+
 // ListByKeys reads every record whose filter field field is one of keys; see
 // repox.ListByKeys.
 func (r *GraphQLBookRepository) ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*refdemov1.Book, error) {
@@ -838,6 +987,397 @@ func (r *GraphQLBookRepository) ListByKeys(ctx context.Context, field string, ke
 
 // Compile-time proof the adapter satisfies the interface.
 var _ BookRepository = (*GraphQLBookRepository)(nil)
+
+// GraphQLGenreRepository is the GraphQL adapter of GenreRepository
+// over the generated client: the same flat CRUD the gorm adapter implements,
+// against Catalog.Genres. Exported fields are the Tier-2 seam.
+type GraphQLGenreRepository struct {
+	Svc   *genql.Service
+	Hooks GenreHooks
+	// Refs, when set, is asked before a purge whether anything in another
+	// database or service still refers to the record (see Purge).
+	Refs *repox.References
+	// ListOverrides substitute the generated dispatch for single filter fields.
+	ListOverrides map[string]filterx.GraphQLHandler
+}
+
+// NewGraphQLGenreRepository returns the GraphQL adapter bound to svc.
+func NewGraphQLGenreRepository(svc *genql.Service) *GraphQLGenreRepository {
+	return &GraphQLGenreRepository{Svc: svc}
+}
+
+// Create persists in and returns the stored record.
+func (r *GraphQLGenreRepository) Create(ctx context.Context, in *refdemov1.Genre) (*refdemov1.Genre, error) {
+	id := repox.NewULID()
+	if in.GetName() != "" {
+		ids, err := repox.SplitName(in.GetName(), "genres")
+		if err != nil {
+			return nil, err
+		}
+		id = ids[len(ids)-1]
+	}
+	in = proto.Clone(in).(*refdemov1.Genre)
+	in.Name = FormatGenreName(id)
+	if h := r.Hooks.BeforeCreate; h != nil {
+		if err := h(ctx, in); err != nil {
+			return nil, err
+		}
+	}
+	ci := genreToCreateInput(in)
+	ci.Id = id
+	if _, err := r.Svc.Mutation.Catalog.Genres.Create(ctx, ci); err != nil {
+		return nil, mapGraphQLErr(err)
+	}
+	return r.get(ctx, id)
+}
+
+// Get returns the record addressed by its resource name.
+func (r *GraphQLGenreRepository) Get(ctx context.Context, name string) (*refdemov1.Genre, error) {
+	ids, err := repox.SplitName(name, "genres")
+	if err != nil {
+		return nil, err
+	}
+	return r.get(ctx, ids[len(ids)-1])
+}
+
+// rowID returns the surrogate key of the row named name: its bare id.
+func (r *GraphQLGenreRepository) rowID(_ context.Context, name string) (string, error) {
+	ids, err := repox.SplitName(name, "genres")
+	if err != nil {
+		return "", err
+	}
+	return ids[len(ids)-1], nil
+}
+
+// get loads by surrogate key — the private read every generated method
+// re-reads through.
+func (r *GraphQLGenreRepository) get(ctx context.Context, id string) (*refdemov1.Genre, error) {
+	row, err := r.Svc.Query.Catalog.Genres.Get(ctx, id)
+	if err != nil {
+		return nil, mapGraphQLErr(err)
+	}
+	if row == nil {
+		return nil, repox.ErrNotFound
+	}
+	return r.toProto(ctx, row, nil)
+}
+
+// toProto converts a loaded row, hydrating the value objects mask reads (all
+// of them for an empty mask) through their stored references, and runs the
+// AfterRead hook.
+func (r *GraphQLGenreRepository) toProto(ctx context.Context, row *genresql.CatalogGenres, mask []string) (*refdemov1.Genre, error) {
+	out := genreFromRow(row)
+	if h := r.Hooks.AfterRead; h != nil {
+		if err := h(ctx, out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// List returns one page of records.
+func (r *GraphQLGenreRepository) List(ctx context.Context, in repox.ListInput) ([]*refdemov1.Genre, string, error) {
+	return r.list(ctx, in)
+}
+
+// Count returns how many records match in; its page fields are ignored.
+func (r *GraphQLGenreRepository) Count(ctx context.Context, in repox.ListInput) (int64, error) {
+	return r.count(ctx, in)
+}
+
+// Facet counts the records matching in by the values of field, from the rows
+// (see repox.FacetValues).
+func (r *GraphQLGenreRepository) Facet(ctx context.Context, in repox.ListInput, field string, limit int) ([]repox.Bucket, error) {
+	return r.facet(ctx, in, field, limit)
+}
+
+// engine is the list engine over the records scope selects (and, unless
+// in.ShowDeleted, not deleted), with in's filter conditions.
+func (r *GraphQLGenreRepository) engine(in repox.ListInput, scope ...graphql.Predicate) (*filterx.HasuraEngine[genresql.CatalogGenres], []filterx.Condition, error) {
+	conds, err := filterx.Parse(in.Filter)
+	if err != nil {
+		return nil, nil, repox.MapFilterxErr(err)
+	}
+	conds = append(conds, in.Where...)
+	eng := filterx.Hasura[genresql.CatalogGenres](catalog.GenreFilterSpec, r.Svc.Query.Catalog.Genres).Scope(scope...)
+	for f, h := range r.ListOverrides {
+		eng.Override(f, h)
+	}
+	return eng, conds, nil
+}
+
+// count is Count over scope: one aggregate, unless a condition is matched
+// page by page (one reaching another table, or a hint), when the matching
+// rows are counted, at most repox.GraphQLScanLimit of them.
+func (r *GraphQLGenreRepository) count(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) (int64, error) {
+	eng, conds, err := r.engine(in, scope...)
+	if err != nil {
+		return 0, err
+	}
+	if repox.ReachesVia(catalog.GenreFilterSpec, conds) || repox.AnyHint(conds) {
+		var n int64
+		err := r.scan(ctx, eng, conds, func(*genresql.CatalogGenres) { n++ })
+		return n, err
+	}
+	where, has, err := eng.Predicate(conds)
+	if err != nil {
+		return 0, repox.MapFilterxErr(err)
+	}
+	if has {
+		scope = append(scope, where)
+	}
+	req := genresql.Aggregate()
+	if len(scope) > 0 {
+		req = req.Where(graphql.And(scope...))
+	}
+	agg, err := r.Svc.Query.Catalog.Genres.Aggregate(ctx, req)
+	if err != nil || agg == nil {
+		return 0, mapGraphQLErr(err)
+	}
+	return int64(agg.Count), nil
+}
+
+// facet is Facet over scope, counted from the matching rows, at most
+// repox.GraphQLScanLimit of them (more fail with repox.ErrInvalidArgument, as
+// count's do). A field reached through another table -- a value object's, a
+// join table's -- is counted from that table's rows the matching rows reach
+// (repox.FacetVia).
+func (r *GraphQLGenreRepository) facet(ctx context.Context, in repox.ListInput, field string, limit int, scope ...graphql.Predicate) ([]repox.Bucket, error) {
+	spec := catalog.GenreFilterSpec
+	if _, err := repox.FacetExpr(spec, field); err != nil {
+		return nil, err
+	}
+	eng, conds, err := r.engine(in, scope...)
+	if err != nil {
+		return nil, err
+	}
+	if f, ok := spec.Fields[field]; ok && f.Via != nil {
+		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
+	}
+	counts := map[string]int64{}
+	if err := r.scan(ctx, eng, conds, func(row *genresql.CatalogGenres) {
+		for _, v := range repox.FacetValues(spec, field, repox.RowMap(row)) {
+			counts[v]++
+		}
+	}); err != nil {
+		return nil, err
+	}
+	return repox.SortBuckets(counts, limit), nil
+}
+
+// scan calls f for every row eng matches under conds, failing past
+// repox.GraphQLScanLimit rows.
+func (r *GraphQLGenreRepository) scan(ctx context.Context, eng *filterx.HasuraEngine[genresql.CatalogGenres], conds []filterx.Condition, f func(*genresql.CatalogGenres)) error {
+	in := filterx.ListInput{PageSize: 1000, Filter: conds}
+	for read := 0; ; {
+		rows, next, err := eng.List(ctx, in)
+		if err != nil {
+			return repox.MapFilterxErr(err)
+		}
+		for i := range rows {
+			f(&rows[i])
+		}
+		read += len(rows)
+		if next == "" {
+			return nil
+		}
+		if read >= repox.GraphQLScanLimit {
+			return fmt.Errorf("%w: more than %d rows to scan on GraphQL; narrow the filter", repox.ErrInvalidArgument, repox.GraphQLScanLimit)
+		}
+		in.PageToken = next
+	}
+}
+
+func (r *GraphQLGenreRepository) list(ctx context.Context, in repox.ListInput, scope ...graphql.Predicate) ([]*refdemov1.Genre, string, error) {
+	if err := repox.CheckReadMask((*refdemov1.Genre)(nil), in.ReadMask); err != nil {
+		return nil, "", err
+	}
+	eng, conds, err := r.engine(in, scope...)
+	if err != nil {
+		return nil, "", err
+	}
+	rows, next, err := eng.List(ctx, filterx.ListInput{
+		PageSize:  in.PageSize,
+		PageToken: in.PageToken,
+		OrderBy:   in.OrderBy,
+		Filter:    conds,
+	})
+	if err != nil {
+		return nil, "", repox.MapFilterxErr(err)
+	}
+	items := make([]*refdemov1.Genre, 0, len(rows))
+	for i := range rows {
+		out, err := r.toProto(ctx, &rows[i], in.ReadMask)
+		if err != nil {
+			return nil, "", err
+		}
+		repox.Narrow(out, in.ReadMask)
+		items = append(items, out)
+	}
+	return items, next, nil
+}
+
+// Update persists the masked fields of in; an empty mask replaces every
+// mutable field. When in.Etag is set the write is guarded server-side
+// (UpdateIfMatch); a stale etag returns repox.ErrConflict.
+func (r *GraphQLGenreRepository) Update(ctx context.Context, in *refdemov1.Genre, paths []string) (*refdemov1.Genre, error) {
+	return r.update(ctx, in, paths, nil)
+}
+
+// update is Update's write, with the server-owned fields outputPaths names
+// (UpdateWithOutputOnly) merged into its patch.
+func (r *GraphQLGenreRepository) update(ctx context.Context, in *refdemov1.Genre, paths, outputPaths []string) (*refdemov1.Genre, error) {
+	ids, err := repox.SplitName(in.GetName(), "genres")
+	if err != nil {
+		return nil, err
+	}
+	id := ids[len(ids)-1]
+	row, err := r.Svc.Query.Catalog.Genres.Get(ctx, id)
+	if err != nil {
+		return nil, mapGraphQLErr(err)
+	}
+	if row == nil {
+		return nil, repox.ErrNotFound
+	}
+	existingPB := genreFromRow(row)
+	merged := proto.Clone(existingPB).(*refdemov1.Genre)
+	applyGenreMask(merged, in, paths)
+	if h := r.Hooks.BeforeUpdate; h != nil {
+		if err := h(ctx, existingPB, merged, paths); err != nil {
+			return nil, err
+		}
+	}
+	patch := genreToUpdatePatch(merged)
+	resp, err := r.Svc.Mutation.Catalog.Genres.Update(ctx, id, patch)
+	if err != nil {
+		return nil, mapGraphQLErr(err)
+	}
+	if resp.AffectedRows == 0 {
+		return nil, repox.ErrNotFound
+	}
+	return r.get(ctx, id)
+}
+
+// newInput builds the insert a Batch queues for in, and
+// the record it stands for, named: the same resolution Create applies.
+func (r *GraphQLGenreRepository) newInput(in *refdemov1.Genre) (genresql.CreateInput, *refdemov1.Genre, error) {
+	var ci genresql.CreateInput
+	id := repox.NewULID()
+	if in.GetName() != "" {
+		ids, err := repox.SplitName(in.GetName(), "genres")
+		if err != nil {
+			return ci, nil, err
+		}
+		id = ids[len(ids)-1]
+	}
+	in = proto.Clone(in).(*refdemov1.Genre)
+	in.Name = FormatGenreName(id)
+	ci = genreToCreateInput(in)
+	ci.Id = id
+	return ci, in, nil
+}
+
+// updateOps queues Update's writes onto ops, for a Batch: the value-object
+// rows that replace the masked ones, the row update, then the removal of what
+// they replaced. With in.Etag set the update is guarded inside the batch: a
+// self-update of the key whose post-check asserts the etag fails the request
+// when the record moved on, and the guarded update after it writes the row.
+//
+// outputPaths names the server-owned fields written alongside
+// (Update<Model>WithOutputOnly); nil for Update.
+func (r *GraphQLGenreRepository) updateOps(ctx context.Context, ops *repox.Ops, id string, in *refdemov1.Genre, paths, outputPaths []string) (repox.Check, error) {
+	row, err := r.Svc.Query.Catalog.Genres.Get(ctx, id)
+	if err != nil {
+		return nil, mapGraphQLErr(err)
+	}
+	if row == nil {
+		return nil, repox.ErrNotFound
+	}
+	existingPB := genreFromRow(row)
+	merged := proto.Clone(existingPB).(*refdemov1.Genre)
+	applyGenreMask(merged, in, paths)
+	patch := genreToUpdatePatch(merged)
+	var utx, atx repox.Ops
+	*ops = append(*ops, utx...)
+	resp := new(genresql.UpdateCatalogGenresByIdResponse)
+	ops.Add(r.Svc.Mutation.Catalog.Genres.UpdateOp(id, patch, resp))
+	*ops = append(*ops, atx...)
+	return func(ctx context.Context, failed error) error {
+		if failed == nil {
+			if resp.AffectedRows == 0 {
+				return repox.ErrNotFound
+			}
+			return nil
+		}
+		return nil
+	}, nil
+}
+
+// Delete removes the record addressed by its resource name.
+func (r *GraphQLGenreRepository) Delete(ctx context.Context, name string) error {
+	if _, err := repox.SplitName(name, "genres"); err != nil {
+		return err
+	}
+	if h := r.Hooks.BeforeDelete; h != nil {
+		if err := h(ctx, name); err != nil {
+			return err
+		}
+	}
+	id, err := r.rowID(ctx, name)
+	if err != nil {
+		return err
+	}
+	// A join table's row naming it would cascade away with it: refused, as a
+	// singular reference's constraint refuses it.
+	if referenced, err := r.referenced(ctx, id, name); err != nil {
+		return err
+	} else if referenced {
+		return repox.ReferencedByJoin("catalog.example.com/Genre", name)
+	}
+	return r.remove(ctx, id)
+}
+
+// remove deletes row id with the value-object rows it owns.
+func (r *GraphQLGenreRepository) remove(ctx context.Context, id string) error {
+	resp, err := r.Svc.Mutation.Catalog.Genres.Delete(ctx, id)
+	if err != nil {
+		return mapGraphQLErr(err)
+	}
+	if resp.AffectedRows == 0 {
+		return repox.ErrNotFound
+	}
+	return nil
+}
+
+// referenced reports whether a row of this database, deleted or not, still
+// holds a foreign key to row id, named name -- what the GORM adapter asks
+// with its JoinReferencedSQL: a join table's row. A key whose action cascades or
+// sets null (a join table's, a reference Prisma made optional) would not
+// refuse the delete.
+func (r *GraphQLGenreRepository) referenced(ctx context.Context, id, name string) (bool, error) {
+	for _, holds := range []struct {
+		f   func(context.Context, *genql.Service, string) (bool, error)
+		key string
+	}{
+		{catalogBookGenresHoldsGenreId, id},
+	} {
+		if found, err := holds.f(ctx, r.Svc, holds.key); err != nil || found {
+			return found, err
+		}
+	}
+	return false, nil
+}
+
+// ListByKeys reads every record whose filter field field is one of keys; see
+// repox.ListByKeys.
+func (r *GraphQLGenreRepository) ListByKeys(ctx context.Context, field string, keys []string, in repox.ListInput) ([]*refdemov1.Genre, error) {
+	return repox.ListByKeys(ctx, field, keys, in, func(ctx context.Context, in repox.ListInput) ([]*refdemov1.Genre, string, error) {
+		return r.List(ctx, in)
+	})
+}
+
+// Compile-time proof the adapter satisfies the interface.
+var _ GenreRepository = (*GraphQLGenreRepository)(nil)
 
 // GraphQLPageRepository is the GraphQL adapter of PageRepository
 // over the generated client: the same flat CRUD the gorm adapter implements,
@@ -1084,18 +1624,21 @@ func (r *GraphQLPageRepository) count(ctx context.Context, in repox.ListInput, s
 }
 
 // facet is Facet over scope, counted from the matching rows, at most
-// repox.GraphQLScanLimit of them.
+// repox.GraphQLScanLimit of them (more fail with repox.ErrInvalidArgument, as
+// count's do). A field reached through another table -- a value object's, a
+// join table's -- is counted from that table's rows the matching rows reach
+// (repox.FacetVia).
 func (r *GraphQLPageRepository) facet(ctx context.Context, in repox.ListInput, field string, limit int, scope ...graphql.Predicate) ([]repox.Bucket, error) {
 	spec := catalog.PageFilterSpec
 	if _, err := repox.FacetExpr(spec, field); err != nil {
 		return nil, err
 	}
-	if f, ok := spec.Fields[field]; ok && f.Via != nil {
-		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
-	}
 	eng, conds, err := r.engine(in, scope...)
 	if err != nil {
 		return nil, err
+	}
+	if f, ok := spec.Fields[field]; ok && f.Via != nil {
+		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
 	}
 	counts := map[string]int64{}
 	if err := r.scan(ctx, eng, conds, func(row *pagesql.CatalogPages) {
@@ -1488,18 +2031,35 @@ func (r *GraphQLShelfRepository) count(ctx context.Context, in repox.ListInput, 
 }
 
 // facet is Facet over scope, counted from the matching rows, at most
-// repox.GraphQLScanLimit of them.
+// repox.GraphQLScanLimit of them (more fail with repox.ErrInvalidArgument, as
+// count's do). A field reached through another table -- a value object's, a
+// join table's -- is counted from that table's rows the matching rows reach
+// (repox.FacetVia).
 func (r *GraphQLShelfRepository) facet(ctx context.Context, in repox.ListInput, field string, limit int, scope ...graphql.Predicate) ([]repox.Bucket, error) {
 	spec := catalog.ShelfFilterSpec
 	if _, err := repox.FacetExpr(spec, field); err != nil {
 		return nil, err
 	}
-	if f, ok := spec.Fields[field]; ok && f.Via != nil {
-		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
-	}
 	eng, conds, err := r.engine(in, scope...)
 	if err != nil {
 		return nil, err
+	}
+	if f, ok := spec.Fields[field]; ok && f.Via != nil {
+		var refs []string
+		if err := r.scan(ctx, eng, conds, func(row *shelvesql.CatalogShelves) {
+			if ref := repox.ViaRef(spec, field, repox.RowMap(row)); ref != "" {
+				refs = append(refs, ref)
+			}
+		}); err != nil {
+			return nil, err
+		}
+		counts, err := repox.FacetVia(ctx, spec, field, refs, func(ctx context.Context, keys []string) ([]map[string]any, error) {
+			return r.viaRows(ctx, field, keys)
+		})
+		if err != nil {
+			return nil, err
+		}
+		return repox.SortBuckets(counts, limit), nil
 	}
 	counts := map[string]int64{}
 	if err := r.scan(ctx, eng, conds, func(row *shelvesql.CatalogShelves) {
@@ -1510,6 +2070,27 @@ func (r *GraphQLShelfRepository) facet(ctx context.Context, in repox.ListInput, 
 		return nil, err
 	}
 	return repox.SortBuckets(counts, limit), nil
+}
+
+// viaRows reads the rows of the table field is reached through (filterx.Via)
+// whose key is one of keys, as maps (repox.RowMap): what a facet by field
+// counts.
+func (r *GraphQLShelfRepository) viaRows(ctx context.Context, field string, keys []string) ([]map[string]any, error) {
+	head, _, _ := strings.Cut(field, ".")
+	var out []map[string]any
+	switch head {
+	case "featured":
+		rows, err := r.Svc.Query.Catalog.ShelfFeatured.List(ctx, shelffeaturedql.List().Where(shelffeaturedql.ShelfId.In(keys...)))
+		if err != nil {
+			return nil, mapGraphQLErr(err)
+		}
+		for i := range rows {
+			out = append(out, repox.RowMap(&rows[i]))
+		}
+	default:
+		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
+	}
+	return out, nil
 }
 
 // scan calls f for every row eng matches under conds, failing past
@@ -1932,12 +2513,19 @@ func (r *GraphQLShelfRepository) Purge(ctx context.Context, name string) error {
 }
 
 // purge removes row id, named name, for good -- unless something still
-// refers to it, when it keeps the row and reports kept: when askReferrers, a
-// referrer in another database or service (r.Refs), and, caught from the
-// database's own refusal, a row holding a foreign key to it. A purge never
-// fails, and never cascades, because of a referrer. repox.ErrNotFound when
-// there is no such row.
+// refers to it, when it keeps the row and reports kept: a row of this
+// database holding a foreign key to it (asked first, see referenced, then caught
+// again from the database's own refusal), or, when askReferrers, a referrer
+// in another database or service (r.Refs). A purge never fails, and never
+// cascades, because of a referrer. repox.ErrNotFound when there is no such
+// row.
 func (r *GraphQLShelfRepository) purge(ctx context.Context, id, name string, askReferrers bool) (kept bool, err error) {
+	if referenced, err := r.referenced(ctx, id, name); err != nil {
+		return false, err
+	} else if referenced {
+		r.Refs.Kept(ctx, name, "foreign key")
+		return true, nil
+	}
 	if askReferrers && r.Refs.KeepOnPurge(ctx, "catalog.example.com/Shelf", name) {
 		return true, nil
 	}
@@ -2004,6 +2592,27 @@ func (r *GraphQLShelfRepository) remove(ctx context.Context, id string) error {
 		return repox.ErrNotFound
 	}
 	return nil
+}
+
+// referenced reports whether a row of this database, deleted or not, still
+// holds a foreign key to row id, named name -- what the GORM adapter asks
+// with its ReferencedSQL. A key whose action cascades or
+// sets null (a join table's, a reference Prisma made optional) would not
+// refuse the delete.
+func (r *GraphQLShelfRepository) referenced(ctx context.Context, id, name string) (bool, error) {
+	for _, holds := range []struct {
+		f   func(context.Context, *genql.Service, string) (bool, error)
+		key string
+	}{
+		{catalogBookFiledUnderHoldsShelfId, id},
+		{catalogBooksHoldsShelfId, id},
+		{catalogPagesHoldsShelfId, id},
+	} {
+		if found, err := holds.f(ctx, r.Svc, holds.key); err != nil || found {
+			return found, err
+		}
+	}
+	return false, nil
 }
 
 // ListByKeys reads every record whose filter field field is one of keys; see
@@ -2166,11 +2775,13 @@ func (b *graphQLBatch) PurgeBook(name string) {
 		b.u.Fail(err)
 		return
 	}
-	r := &GraphQLBookRepository{Svc: b.svc}
+	r := &GraphQLBookRepository{Svc: b.svc, Refs: b.u.Conn().References}
 	// A record a referrer in another database or service names is kept, as
-	// Purge keeps it. One a foreign key of this database still names fails
-	// the commit with repox.ErrForeignKey: the request is one transaction,
-	// and the engine cannot skip one of its mutations.
+	// Purge keeps it, and so is one a row of this database is found to
+	// hold a foreign key to when the purge is queued. One a foreign key of
+	// this database names by then fails the commit with
+	// repox.ErrForeignKey: the request is one transaction, and the engine
+	// cannot skip one of its mutations.
 	keep := queueBookPurge(b.u, name)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		if *keep {
@@ -2183,9 +2794,82 @@ func (b *graphQLBatch) PurgeBook(name string) {
 		if err != nil {
 			return nil, err
 		}
+		if referenced, err := r.referenced(ctx, id, name); err != nil || referenced {
+			if referenced {
+				r.Refs.Kept(ctx, name, "foreign key")
+			}
+			return nil, err
+		}
 		return r.purgeOps(ctx, ops, id)
 	})
 	b.u.Record(repox.Change{Type: "catalog.example.com/Book", Name: name, Op: repox.ChangePurge, LoadPrior: repox.PriorOf(name, getBook)})
+}
+
+// CreateGenre queues a create and returns the name the record will have.
+func (b *graphQLBatch) CreateGenre(in *refdemov1.Genre) (string, error) {
+	r := &GraphQLGenreRepository{Svc: b.svc}
+	ci, named, err := r.newInput(in)
+	if err != nil {
+		return "", err
+	}
+	if b.keys == nil {
+		b.keys = map[string]string{}
+	}
+	b.keys[named.GetName()] = ci.Id
+	queueGenreReferences(b.u, named, nil)
+	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		ops.Add(b.svc.Mutation.Catalog.Genres.CreateOp(ci, new(genresql.InsertCatalogGenresResponse)))
+		return nil, nil
+	})
+	b.u.Record(repox.Change{Type: "catalog.example.com/Genre", Name: named.GetName(), Op: repox.ChangeCreate, Record: named})
+	return named.GetName(), nil
+}
+
+// UpdateGenre queues Update; in.Etag, when set, guards it inside the
+// batch's request (see updateOps).
+func (b *graphQLBatch) UpdateGenre(in *refdemov1.Genre, paths []string) {
+	if _, err := repox.SplitName(in.GetName(), "genres"); err != nil {
+		b.u.Fail(err)
+		return
+	}
+	r := &GraphQLGenreRepository{Svc: b.svc}
+	queueGenreReferences(b.u, in, paths)
+	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		id, err := b.rowID(ctx, in.GetName(), r.rowID)
+		if err != nil {
+			return nil, err
+		}
+		return r.updateOps(ctx, ops, id, in, paths, nil)
+	})
+	b.u.Record(repox.Change{Type: "catalog.example.com/Genre", Name: in.GetName(), Op: repox.ChangeUpdate, Record: in, LoadPrior: repox.PriorOf(in.GetName(), getGenre)})
+}
+
+// DeleteGenre queues the record's removal for good. A record already
+// gone is not an error.
+func (b *graphQLBatch) DeleteGenre(name string) {
+	if _, err := repox.SplitName(name, "genres"); err != nil {
+		b.u.Fail(err)
+		return
+	}
+	r := &GraphQLGenreRepository{Svc: b.svc}
+	queueGenreDelete(b.u, name, true)
+	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
+		id, err := b.rowID(ctx, name, r.rowID)
+		if errors.Is(err, repox.ErrNotFound) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if referenced, err := r.referenced(ctx, id, name); err != nil {
+			return nil, err
+		} else if referenced {
+			return nil, repox.ReferencedByJoin("catalog.example.com/Genre", name)
+		}
+		ops.Add(b.svc.Mutation.Catalog.Genres.DeleteOp(id, new(genresql.DeleteCatalogGenresByIdResponse)))
+		return nil, nil
+	})
+	b.u.Record(repox.Change{Type: "catalog.example.com/Genre", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getGenre)})
 }
 
 // CreatePage queues a create and returns the name the record will have.
@@ -2376,11 +3060,13 @@ func (b *graphQLBatch) PurgeShelf(name string) {
 		b.u.Fail(err)
 		return
 	}
-	r := &GraphQLShelfRepository{Svc: b.svc}
+	r := &GraphQLShelfRepository{Svc: b.svc, Refs: b.u.Conn().References}
 	// A record a referrer in another database or service names is kept, as
-	// Purge keeps it. One a foreign key of this database still names fails
-	// the commit with repox.ErrForeignKey: the request is one transaction,
-	// and the engine cannot skip one of its mutations.
+	// Purge keeps it, and so is one a row of this database is found to
+	// hold a foreign key to when the purge is queued. One a foreign key of
+	// this database names by then fails the commit with
+	// repox.ErrForeignKey: the request is one transaction, and the engine
+	// cannot skip one of its mutations.
 	keep := queueShelfPurge(b.u, name)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		if *keep {
@@ -2391,6 +3077,12 @@ func (b *graphQLBatch) PurgeShelf(name string) {
 			return nil, nil
 		}
 		if err != nil {
+			return nil, err
+		}
+		if referenced, err := r.referenced(ctx, id, name); err != nil || referenced {
+			if referenced {
+				r.Refs.Kept(ctx, name, "foreign key")
+			}
 			return nil, err
 		}
 		return r.purgeOps(ctx, ops, id)

@@ -172,3 +172,10 @@ func isJoinTable(t *schema.Table) bool { return t != nil && t.Join != nil }
 func joinOwnerFK(t *schema.Table, fk *schema.ForeignKey) bool {
 	return isJoinTable(t) && strings.EqualFold(fk.Column, t.Join.OwnerColumn)
 }
+
+// joinTargetFK reports whether fk is a join table's key to its target: each
+// row is a reference to that record, as a singular resource_reference's
+// column is, so the record counts it among its referrers.
+func joinTargetFK(t *schema.Table, fk *schema.ForeignKey) bool {
+	return isJoinTable(t) && strings.EqualFold(fk.Column, t.Join.TargetColumn)
+}

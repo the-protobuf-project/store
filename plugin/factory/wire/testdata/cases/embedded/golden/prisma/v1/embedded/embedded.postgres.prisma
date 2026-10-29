@@ -161,7 +161,7 @@ model EventAttendees {
   attendeeID String @map("attendee_id")
 
   /// Relation to Attendee via attendee_id.
-  attendee Attendee @relation(fields: [attendeeID], references: [id], onDelete: Cascade)
+  attendee Attendee @relation(fields: [attendeeID], references: [id])
 
   /// Full resource name of the referenced Attendee, capturing the parent hierarchy the attendee_id id alone omits.
   attendeeName String @map("attendee_name")

@@ -479,18 +479,39 @@ func (r *GraphQL{{.Model}}Repository) count(ctx context.Context, in repox.ListIn
 }
 
 // facet is Facet over scope, counted from the matching rows, at most
-// repox.GraphQLScanLimit of them.
+// repox.GraphQLScanLimit of them (more fail with repox.ErrInvalidArgument, as
+// count's do). A field reached through another table -- a value object's, a
+// join table's -- is counted from that table's rows the matching rows reach
+// (repox.FacetVia).
 func (r *GraphQL{{.Model}}Repository) facet(ctx context.Context, in repox.ListInput, field string, limit int, scope ...graphql.Predicate) ([]repox.Bucket, error) {
 	spec := {{$.GormPkg}}.{{.Model}}FilterSpec
 	if _, err := repox.FacetExpr(spec, field); err != nil {
 		return nil, err
 	}
-	if f, ok := spec.Fields[field]; ok && f.Via != nil {
-		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
-	}
 	eng, conds, err := r.engine(in, scope...)
 	if err != nil {
 		return nil, err
+	}
+	if f, ok := spec.Fields[field]; ok && f.Via != nil {
+		{{- if .ViaLookups}}
+		var refs []string
+		if err := r.scan(ctx, eng, conds, func(row *{{.Row}}) {
+			if ref := repox.ViaRef(spec, field, repox.RowMap(row)); ref != "" {
+				refs = append(refs, ref)
+			}
+		}); err != nil {
+			return nil, err
+		}
+		counts, err := repox.FacetVia(ctx, spec, field, refs, func(ctx context.Context, keys []string) ([]map[string]any, error) {
+			return r.viaRows(ctx, field, keys)
+		})
+		if err != nil {
+			return nil, err
+		}
+		return repox.SortBuckets(counts, limit), nil
+		{{- else}}
+		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
+		{{- end}}
 	}
 	counts := map[string]int64{}
 	if err := r.scan(ctx, eng, conds, func(row *{{.Row}}) {
@@ -502,6 +523,32 @@ func (r *GraphQL{{.Model}}Repository) facet(ctx context.Context, in repox.ListIn
 	}
 	return repox.SortBuckets(counts, limit), nil
 }
+
+{{- if .ViaLookups}}
+
+// viaRows reads the rows of the table field is reached through (filterx.Via)
+// whose key is one of keys, as maps (repox.RowMap): what a facet by field
+// counts.
+func (r *GraphQL{{.Model}}Repository) viaRows(ctx context.Context, field string, keys []string) ([]map[string]any, error) {
+	head, _, _ := strings.Cut(field, ".")
+	var out []map[string]any
+	switch head {
+	{{- range .ViaLookups}}
+	case "{{.Field}}":
+		rows, err := r.Svc.Query.{{.Domain}}.{{.Resource}}.List(ctx, {{.ResPkg}}.List().Where({{.ResPkg}}.{{.KeyField}}.In(keys...)))
+		if err != nil {
+			return nil, mapGraphQLErr(err)
+		}
+		for i := range rows {
+			out = append(out, repox.RowMap(&rows[i]))
+		}
+	{{- end}}
+	default:
+		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
+	}
+	return out, nil
+}
+{{- end}}
 
 // scan calls f for every row eng matches under conds, failing past
 // repox.GraphQLScanLimit rows.
@@ -1144,12 +1191,21 @@ func (r *GraphQL{{.Model}}Repository) Delete(ctx context.Context, name string) e
 }
 
 // purge removes row id, named name, for good -- unless something still
-// refers to it, when it keeps the row and reports kept: when askReferrers, a
-// referrer in another database or service (r.Refs), and, caught from the
-// database's own refusal, a row holding a foreign key to it. A purge never
-// fails, and never cascades, because of a referrer. repox.ErrNotFound when
-// there is no such row.
+// refers to it, when it keeps the row and reports kept: a row of this
+// database holding a foreign key to it (asked first{{if .GQLReferrers}}, see referenced{{end}}, then caught
+// again from the database's own refusal), or, when askReferrers, a referrer
+// in another database or service (r.Refs). A purge never fails, and never
+// cascades, because of a referrer. repox.ErrNotFound when there is no such
+// row.
 func (r *GraphQL{{.Model}}Repository) purge(ctx context.Context, id, name string, askReferrers bool) (kept bool, err error) {
+	{{- if .GQLReferrers}}
+	if referenced, err := r.referenced(ctx, id, name); err != nil {
+		return false, err
+	} else if referenced {
+		r.Refs.Kept(ctx, name, "foreign key")
+		return true, nil
+	}
+	{{- end}}
 	{{- if .Type}}
 	if askReferrers && r.Refs.KeepOnPurge(ctx, {{printf "%q" .Type}}, name) {
 		return true, nil
@@ -1162,6 +1218,7 @@ func (r *GraphQL{{.Model}}Repository) purge(ctx context.Context, id, name string
 	}
 	return false, err
 }
+
 {{- if .Expiring}}
 
 // PurgeExpired removes for good every deleted record whose expire_time is at
@@ -1210,6 +1267,15 @@ func (r *GraphQL{{.Model}}Repository) PurgeExpired(ctx context.Context, now time
 }
 {{- end}}
 	{{- else}}
+	{{- if .GQLReferrers}}
+	// A join table's row naming it would cascade away with it: refused, as a
+	// singular reference's constraint refuses it.
+	if referenced, err := r.referenced(ctx, id, name); err != nil {
+		return err
+	} else if referenced {
+		return repox.ReferencedByJoin({{printf "%q" .Type}}, name)
+	}
+	{{- end}}
 	return r.remove(ctx, id)
 }
 	{{- end}}
@@ -1237,6 +1303,29 @@ func (r *GraphQL{{.Model}}Repository) remove(ctx context.Context, id string) err
 	{{- end}}
 	return nil
 }
+{{- if .GQLReferrers}}
+
+// referenced reports whether a row of this database, deleted or not, still
+// holds a foreign key to row id, named name -- what the GORM adapter asks
+// with its {{if .SoftDelete}}ReferencedSQL{{else}}JoinReferencedSQL: a join table's row{{end}}. A key whose action cascades or
+// sets null (a join table's, a reference Prisma made optional) would not
+// refuse the delete.
+func (r *GraphQL{{.Model}}Repository) referenced(ctx context.Context, id, name string) (bool, error) {
+	for _, holds := range []struct {
+		f   func(context.Context, *{{$.ClientPkg}}.Service, string) (bool, error)
+		key string
+	}{
+		{{- range .GQLReferrers}}
+		{ {{- .Func}}, {{.Value -}} },
+		{{- end}}
+	} {
+		if found, err := holds.f(ctx, r.Svc, holds.key); err != nil || found {
+			return found, err
+		}
+	}
+	return false, nil
+}
+{{- end}}
 
 // ListByKeys reads every record whose filter field field is one of keys; see
 // repox.ListByKeys.
@@ -1426,12 +1515,14 @@ func (b *graphQLBatch) {{if .SoftDelete}}Purge{{else}}Delete{{end}}{{.Model}}(na
 		b.u.Fail(err)
 		return
 	}
-	r := &GraphQL{{.Model}}Repository{Svc: b.svc}
+	r := &GraphQL{{.Model}}Repository{Svc: b.svc{{if .SoftDelete}}, Refs: b.u.Conn().References{{end}}}
 	{{- if .SoftDelete}}
 	// A record a referrer in another database or service names is kept, as
-	// Purge keeps it. One a foreign key of this database still names fails
-	// the commit with repox.ErrForeignKey: the request is one transaction,
-	// and the engine cannot skip one of its mutations.
+	// Purge keeps it{{if .GQLReferrers}}, and so is one a row of this database is found to
+	// hold a foreign key to when the purge is queued{{end}}. One a foreign key of
+	// this database {{if .GQLReferrers}}names by then{{else}}still names{{end}} fails the commit with
+	// repox.ErrForeignKey: the request is one transaction, and the engine
+	// cannot skip one of its mutations.
 	keep := queue{{.Model}}Purge(b.u, name)
 	{{- else}}
 	queue{{.Model}}Delete(b.u, name, true)
@@ -1449,6 +1540,20 @@ func (b *graphQLBatch) {{if .SoftDelete}}Purge{{else}}Delete{{end}}{{.Model}}(na
 		if err != nil {
 			return nil, err
 		}
+		{{- if and .SoftDelete .GQLReferrers}}
+		if referenced, err := r.referenced(ctx, id, name); err != nil || referenced {
+			if referenced {
+				r.Refs.Kept(ctx, name, "foreign key")
+			}
+			return nil, err
+		}
+		{{- else if .GQLReferrers}}
+		if referenced, err := r.referenced(ctx, id, name); err != nil {
+			return nil, err
+		} else if referenced {
+			return nil, repox.ReferencedByJoin({{printf "%q" .Type}}, name)
+		}
+		{{- end}}
 		{{- if .Flat}}
 		ops.Add(b.svc.Mutation.{{.Domain}}.{{.Resource}}.DeleteOp(id, new({{.DeleteResp}})))
 		return nil, nil

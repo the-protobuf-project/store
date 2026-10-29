@@ -52,6 +52,16 @@ CREATE TABLE "catalog"."books" (
 CREATE INDEX "idx_books_delete_time" ON "catalog"."books" ("delete_time");
 CREATE INDEX "idx_books_shelf_id_id" ON "catalog"."books" ("shelf_id", "id");
 
+-- A genre books are classed under: deleted outright, with no soft delete.
+CREATE TABLE "catalog"."genres" (
+    -- Unique identifier for the record.
+    "id"  CHAR(26)  NOT NULL  PRIMARY KEY,
+    -- The genre's resource name.
+    "name"  VARCHAR(255)  NOT NULL  UNIQUE,
+    -- The genre as it is shown.
+    "display_name"  VARCHAR(255)  NOT NULL
+);
+
 -- A page of a book: nested two deep, so the row it hangs off is a nested resource's, found by its name.
 CREATE TABLE "catalog"."pages" (
     -- Unique identifier for the record.
@@ -81,7 +91,7 @@ CREATE TABLE "catalog"."shelf_featured" (
     -- Full resource name of the referenced Book, capturing the parent hierarchy the book_id id alone omits.
     "book_name"  TEXT  NOT NULL,
     CONSTRAINT "fk_shelf_featured_shelf_id" FOREIGN KEY ("shelf_id") REFERENCES "catalog"."shelves"("id") ON DELETE CASCADE,
-    CONSTRAINT "fk_shelf_featured_book_id" FOREIGN KEY ("book_id") REFERENCES "catalog"."books"("id") ON DELETE CASCADE
+    CONSTRAINT "fk_shelf_featured_book_id" FOREIGN KEY ("book_id") REFERENCES "catalog"."books"("id")
 );
 CREATE UNIQUE INDEX "idx_shelf_featured_shelf_id_book_id" ON "catalog"."shelf_featured" ("shelf_id", "book_id");
 CREATE INDEX "idx_shelf_featured_book_id" ON "catalog"."shelf_featured" ("book_id");
@@ -95,10 +105,24 @@ CREATE TABLE "catalog"."book_filed_under" (
     -- Foreign key to Shelf.
     "shelf_id"  CHAR(26)  NOT NULL,
     CONSTRAINT "fk_book_filed_under_book_id" FOREIGN KEY ("book_id") REFERENCES "catalog"."books"("id") ON DELETE CASCADE,
-    CONSTRAINT "fk_book_filed_under_shelf_id" FOREIGN KEY ("shelf_id") REFERENCES "catalog"."shelves"("id") ON DELETE CASCADE
+    CONSTRAINT "fk_book_filed_under_shelf_id" FOREIGN KEY ("shelf_id") REFERENCES "catalog"."shelves"("id")
 );
 CREATE UNIQUE INDEX "idx_book_filed_under_book_id_shelf_id" ON "catalog"."book_filed_under" ("book_id", "shelf_id");
 CREATE INDEX "idx_book_filed_under_shelf_id" ON "catalog"."book_filed_under" ("shelf_id");
+
+-- Join table for the many-to-many relation Book.genres ↔ Genre.
+CREATE TABLE "catalog"."book_genres" (
+    -- Unique identifier for the record.
+    "id"  CHAR(26)  NOT NULL  PRIMARY KEY,
+    -- Foreign key to Book.
+    "book_id"  CHAR(26)  NOT NULL,
+    -- Foreign key to Genre.
+    "genre_id"  CHAR(26)  NOT NULL,
+    CONSTRAINT "fk_book_genres_book_id" FOREIGN KEY ("book_id") REFERENCES "catalog"."books"("id") ON DELETE CASCADE,
+    CONSTRAINT "fk_book_genres_genre_id" FOREIGN KEY ("genre_id") REFERENCES "catalog"."genres"("id")
+);
+CREATE UNIQUE INDEX "idx_book_genres_book_id_genre_id" ON "catalog"."book_genres" ("book_id", "genre_id");
+CREATE INDEX "idx_book_genres_genre_id" ON "catalog"."book_genres" ("genre_id");
 
 
 -- Column and table documentation, persisted to the catalog.
@@ -117,6 +141,10 @@ COMMENT ON COLUMN "catalog"."books"."etag" IS 'Optimistic-concurrency token.';
 COMMENT ON COLUMN "catalog"."books"."delete_time" IS 'When the book was soft-deleted.';
 COMMENT ON COLUMN "catalog"."books"."expire_time" IS 'When the soft-deleted book goes for good.';
 COMMENT ON COLUMN "catalog"."books"."shelf_id" IS 'Parent reference to Shelf (from the AIP resource pattern).';
+COMMENT ON TABLE "catalog"."genres" IS 'A genre books are classed under: deleted outright, with no soft delete.';
+COMMENT ON COLUMN "catalog"."genres"."id" IS 'Unique identifier for the record.';
+COMMENT ON COLUMN "catalog"."genres"."name" IS 'The genre''s resource name.';
+COMMENT ON COLUMN "catalog"."genres"."display_name" IS 'The genre as it is shown.';
 COMMENT ON TABLE "catalog"."pages" IS 'A page of a book: nested two deep, so the row it hangs off is a nested resource''s, found by its name.';
 COMMENT ON COLUMN "catalog"."pages"."id" IS 'Unique identifier for the record.';
 COMMENT ON COLUMN "catalog"."pages"."name" IS 'The page''s resource name.';
@@ -132,3 +160,7 @@ COMMENT ON TABLE "catalog"."book_filed_under" IS 'Join table for the many-to-man
 COMMENT ON COLUMN "catalog"."book_filed_under"."id" IS 'Unique identifier for the record.';
 COMMENT ON COLUMN "catalog"."book_filed_under"."book_id" IS 'Foreign key to Book.';
 COMMENT ON COLUMN "catalog"."book_filed_under"."shelf_id" IS 'Foreign key to Shelf.';
+COMMENT ON TABLE "catalog"."book_genres" IS 'Join table for the many-to-many relation Book.genres ↔ Genre.';
+COMMENT ON COLUMN "catalog"."book_genres"."id" IS 'Unique identifier for the record.';
+COMMENT ON COLUMN "catalog"."book_genres"."book_id" IS 'Foreign key to Book.';
+COMMENT ON COLUMN "catalog"."book_genres"."genre_id" IS 'Foreign key to Genre.';

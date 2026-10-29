@@ -8,7 +8,7 @@ Generated from Protobuf by protoc-gen-store. Source of truth is the `.proto` fil
 
 | Models | Enums |
 | ---: | ---: |
-| 5 | 0 |
+| 7 | 0 |
 
 ## Entity relationships
 
@@ -23,6 +23,14 @@ erDiagram
         string id PK
         string book_id FK
         string shelf_id FK
+    }
+    BookGenres {
+        string id PK
+        string book_id FK
+        string genre_id FK
+    }
+    Genre {
+        string id PK
     }
     Page {
         string id PK
@@ -40,6 +48,8 @@ erDiagram
     Book }o--|| Shelf : "shelf_id"
     BookFiledUnder }o--|| Book : "book_id"
     BookFiledUnder }o--|| Shelf : "shelf_id"
+    BookGenres }o--|| Book : "book_id"
+    BookGenres }o--|| Genre : "genre_id"
     Page }o--|| Shelf : "shelf_id"
     Page }o--|| Book : "book_id"
     ShelfFeatured }o--|| Shelf : "shelf_id"
@@ -81,6 +91,16 @@ A book on a shelf: a nested resource, so a reference to it stores its full name 
 | `expire_time` | `TIMESTAMPTZ` | nullable |
 | `shelf_id` | `CHAR(26)` | not null |
 
+### `Genre` → `genres`
+
+A genre books are classed under: deleted outright, with no soft delete.
+
+| Column | Type | Null |
+| --- | --- | --- |
+| `id` | `CHAR(26)` | not null |
+| `name` | `VARCHAR(255)` | not null |
+| `display_name` | `VARCHAR(255)` | not null |
+
 ### `Page` → `pages`
 
 A page of a book: nested two deep, so the row it hangs off is a nested resource's, found by its name.
@@ -113,3 +133,13 @@ Join table for the many-to-many relation Book.filed_under ↔ Shelf.
 | `id` | `CHAR(26)` | not null |
 | `book_id` | `CHAR(26)` | not null |
 | `shelf_id` | `CHAR(26)` | not null |
+
+### `BookGenres` → `book_genres`
+
+Join table for the many-to-many relation Book.genres ↔ Genre.
+
+| Column | Type | Null |
+| --- | --- | --- |
+| `id` | `CHAR(26)` | not null |
+| `book_id` | `CHAR(26)` | not null |
+| `genre_id` | `CHAR(26)` | not null |

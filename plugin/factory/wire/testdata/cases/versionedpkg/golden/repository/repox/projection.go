@@ -1614,9 +1614,10 @@ func (p *Projection[T]) Count(ctx context.Context, conn Conn, in SearchInput) (i
 }
 
 // Facet counts the rows matching in by the values of field -- a filter field
-// of the projection (text, enum, reference, number, bool, date), an array
-// field (each element counts), or a JSON attribute path -- most frequent
-// first, at most limit values (all when limit is not positive).
+// of the projection (text, enum, reference, number, bool, date, timestamp in
+// FacetTimeLayout), an array field (each element counts), or a JSON attribute
+// path -- most frequent first, at most limit values (all when limit is not
+// positive).
 func (p *Projection[T]) Facet(ctx context.Context, conn Conn, in SearchInput, field string, limit int) ([]Bucket, error) {
 	expr, err := p.facetExpr(field)
 	if err != nil {
@@ -1649,7 +1650,7 @@ func (p *Projection[T]) facetExpr(field string) (string, error) {
 		case filterx.KindJSON:
 			return "", fmt.Errorf("%w: facet on a path under %q, not the document", ErrInvalidArgument, field)
 		default:
-			return col(f.Column) + "::text", nil
+			return FacetText(col(f.Column), f.Kind), nil
 		}
 	}
 	path, ok, err := filterx.LookupJSON(p.Spec.Filter, field)

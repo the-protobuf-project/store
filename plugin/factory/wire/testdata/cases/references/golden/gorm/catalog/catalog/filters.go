@@ -50,6 +50,7 @@ var BookFilterSpec = filterx.Spec{
 		"etag":        {Column: "etag", Kind: filterx.KindText},
 		"expire_time": {Column: "expire_time", Kind: filterx.KindTimestamp},
 		"filed_under": {Column: "id", Kind: filterx.KindRef, Via: &filterx.Via{Table: `"catalog"."book_filed_under"`, Key: "book_id", Column: "shelf_id", Many: true}},
+		"genres":      {Column: "id", Kind: filterx.KindRef, Via: &filterx.Via{Table: `"catalog"."book_genres"`, Key: "book_id", Column: "genre_id", Many: true}},
 		"name":        {Column: "name", Kind: filterx.KindText},
 		"shelf":       {Column: "shelf_id", Kind: filterx.KindRef},
 		"title":       {Column: "title", Kind: filterx.KindText},
@@ -60,6 +61,21 @@ var BookFilterSpec = filterx.Spec{
 		"expire_time": {Column: "expire_time", Kind: filterx.KindTimestamp},
 		"name":        {Column: "name", Kind: filterx.KindText, NotNull: true},
 		"title":       {Column: "title", Kind: filterx.KindText, NotNull: true},
+	},
+	PK: []filterx.SortSpec{{Column: "id", Kind: filterx.KindText, NotNull: true}},
+}
+
+// GenreFilterSpec is Genre's AIP-160 filter / AIP-132 order_by surface,
+// consumed by the filterx.Gorm, filterx.Hasura and filterx.OpenSearch engines.
+var GenreFilterSpec = filterx.Spec{
+	Table: `"catalog"."genres"`,
+	Fields: map[string]filterx.FieldSpec{
+		"display_name": {Column: "display_name", Kind: filterx.KindText},
+		"name":         {Column: "name", Kind: filterx.KindText},
+	},
+	Sort: map[string]filterx.SortSpec{
+		"display_name": {Column: "display_name", Kind: filterx.KindText, NotNull: true},
+		"name":         {Column: "name", Kind: filterx.KindText, NotNull: true},
 	},
 	PK: []filterx.SortSpec{{Column: "id", Kind: filterx.KindText, NotNull: true}},
 }

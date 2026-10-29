@@ -62,7 +62,7 @@ type Attendee struct {
 	// Back-relation: Metadata records that reference this via owner.
 	Metadatas []Metadata `gorm:"foreignKey:OwnerID;references:Name" json:"metadatas,omitempty"`
 	// Back-relation: EventAttendees records that reference this via attendee_id.
-	EventAttendees []EventAttendees `gorm:"foreignKey:AttendeeID;constraint:OnDelete:CASCADE" json:"eventattendees,omitempty"`
+	EventAttendees []EventAttendees `gorm:"foreignKey:AttendeeID" json:"eventattendees,omitempty"`
 }
 
 func (*Attendee) TableName() string { return "embedded_v1.attendees" }
@@ -109,7 +109,7 @@ type EventAttendees struct {
 	Event   *Event `gorm:"foreignKey:EventID;constraint:OnDelete:CASCADE" json:"event,omitempty"`
 	// Foreign key to Attendee.
 	AttendeeID string    `gorm:"column:attendee_id;not null;uniqueIndex:idx_event_attendees_event_id_attendee_id,priority:2;index:idx_event_attendees_attendee_id" json:"attendee_id" validate:"required"`
-	Attendee   *Attendee `gorm:"foreignKey:AttendeeID;constraint:OnDelete:CASCADE" json:"attendee,omitempty"`
+	Attendee   *Attendee `gorm:"foreignKey:AttendeeID" json:"attendee,omitempty"`
 	// Full resource name of the referenced Attendee, capturing the parent hierarchy the attendee_id id alone omits.
 	AttendeeName string `gorm:"column:attendee_name;not null" json:"attendee_name" validate:"required"`
 }

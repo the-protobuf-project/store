@@ -211,18 +211,21 @@ func (r *GraphQLLoanRepository) count(ctx context.Context, in repox.ListInput, s
 }
 
 // facet is Facet over scope, counted from the matching rows, at most
-// repox.GraphQLScanLimit of them.
+// repox.GraphQLScanLimit of them (more fail with repox.ErrInvalidArgument, as
+// count's do). A field reached through another table -- a value object's, a
+// join table's -- is counted from that table's rows the matching rows reach
+// (repox.FacetVia).
 func (r *GraphQLLoanRepository) facet(ctx context.Context, in repox.ListInput, field string, limit int, scope ...graphql.Predicate) ([]repox.Bucket, error) {
 	spec := lending.LoanFilterSpec
 	if _, err := repox.FacetExpr(spec, field); err != nil {
 		return nil, err
 	}
-	if f, ok := spec.Fields[field]; ok && f.Via != nil {
-		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
-	}
 	eng, conds, err := r.engine(in, scope...)
 	if err != nil {
 		return nil, err
+	}
+	if f, ok := spec.Fields[field]; ok && f.Via != nil {
+		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
 	}
 	counts := map[string]int64{}
 	if err := r.scan(ctx, eng, conds, func(row *loansql.LendingLoans) {
@@ -529,11 +532,12 @@ func (r *GraphQLLoanRepository) Purge(ctx context.Context, name string) error {
 }
 
 // purge removes row id, named name, for good -- unless something still
-// refers to it, when it keeps the row and reports kept: when askReferrers, a
-// referrer in another database or service (r.Refs), and, caught from the
-// database's own refusal, a row holding a foreign key to it. A purge never
-// fails, and never cascades, because of a referrer. repox.ErrNotFound when
-// there is no such row.
+// refers to it, when it keeps the row and reports kept: a row of this
+// database holding a foreign key to it (asked first, then caught
+// again from the database's own refusal), or, when askReferrers, a referrer
+// in another database or service (r.Refs). A purge never fails, and never
+// cascades, because of a referrer. repox.ErrNotFound when there is no such
+// row.
 func (r *GraphQLLoanRepository) purge(ctx context.Context, id, name string, askReferrers bool) (kept bool, err error) {
 	if askReferrers && r.Refs.KeepOnPurge(ctx, "lending.example.com/Loan", name) {
 		return true, nil
@@ -764,11 +768,12 @@ func (b *graphQLBatch) PurgeLoan(name string) {
 		b.u.Fail(err)
 		return
 	}
-	r := &GraphQLLoanRepository{Svc: b.svc}
+	r := &GraphQLLoanRepository{Svc: b.svc, Refs: b.u.Conn().References}
 	// A record a referrer in another database or service names is kept, as
-	// Purge keeps it. One a foreign key of this database still names fails
-	// the commit with repox.ErrForeignKey: the request is one transaction,
-	// and the engine cannot skip one of its mutations.
+	// Purge keeps it. One a foreign key of
+	// this database still names fails the commit with
+	// repox.ErrForeignKey: the request is one transaction, and the engine
+	// cannot skip one of its mutations.
 	keep := queueLoanPurge(b.u, name)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		if *keep {

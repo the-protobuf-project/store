@@ -14,8 +14,9 @@ package repository
 //     referring side's store.v1.ReferenceService, which these fields feed.
 //   - Referrers by foreign key (referrerFK): rows of this physical database
 //     that hold a real foreign key to a resource's table, in any database of
-//     the run. A purge leaves a row they still name in place instead of
-//     failing on the constraint (or cascading through it).
+//     the run -- a join table's row, keeping one element of a repeated
+//     reference, among them. A purge leaves a row they still name in place
+//     instead of failing on the constraint (or cascading through it).
 
 import (
 	"encoding/json"
@@ -48,6 +49,14 @@ type extRef struct {
 type referrerFK struct {
 	Schema, Table, Column string // referencing side
 	RefColumn             string // the column of the resource's table it holds
+	// DB and From are the referencing database and table: a GraphQL purge
+	// asks the ones of its own database (one client) through them.
+	DB   *schema.Database
+	From *schema.Table
+	// Join marks a join table's key to its target (joinTargetFK): one element
+	// of a repeated reference, which a delete without a purge (no soft
+	// delete) refuses to go under, as a singular reference's constraint does.
+	Join bool
 }
 
 // tableKey identifies a table across the run's databases.
@@ -72,12 +81,18 @@ func referrerIndex(dbs []*schema.Database) map[tableKey][]referrerFK {
 						return
 					}
 					k := tableKey{fk.ReferencedSchema, fk.ReferencedTable}
-					idx[k] = append(idx[k], referrerFK{Schema: s.Name, Table: t.Name, Column: fk.Column, RefColumn: fk.ReferencedColumn})
+					idx[k] = append(idx[k], referrerFK{
+						Schema: s.Name, Table: t.Name, Column: fk.Column, RefColumn: fk.ReferencedColumn,
+						DB: db, From: t, Join: joinTargetFK(t, fk),
+					})
 				}
 				for _, fk := range t.ForeignKeys {
 					// Embed FKs are owned rows, not referrers, and so is a join
 					// table's key to its owner (its rows are the owner's field).
-					if fk.ReferencedProto == "" && !joinOwnerFK(t, fk) {
+					// Its key to the target is a reference, as a singular
+					// resource_reference's column is (protokit sets
+					// ReferencedProto on both join keys).
+					if (fk.ReferencedProto == "" && !joinOwnerFK(t, fk)) || joinTargetFK(t, fk) {
 						add(fk)
 					}
 				}
@@ -175,11 +190,33 @@ func policyName(p storepbv1.ReferenceOptions_OnDelete) string {
 // row, deleted or not, still hold a foreign key to it? One placeholder, what
 // the row is found by (keyColumn). Empty when nothing can refer to the table.
 func referencedSQL(r *resource) string {
-	if len(r.ReferencedBy) == 0 || r.Cols.PK == nil {
+	return referencedSQLOf(r, r.ReferencedBy)
+}
+
+// joinReferencedSQL is the query a GORM delete of a resource without soft
+// delete asks first: does a join table's row still name it (referrerFK.Join)?
+// Empty when none can, or when the resource is soft-deleted (its purge asks
+// referencedSQL).
+func joinReferencedSQL(r *resource) string {
+	if r.Cols.DeleteTime != nil {
+		return ""
+	}
+	var joins []referrerFK
+	for _, f := range r.ReferencedBy {
+		if f.Join {
+			joins = append(joins, f)
+		}
+	}
+	return referencedSQLOf(r, joins)
+}
+
+// referencedSQLOf is referencedSQL over the referrers fs.
+func referencedSQLOf(r *resource, fs []referrerFK) string {
+	if len(fs) == 0 || r.Cols.PK == nil {
 		return ""
 	}
 	var terms []string
-	for i, f := range r.ReferencedBy {
+	for i, f := range fs {
 		alias := fmt.Sprintf("r%d", i)
 		terms = append(terms, fmt.Sprintf("EXISTS (SELECT 1 FROM %s %s WHERE %s.%s = t.%s)",
 			qualifiedIdent(f.Schema, f.Table), alias, alias, quoteIdent(f.Column), quoteIdent(f.RefColumn)))

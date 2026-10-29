@@ -19,6 +19,7 @@ import (
 	refdemov1 "example.com/test/gen"
 	"example.com/test/gen/repox"
 	"example.com/test/genql/catalogql/booksql"
+	"example.com/test/genql/catalogql/genresql"
 	"example.com/test/genql/catalogql/pagesql"
 	"example.com/test/genql/catalogql/shelvesql"
 	"github.com/the-protobuf-project/runtime-go/network/graphql"
@@ -99,6 +100,38 @@ func bookFromRow(row *booksql.CatalogBooks) *refdemov1.Book {
 	out.Etag = repox.Deref(row.Etag)
 	out.DeleteTime = strToTs(repox.Deref(row.DeleteTime))
 	out.ExpireTime = strToTs(repox.Deref(row.ExpireTime))
+	return out
+}
+
+// genreToCreateInput maps the proto onto the client's insert input.
+// Identity (id, name resolution), parentage, audit timestamps, and etag are
+// set by the adapter.
+func genreToCreateInput(in *refdemov1.Genre) genresql.CreateInput {
+	var ci genresql.CreateInput
+	ci.Name = in.GetName()
+	ci.DisplayName = in.GetDisplayName()
+	return ci
+}
+
+// genreToUpdatePatch maps the merged proto onto a replace-write
+// patch of every mutable column (mask semantics already applied to merged),
+// mirroring the gorm adapter's write-back exactly.
+func genreToUpdatePatch(merged *refdemov1.Genre) genresql.UpdateInput {
+	var patch genresql.UpdateInput
+	patch.Name = graphql.Value(merged.GetName())
+	patch.DisplayName = graphql.Value(merged.GetDisplayName())
+	return patch
+}
+
+// genreFromRow re-hydrates the proto from a client row, decorating
+// reference names from their stored bare ids.
+func genreFromRow(row *genresql.CatalogGenres) *refdemov1.Genre {
+	if row == nil {
+		return nil
+	}
+	out := &refdemov1.Genre{}
+	out.Name = row.Name
+	out.DisplayName = row.DisplayName
 	return out
 }
 

@@ -83,6 +83,31 @@ func BookFromProto(pb *refdemov1.Book) *Book {
 	return m
 }
 
+// GenreToProto converts the stored row (with its belongs-to associations,
+// when preloaded) to its proto message. Nil in, nil out.
+func GenreToProto(m *Genre) *refdemov1.Genre {
+	if m == nil {
+		return nil
+	}
+	out := &refdemov1.Genre{}
+	out.Name = m.Name
+	out.DisplayName = m.DisplayName
+	return out
+}
+
+// GenreFromProto maps the proto message's data fields onto a fresh row.
+// It never invents keys or relations: primary keys, resource references, and
+// sub-row graph wiring stay with the caller. Nil in, nil out.
+func GenreFromProto(pb *refdemov1.Genre) *Genre {
+	if pb == nil {
+		return nil
+	}
+	m := &Genre{}
+	m.Name = pb.GetName()
+	m.DisplayName = pb.GetDisplayName()
+	return m
+}
+
 // PageToProto converts the stored row (with its belongs-to associations,
 // when preloaded) to its proto message. Nil in, nil out.
 func PageToProto(m *Page) *refdemov1.Page {

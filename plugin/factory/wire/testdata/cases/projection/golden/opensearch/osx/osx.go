@@ -1039,6 +1039,9 @@ func (ix *Index[T]) Facets(ctx context.Context, c *opensearch.Client, in repox.S
 			if b.KeyAsString != nil {
 				v = *b.KeyAsString
 			}
+			if fs, ok := ix.Projection.Spec.Filter.Fields[f]; ok && fs.Kind == filterx.KindTimestamp {
+				v = repox.FacetValue(fs.Kind, v) // as Postgres gives it
+			}
 			buckets = append(buckets, repox.Bucket{Value: v, Count: b.DocCount})
 		}
 		out[f] = buckets

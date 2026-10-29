@@ -314,18 +314,21 @@ func (r *GraphQLAgendaRepository) count(ctx context.Context, in repox.ListInput,
 }
 
 // facet is Facet over scope, counted from the matching rows, at most
-// repox.GraphQLScanLimit of them.
+// repox.GraphQLScanLimit of them (more fail with repox.ErrInvalidArgument, as
+// count's do). A field reached through another table -- a value object's, a
+// join table's -- is counted from that table's rows the matching rows reach
+// (repox.FacetVia).
 func (r *GraphQLAgendaRepository) facet(ctx context.Context, in repox.ListInput, field string, limit int, scope ...graphql.Predicate) ([]repox.Bucket, error) {
 	spec := deepv1gorm.AgendaFilterSpec
 	if _, err := repox.FacetExpr(spec, field); err != nil {
 		return nil, err
 	}
-	if f, ok := spec.Fields[field]; ok && f.Via != nil {
-		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
-	}
 	eng, conds, err := r.engine(in, scope...)
 	if err != nil {
 		return nil, err
+	}
+	if f, ok := spec.Fields[field]; ok && f.Via != nil {
+		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
 	}
 	counts := map[string]int64{}
 	if err := r.scan(ctx, eng, conds, func(row *agendasql.DeepV1Agendas) {
@@ -937,12 +940,19 @@ func (r *GraphQLAgendaRepository) Purge(ctx context.Context, name string) error 
 }
 
 // purge removes row id, named name, for good -- unless something still
-// refers to it, when it keeps the row and reports kept: when askReferrers, a
-// referrer in another database or service (r.Refs), and, caught from the
-// database's own refusal, a row holding a foreign key to it. A purge never
-// fails, and never cascades, because of a referrer. repox.ErrNotFound when
-// there is no such row.
+// refers to it, when it keeps the row and reports kept: a row of this
+// database holding a foreign key to it (asked first, see referenced, then caught
+// again from the database's own refusal), or, when askReferrers, a referrer
+// in another database or service (r.Refs). A purge never fails, and never
+// cascades, because of a referrer. repox.ErrNotFound when there is no such
+// row.
 func (r *GraphQLAgendaRepository) purge(ctx context.Context, id, name string, askReferrers bool) (kept bool, err error) {
+	if referenced, err := r.referenced(ctx, id, name); err != nil {
+		return false, err
+	} else if referenced {
+		r.Refs.Kept(ctx, name, "foreign key")
+		return true, nil
+	}
 	if askReferrers && r.Refs.KeepOnPurge(ctx, "deep.v1/Agenda", name) {
 		return true, nil
 	}
@@ -1023,6 +1033,25 @@ func (r *GraphQLAgendaRepository) remove(ctx context.Context, id string) error {
 		return mapGraphQLErr(err)
 	}
 	return nil
+}
+
+// referenced reports whether a row of this database, deleted or not, still
+// holds a foreign key to row id, named name -- what the GORM adapter asks
+// with its ReferencedSQL. A key whose action cascades or
+// sets null (a join table's, a reference Prisma made optional) would not
+// refuse the delete.
+func (r *GraphQLAgendaRepository) referenced(ctx context.Context, id, name string) (bool, error) {
+	for _, holds := range []struct {
+		f   func(context.Context, *genql.Service, string) (bool, error)
+		key string
+	}{
+		{deepV1MeetingsHoldsAgendaId, id},
+	} {
+		if found, err := holds.f(ctx, r.Svc, holds.key); err != nil || found {
+			return found, err
+		}
+	}
+	return false, nil
 }
 
 // ListByKeys reads every record whose filter field field is one of keys; see
@@ -1368,18 +1397,35 @@ func (r *GraphQLMeetingRepository) count(ctx context.Context, in repox.ListInput
 }
 
 // facet is Facet over scope, counted from the matching rows, at most
-// repox.GraphQLScanLimit of them.
+// repox.GraphQLScanLimit of them (more fail with repox.ErrInvalidArgument, as
+// count's do). A field reached through another table -- a value object's, a
+// join table's -- is counted from that table's rows the matching rows reach
+// (repox.FacetVia).
 func (r *GraphQLMeetingRepository) facet(ctx context.Context, in repox.ListInput, field string, limit int, scope ...graphql.Predicate) ([]repox.Bucket, error) {
 	spec := deepv1gorm.MeetingFilterSpec
 	if _, err := repox.FacetExpr(spec, field); err != nil {
 		return nil, err
 	}
-	if f, ok := spec.Fields[field]; ok && f.Via != nil {
-		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
-	}
 	eng, conds, err := r.engine(in, scope...)
 	if err != nil {
 		return nil, err
+	}
+	if f, ok := spec.Fields[field]; ok && f.Via != nil {
+		var refs []string
+		if err := r.scan(ctx, eng, conds, func(row *meetingsql.DeepV1Meetings) {
+			if ref := repox.ViaRef(spec, field, repox.RowMap(row)); ref != "" {
+				refs = append(refs, ref)
+			}
+		}); err != nil {
+			return nil, err
+		}
+		counts, err := repox.FacetVia(ctx, spec, field, refs, func(ctx context.Context, keys []string) ([]map[string]any, error) {
+			return r.viaRows(ctx, field, keys)
+		})
+		if err != nil {
+			return nil, err
+		}
+		return repox.SortBuckets(counts, limit), nil
 	}
 	counts := map[string]int64{}
 	if err := r.scan(ctx, eng, conds, func(row *meetingsql.DeepV1Meetings) {
@@ -1390,6 +1436,43 @@ func (r *GraphQLMeetingRepository) facet(ctx context.Context, in repox.ListInput
 		return nil, err
 	}
 	return repox.SortBuckets(counts, limit), nil
+}
+
+// viaRows reads the rows of the table field is reached through (filterx.Via)
+// whose key is one of keys, as maps (repox.RowMap): what a facet by field
+// counts.
+func (r *GraphQLMeetingRepository) viaRows(ctx context.Context, field string, keys []string) ([]map[string]any, error) {
+	head, _, _ := strings.Cut(field, ".")
+	var out []map[string]any
+	switch head {
+	case "start":
+		rows, err := r.Svc.Query.DeepV1.Moments.List(ctx, momentsql.List().Where(momentsql.Id.In(keys...)))
+		if err != nil {
+			return nil, mapGraphQLErr(err)
+		}
+		for i := range rows {
+			out = append(out, repox.RowMap(&rows[i]))
+		}
+	case "end":
+		rows, err := r.Svc.Query.DeepV1.Moments.List(ctx, momentsql.List().Where(momentsql.Id.In(keys...)))
+		if err != nil {
+			return nil, mapGraphQLErr(err)
+		}
+		for i := range rows {
+			out = append(out, repox.RowMap(&rows[i]))
+		}
+	case "rule":
+		rows, err := r.Svc.Query.DeepV1.Rules.List(ctx, rulesql.List().Where(rulesql.Id.In(keys...)))
+		if err != nil {
+			return nil, mapGraphQLErr(err)
+		}
+		for i := range rows {
+			out = append(out, repox.RowMap(&rows[i]))
+		}
+	default:
+		return nil, fmt.Errorf("%w: facet by %q, reached through another table, on GraphQL", repox.ErrInvalidArgument, field)
+	}
+	return out, nil
 }
 
 // scan calls f for every row eng matches under conds, failing past
@@ -2060,11 +2143,13 @@ func (b *graphQLBatch) PurgeAgenda(name string) {
 		b.u.Fail(err)
 		return
 	}
-	r := &GraphQLAgendaRepository{Svc: b.svc}
+	r := &GraphQLAgendaRepository{Svc: b.svc, Refs: b.u.Conn().References}
 	// A record a referrer in another database or service names is kept, as
-	// Purge keeps it. One a foreign key of this database still names fails
-	// the commit with repox.ErrForeignKey: the request is one transaction,
-	// and the engine cannot skip one of its mutations.
+	// Purge keeps it, and so is one a row of this database is found to
+	// hold a foreign key to when the purge is queued. One a foreign key of
+	// this database names by then fails the commit with
+	// repox.ErrForeignKey: the request is one transaction, and the engine
+	// cannot skip one of its mutations.
 	keep := queueAgendaPurge(b.u, name)
 	b.u.QueueGraphQL(func(ctx context.Context, ops *repox.Ops) (repox.Check, error) {
 		if *keep {
@@ -2075,6 +2160,12 @@ func (b *graphQLBatch) PurgeAgenda(name string) {
 			return nil, nil
 		}
 		if err != nil {
+			return nil, err
+		}
+		if referenced, err := r.referenced(ctx, id, name); err != nil || referenced {
+			if referenced {
+				r.Refs.Kept(ctx, name, "foreign key")
+			}
 			return nil, err
 		}
 		return r.purgeOps(ctx, ops, id)

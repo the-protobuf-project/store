@@ -124,6 +124,43 @@ func graphqlParentViews(db *schema.Database, s *schema.Schema, pkg string, rs []
 	return out
 }
 
+// graphqlReferrerViews prepares graphql_referrers_<schema>.go for each schema
+// holding foreign keys into the resources of s that a purge asks about
+// (gqlReferrer), keyed by file name.
+func graphqlReferrerViews(db *schema.Database, s *schema.Schema, pkg string, rs []gqlResourceView) map[string]map[string]any {
+	client := dbGraphQLModule(db)
+	bySchema := map[string][]gqlReferrer{}
+	seen := map[string]bool{}
+	for _, r := range rs {
+		for _, f := range r.GQLReferrers {
+			if seen[f.Func] {
+				continue
+			}
+			seen[f.Func] = true
+			bySchema[f.DomPkg] = append(bySchema[f.DomPkg], f)
+		}
+	}
+	out := map[string]map[string]any{}
+	for dom, fs := range bySchema {
+		sort.Slice(fs, func(i, j int) bool { return fs[i].Func < fs[j].Func })
+		imports := map[string]string{
+			"context": "",
+			client:    clientPkgName(client),
+		}
+		for _, f := range fs {
+			imports[client+"/"+f.DomPkg+"/"+f.ResPkg] = f.ResPkg
+		}
+		out["graphql_referrers_"+strings.TrimSuffix(dom, "ql")+".go"] = map[string]any{
+			"Header":    fileHeader(db, s, "Referrers in schema "+strings.TrimSuffix(dom, "ql")+" a purge asks about, by key."),
+			"Package":   pkg,
+			"ClientPkg": clientPkgName(client),
+			"Imports":   renderImports(imports),
+			"Referrers": fs,
+		}
+	}
+	return out
+}
+
 // graphqlConvertView prepares graphql_convert.go: converters + scalar helpers.
 func graphqlConvertView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg string, rs []gqlResourceView, voConvs []gqlVOConv, needs helperNeeds) map[string]any {
 	client := dbGraphQLModule(db)

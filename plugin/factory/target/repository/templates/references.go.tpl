@@ -120,6 +120,15 @@ func ForeignKeyError(cause error) error {
 	return e
 }
 
+// ReferencedByJoin is the refusal of a delete of name (of resourceType): a
+// join table's row, one element of a repeated reference, still names it.
+// It is ErrForeignKey, as a singular reference's constraint refuses it; the
+// join's own key would cascade, taking the record out of the field.
+func ReferencedByJoin(resourceType, name string) error {
+	return &ReferenceError{Err: ErrForeignKey, ResourceType: resourceType, Name: name,
+		Cause: fmt.Errorf("%s is still named by a repeated reference", name)}
+}
+
 // IsForeignKeyViolation reports whether err is a foreign key refusing a
 // write, mapped or not.
 func IsForeignKeyViolation(err error) bool {

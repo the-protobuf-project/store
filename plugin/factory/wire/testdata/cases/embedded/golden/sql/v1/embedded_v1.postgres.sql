@@ -89,7 +89,7 @@ CREATE TABLE "embedded_v1"."event_attendees" (
     -- Full resource name of the referenced Attendee, capturing the parent hierarchy the attendee_id id alone omits.
     "attendee_name"  TEXT  NOT NULL,
     CONSTRAINT "fk_event_attendees_event_id" FOREIGN KEY ("event_id") REFERENCES "embedded_v1"."events"("id") ON DELETE CASCADE,
-    CONSTRAINT "fk_event_attendees_attendee_id" FOREIGN KEY ("attendee_id") REFERENCES "embedded_v1"."attendees"("id") ON DELETE CASCADE
+    CONSTRAINT "fk_event_attendees_attendee_id" FOREIGN KEY ("attendee_id") REFERENCES "embedded_v1"."attendees"("id")
 );
 CREATE UNIQUE INDEX "idx_event_attendees_event_id_attendee_id" ON "embedded_v1"."event_attendees" ("event_id", "attendee_id");
 CREATE INDEX "idx_event_attendees_attendee_id" ON "embedded_v1"."event_attendees" ("attendee_id");
