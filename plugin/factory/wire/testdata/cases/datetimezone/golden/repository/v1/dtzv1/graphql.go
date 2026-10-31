@@ -624,6 +624,7 @@ func (b *graphQLBatch) DeleteSession(name string) {
 		if err != nil {
 			return nil, err
 		}
+		b.u.Removing("dtz_v1.sessions", id)
 		ops.Add(b.svc.Mutation.DtzV1.Sessions.DeleteOp(id, new(sessionsql.DeleteDtzV1SessionsByIdResponse)))
 		return nil, nil
 	})

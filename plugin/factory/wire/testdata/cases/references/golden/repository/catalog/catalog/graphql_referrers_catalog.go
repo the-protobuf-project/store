@@ -7,7 +7,7 @@
 // database: catalog
 // schema:   catalog
 //
-// Referrers in schema catalog a purge asks about, by key.
+// Referrers in schema catalog a purge or delete asks about, by key.
 // annotations: entity.v1 (unknown), store.v1 (unknown)
 // engine:      protokit (unknown)
 //
@@ -23,12 +23,20 @@ import (
 	"example.com/test/genql/catalogql/booksql"
 	"example.com/test/genql/catalogql/pagesql"
 	"example.com/test/genql/catalogql/shelffeaturedql"
+	"github.com/the-protobuf-project/runtime-go/network/graphql"
 )
 
 // catalogBookFiledUnderHoldsShelfId reports whether a Catalog.BookFiledUnder row, deleted or not,
-// holds key in catalog.book_filed_under.shelf_id: a referrer that keeps the record it names.
-func catalogBookFiledUnderHoldsShelfId(ctx context.Context, svc *genql.Service, key string) (bool, error) {
-	row, err := svc.Query.Catalog.BookFiledUnder.Find(ctx, bookfiledunderql.List().Where(bookfiledunderql.ShelfId.Eq(key)))
+// holds key in catalog.book_filed_under.shelf_id: a referrer that keeps the record it names (a
+// purge keeps it; a delete without one is refused).
+// A row whose BookId is one of except -- removed earlier in the
+// same Batch (repox.Unit.RemovedIn) -- does not count.
+func catalogBookFiledUnderHoldsShelfId(ctx context.Context, svc *genql.Service, key string, except []string) (bool, error) {
+	where := bookfiledunderql.ShelfId.Eq(key)
+	if len(except) > 0 {
+		where = graphql.And(where, graphql.Not(bookfiledunderql.BookId.In(except...)))
+	}
+	row, err := svc.Query.Catalog.BookFiledUnder.Find(ctx, bookfiledunderql.List().Where(where))
 	if err != nil {
 		return false, mapGraphQLErr(err)
 	}
@@ -36,9 +44,50 @@ func catalogBookFiledUnderHoldsShelfId(ctx context.Context, svc *genql.Service, 
 }
 
 // catalogBookGenresHoldsGenreId reports whether a Catalog.BookGenres row, deleted or not,
-// holds key in catalog.book_genres.genre_id: a referrer that keeps the record it names.
-func catalogBookGenresHoldsGenreId(ctx context.Context, svc *genql.Service, key string) (bool, error) {
-	row, err := svc.Query.Catalog.BookGenres.Find(ctx, bookgenresql.List().Where(bookgenresql.GenreId.Eq(key)))
+// holds key in catalog.book_genres.genre_id: a referrer that keeps the record it names (a
+// purge keeps it; a delete without one is refused).
+// A row whose BookId is one of except -- removed earlier in the
+// same Batch (repox.Unit.RemovedIn) -- does not count.
+func catalogBookGenresHoldsGenreId(ctx context.Context, svc *genql.Service, key string, except []string) (bool, error) {
+	where := bookgenresql.GenreId.Eq(key)
+	if len(except) > 0 {
+		where = graphql.And(where, graphql.Not(bookgenresql.BookId.In(except...)))
+	}
+	row, err := svc.Query.Catalog.BookGenres.Find(ctx, bookgenresql.List().Where(where))
+	if err != nil {
+		return false, mapGraphQLErr(err)
+	}
+	return row != nil, nil
+}
+
+// catalogBooksHoldsPrimaryGenre reports whether a Catalog.Books row, deleted or not,
+// holds key in catalog.books.primary_genre: a referrer that keeps the record it names (a
+// purge keeps it; a delete without one is refused).
+// A row whose Id is one of except -- removed earlier in the
+// same Batch (repox.Unit.RemovedIn) -- does not count.
+func catalogBooksHoldsPrimaryGenre(ctx context.Context, svc *genql.Service, key string, except []string) (bool, error) {
+	where := booksql.PrimaryGenre.Eq(key)
+	if len(except) > 0 {
+		where = graphql.And(where, graphql.Not(booksql.Id.In(except...)))
+	}
+	row, err := svc.Query.Catalog.Books.Find(ctx, booksql.List().Where(where))
+	if err != nil {
+		return false, mapGraphQLErr(err)
+	}
+	return row != nil, nil
+}
+
+// catalogBooksHoldsReturnsTo reports whether a Catalog.Books row, deleted or not,
+// holds key in catalog.books.returns_to: a referrer that keeps the record it names (a
+// purge keeps it; a delete without one is refused).
+// A row whose Id is one of except -- removed earlier in the
+// same Batch (repox.Unit.RemovedIn) -- does not count.
+func catalogBooksHoldsReturnsTo(ctx context.Context, svc *genql.Service, key string, except []string) (bool, error) {
+	where := booksql.ReturnsTo.Eq(key)
+	if len(except) > 0 {
+		where = graphql.And(where, graphql.Not(booksql.Id.In(except...)))
+	}
+	row, err := svc.Query.Catalog.Books.Find(ctx, booksql.List().Where(where))
 	if err != nil {
 		return false, mapGraphQLErr(err)
 	}
@@ -46,9 +95,16 @@ func catalogBookGenresHoldsGenreId(ctx context.Context, svc *genql.Service, key 
 }
 
 // catalogBooksHoldsShelfId reports whether a Catalog.Books row, deleted or not,
-// holds key in catalog.books.shelf_id: a referrer that keeps the record it names.
-func catalogBooksHoldsShelfId(ctx context.Context, svc *genql.Service, key string) (bool, error) {
-	row, err := svc.Query.Catalog.Books.Find(ctx, booksql.List().Where(booksql.ShelfId.Eq(key)))
+// holds key in catalog.books.shelf_id: a referrer that keeps the record it names (a
+// purge keeps it; a delete without one is refused).
+// A row whose Id is one of except -- removed earlier in the
+// same Batch (repox.Unit.RemovedIn) -- does not count.
+func catalogBooksHoldsShelfId(ctx context.Context, svc *genql.Service, key string, except []string) (bool, error) {
+	where := booksql.ShelfId.Eq(key)
+	if len(except) > 0 {
+		where = graphql.And(where, graphql.Not(booksql.Id.In(except...)))
+	}
+	row, err := svc.Query.Catalog.Books.Find(ctx, booksql.List().Where(where))
 	if err != nil {
 		return false, mapGraphQLErr(err)
 	}
@@ -56,9 +112,16 @@ func catalogBooksHoldsShelfId(ctx context.Context, svc *genql.Service, key strin
 }
 
 // catalogPagesHoldsBookId reports whether a Catalog.Pages row, deleted or not,
-// holds key in catalog.pages.book_id: a referrer that keeps the record it names.
-func catalogPagesHoldsBookId(ctx context.Context, svc *genql.Service, key string) (bool, error) {
-	row, err := svc.Query.Catalog.Pages.Find(ctx, pagesql.List().Where(pagesql.BookId.Eq(key)))
+// holds key in catalog.pages.book_id: a referrer that keeps the record it names (a
+// purge keeps it; a delete without one is refused).
+// A row whose Id is one of except -- removed earlier in the
+// same Batch (repox.Unit.RemovedIn) -- does not count.
+func catalogPagesHoldsBookId(ctx context.Context, svc *genql.Service, key string, except []string) (bool, error) {
+	where := pagesql.BookId.Eq(key)
+	if len(except) > 0 {
+		where = graphql.And(where, graphql.Not(pagesql.Id.In(except...)))
+	}
+	row, err := svc.Query.Catalog.Pages.Find(ctx, pagesql.List().Where(where))
 	if err != nil {
 		return false, mapGraphQLErr(err)
 	}
@@ -66,9 +129,16 @@ func catalogPagesHoldsBookId(ctx context.Context, svc *genql.Service, key string
 }
 
 // catalogPagesHoldsShelfId reports whether a Catalog.Pages row, deleted or not,
-// holds key in catalog.pages.shelf_id: a referrer that keeps the record it names.
-func catalogPagesHoldsShelfId(ctx context.Context, svc *genql.Service, key string) (bool, error) {
-	row, err := svc.Query.Catalog.Pages.Find(ctx, pagesql.List().Where(pagesql.ShelfId.Eq(key)))
+// holds key in catalog.pages.shelf_id: a referrer that keeps the record it names (a
+// purge keeps it; a delete without one is refused).
+// A row whose Id is one of except -- removed earlier in the
+// same Batch (repox.Unit.RemovedIn) -- does not count.
+func catalogPagesHoldsShelfId(ctx context.Context, svc *genql.Service, key string, except []string) (bool, error) {
+	where := pagesql.ShelfId.Eq(key)
+	if len(except) > 0 {
+		where = graphql.And(where, graphql.Not(pagesql.Id.In(except...)))
+	}
+	row, err := svc.Query.Catalog.Pages.Find(ctx, pagesql.List().Where(where))
 	if err != nil {
 		return false, mapGraphQLErr(err)
 	}
@@ -76,9 +146,16 @@ func catalogPagesHoldsShelfId(ctx context.Context, svc *genql.Service, key strin
 }
 
 // catalogShelfFeaturedHoldsBookId reports whether a Catalog.ShelfFeatured row, deleted or not,
-// holds key in catalog.shelf_featured.book_id: a referrer that keeps the record it names.
-func catalogShelfFeaturedHoldsBookId(ctx context.Context, svc *genql.Service, key string) (bool, error) {
-	row, err := svc.Query.Catalog.ShelfFeatured.Find(ctx, shelffeaturedql.List().Where(shelffeaturedql.BookId.Eq(key)))
+// holds key in catalog.shelf_featured.book_id: a referrer that keeps the record it names (a
+// purge keeps it; a delete without one is refused).
+// A row whose ShelfId is one of except -- removed earlier in the
+// same Batch (repox.Unit.RemovedIn) -- does not count.
+func catalogShelfFeaturedHoldsBookId(ctx context.Context, svc *genql.Service, key string, except []string) (bool, error) {
+	where := shelffeaturedql.BookId.Eq(key)
+	if len(except) > 0 {
+		where = graphql.And(where, graphql.Not(shelffeaturedql.ShelfId.In(except...)))
+	}
+	row, err := svc.Query.Catalog.ShelfFeatured.Find(ctx, shelffeaturedql.List().Where(where))
 	if err != nil {
 		return false, mapGraphQLErr(err)
 	}

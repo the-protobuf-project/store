@@ -23,7 +23,7 @@ type User struct {
 	// display_name is shown in UIs.
 	DisplayName string `gorm:"column:display_name;not null" json:"display_name" validate:"required"`
 	// Back-relation: Note records that reference this via user_id.
-	Notes []Note `gorm:"foreignKey:UserID" json:"notes,omitempty"`
+	Notes []Note `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE" json:"notes,omitempty"`
 }
 
 func (*User) TableName() string { return "parentref_v1.users" }

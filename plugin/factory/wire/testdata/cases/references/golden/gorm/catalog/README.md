@@ -17,6 +17,9 @@ erDiagram
     direction LR
     Book {
         string id PK
+        string primary_genre FK
+        string former_genre FK
+        string returns_to FK
         string shelf_id FK
     }
     BookFiledUnder {
@@ -45,6 +48,9 @@ erDiagram
         string shelf_id FK
         string book_id FK
     }
+    Book }o--|| Genre : "primary_genre"
+    Book }o--|| Genre : "former_genre"
+    Book }o--|| Shelf : "returns_to"
     Book }o--|| Shelf : "shelf_id"
     BookFiledUnder }o--|| Book : "book_id"
     BookFiledUnder }o--|| Shelf : "shelf_id"
@@ -92,6 +98,9 @@ A book on a shelf: a nested resource, so a reference to it stores its full name 
 | `etag` | `VARCHAR(255)` | nullable |
 | `delete_time` | `TIMESTAMPTZ` | nullable |
 | `expire_time` | `TIMESTAMPTZ` | nullable |
+| `primary_genre` | `CHAR(26)` | nullable |
+| `former_genre` | `CHAR(26)` | nullable |
+| `returns_to` | `CHAR(26)` | nullable |
 | `shelf_id` | `CHAR(26)` | not null |
 
 ### `Genre` → `genres`

@@ -947,7 +947,7 @@ func (r *GraphQLAgendaRepository) Purge(ctx context.Context, name string) error 
 // cascades, because of a referrer. repox.ErrNotFound when there is no such
 // row.
 func (r *GraphQLAgendaRepository) purge(ctx context.Context, id, name string, askReferrers bool) (kept bool, err error) {
-	if referenced, err := r.referenced(ctx, id, name); err != nil {
+	if referenced, err := r.referenced(ctx, nil, id, name); err != nil {
 		return false, err
 	} else if referenced {
 		r.Refs.Kept(ctx, name, "foreign key")
@@ -1037,17 +1037,19 @@ func (r *GraphQLAgendaRepository) remove(ctx context.Context, id string) error {
 
 // referenced reports whether a row of this database, deleted or not, still
 // holds a foreign key to row id, named name -- what the GORM adapter asks
-// with its ReferencedSQL. A key whose action cascades or
-// sets null (a join table's, a reference Prisma made optional) would not
-// refuse the delete.
-func (r *GraphQLAgendaRepository) referenced(ctx context.Context, id, name string) (bool, error) {
+// with its ReferencedSQL. A key whose
+// action cascades (a join table's) or sets null (an optional reference
+// migrated before it took no action) would not refuse the delete. In a Batch
+// (u), a row u's request removes before this one does not count.
+func (r *GraphQLAgendaRepository) referenced(ctx context.Context, u *repox.Unit, id, name string) (bool, error) {
 	for _, holds := range []struct {
-		f   func(context.Context, *genql.Service, string) (bool, error)
-		key string
+		f      func(context.Context, *genql.Service, string, []string) (bool, error)
+		key    string
+		except string
 	}{
-		{deepV1MeetingsHoldsAgendaId, id},
+		{deepV1MeetingsHoldsAgendaId, id, "deep_v1.meetings"},
 	} {
-		if found, err := holds.f(ctx, r.Svc, holds.key); err != nil || found {
+		if found, err := holds.f(ctx, r.Svc, holds.key, u.RemovedIn(holds.except)); err != nil || found {
 			return found, err
 		}
 	}
@@ -2162,12 +2164,13 @@ func (b *graphQLBatch) PurgeAgenda(name string) {
 		if err != nil {
 			return nil, err
 		}
-		if referenced, err := r.referenced(ctx, id, name); err != nil || referenced {
+		if referenced, err := r.referenced(ctx, b.u, id, name); err != nil || referenced {
 			if referenced {
 				r.Refs.Kept(ctx, name, "foreign key")
 			}
 			return nil, err
 		}
+		b.u.Removing("deep_v1.agendas", id)
 		return r.purgeOps(ctx, ops, id)
 	})
 	b.u.Record(repox.Change{Type: "deep.v1/Agenda", Name: name, Op: repox.ChangePurge, LoadPrior: repox.PriorOf(name, getAgenda)})
@@ -2228,6 +2231,7 @@ func (b *graphQLBatch) DeleteMeeting(name string) {
 		if err != nil {
 			return nil, err
 		}
+		b.u.Removing("deep_v1.meetings", id)
 		return r.purgeOps(ctx, ops, id)
 	})
 	b.u.Record(repox.Change{Type: "deep.v1/Meeting", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getMeeting)})

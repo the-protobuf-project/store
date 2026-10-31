@@ -10,43 +10,43 @@ inputs:
 
 plugins:
   - remote: buf.build/protocolbuffers/go:v1.36.11
-    out: examples/search/gen/pb
+    out: examples/generated/go/protobuf/search
     opt:
-      - module=github.com/the-protobuf-project/store/examples/search/gen/pb
+      - module=github.com/the-protobuf-project/store/examples/generated/go/protobuf/search
 
   - local: protoc-gen-store
-    out: examples/search/gen/gorm
+    out: examples/generated/go/gorm/search
     strategy: all
     opt:
       - target=gorm
       - stores=true
       - converters=true
       - filters=true
-      - go_module=github.com/the-protobuf-project/store/examples/search/gen/gorm
+      - go_module=github.com/the-protobuf-project/store/examples/generated/go/gorm/search
       - config=examples/search/store.yaml
 
   - local: protoc-gen-store
-    out: examples/search/gen/repository
+    out: examples/generated/go/repository/search
     strategy: all
     opt:
       - target=repository
-      - go_module=github.com/the-protobuf-project/store/examples/search/gen/repository
-      - gorm_module=github.com/the-protobuf-project/store/examples/search/gen/gorm
+      - go_module=github.com/the-protobuf-project/store/examples/generated/go/repository/search
+      - gorm_module=github.com/the-protobuf-project/store/examples/generated/go/gorm/search
       - config=examples/search/store.yaml
 
   - local: protoc-gen-store
-    out: examples/search/gen/sql
+    out: examples/generated/sql/search
     strategy: all
     opt:
       - target=sql
       - config=examples/search/store.yaml
 
   - local: protoc-gen-store
-    out: examples/search/gen/opensearch
+    out: examples/generated/go/opensearch/search
     strategy: all
     opt:
       - target=opensearch
-      - go_module=github.com/the-protobuf-project/store/examples/search/gen/opensearch
-      - gorm_module=github.com/the-protobuf-project/store/examples/search/gen/gorm
-      - repository_module=github.com/the-protobuf-project/store/examples/search/gen/repository
+      - go_module=github.com/the-protobuf-project/store/examples/generated/go/opensearch/search
+      - gorm_module=github.com/the-protobuf-project/store/examples/generated/go/gorm/search
+      - repository_module=github.com/the-protobuf-project/store/examples/generated/go/repository/search
       - config=examples/search/store.yaml

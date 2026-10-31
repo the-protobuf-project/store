@@ -1,0 +1,121 @@
+syntax = "proto3";
+
+// Package telemetry.v1 exercises (store.v1.table).time_series: the messages the
+// rust target renders as tpp-database models for InfluxDB 3 and Arrow captures.
+//
+// Reading covers every scalar a point can store, with a Timestamp time and two
+// tags; Heartbeat an int64 time and no tags. Device declares no time series, so
+// it appears in the sql output and not the influxdb output.
+package telemetry.v1;
+
+import "entity/v1/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "google/protobuf/timestamp.proto";
+import "store/v1/annotations.proto";
+
+option java_multiple_files = true;
+option java_outer_classname = "TelemetryProto";
+option java_package = "com.telemetry.v1";
+option (entity.v1.datasource) = {
+  database: "telemetry_db"
+  provider: "postgres"
+  schema: "telemetry"
+};
+
+// Quality grades one reading.
+enum Quality {
+  // Not graded.
+  QUALITY_UNSPECIFIED = 0;
+  // Trusted.
+  QUALITY_GOOD = 1;
+  // Out of calibration.
+  QUALITY_SUSPECT = 2;
+}
+
+// Reading is one sensor sample.
+message Reading {
+  option (google.api.resource) = {
+    type: "telemetry.v1/Reading"
+    pattern: "readings/{reading}"
+    singular: "reading"
+    plural: "readings"
+  };
+  option (store.v1.table) = {
+    time_series: {
+      time: "observe_time"
+      tags: ["device", "site"]
+    }
+  };
+
+  // The device that sampled.
+  string device = 1 [(google.api.field_behavior) = REQUIRED];
+
+  // Where the device is installed.
+  string site = 2 [(google.api.field_behavior) = REQUIRED];
+
+  // When the sample was taken.
+  google.protobuf.Timestamp observe_time = 3 [(google.api.field_behavior) = REQUIRED];
+
+  // The sampled value.
+  double value = 4;
+
+  // The value as the device's own float.
+  float raw = 5;
+
+  // How far to trust the value.
+  Quality quality = 6;
+
+  // Samples averaged into this one.
+  int32 samples = 7;
+
+  // The device's monotonic sequence number.
+  uint64 sequence = 8;
+
+  // Whether the device reported a fault.
+  bool fault = 9;
+
+  // Free-text unit, a keyword in Rust.
+  string type = 10;
+
+  // When the device last calibrated.
+  google.protobuf.Timestamp calibrate_time = 11;
+
+  // Bookkeeping kept out of every output.
+  string internal = 12 [(entity.v1.column) = {skip: true}];
+}
+
+// Heartbeat is a liveness ping keyed by nothing but time.
+message Heartbeat {
+  option (google.api.resource) = {
+    type: "telemetry.v1/Heartbeat"
+    pattern: "heartbeats/{heartbeat}"
+    singular: "heartbeat"
+    plural: "heartbeats"
+  };
+  option (store.v1.table) = {
+    time_series: {time: "at_nanos"}
+  };
+
+  // Epoch nanoseconds.
+  int64 at_nanos = 1;
+
+  // Seconds the process has been up.
+  uint32 uptime = 2;
+}
+
+// Device is relational: it declares no time series.
+message Device {
+  option (google.api.resource) = {
+    type: "telemetry.v1/Device"
+    pattern: "devices/{device}"
+    singular: "device"
+    plural: "devices"
+  };
+
+  // Resource name.
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  // Display label.
+  string label = 2;
+}

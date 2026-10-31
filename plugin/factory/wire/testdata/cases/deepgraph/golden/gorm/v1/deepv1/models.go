@@ -54,11 +54,11 @@ type Agenda struct {
 	ZoneID *string `gorm:"column:zone_id;index:idx_agendas_zone_id" json:"zone_id,omitempty"`
 	Zone   *Zone   `gorm:"foreignKey:ZoneID;constraint:OnDelete:SET NULL" json:"zone,omitempty"`
 	// Back-relation: Meeting records that reference this via agenda_id.
-	Meetings []Meeting `gorm:"foreignKey:AgendaID" json:"meetings,omitempty"`
+	Meetings []Meeting `gorm:"foreignKey:AgendaID;constraint:OnDelete:CASCADE" json:"meetings,omitempty"`
 	// Back-relation: Slot records that reference this via agenda_id.
-	Slots []Slot `gorm:"foreignKey:AgendaID" json:"slots,omitempty"`
+	Slots []Slot `gorm:"foreignKey:AgendaID;constraint:OnDelete:CASCADE" json:"slots,omitempty"`
 	// Back-relation: Note records that reference this via agenda_id.
-	Notes []Note `gorm:"foreignKey:AgendaID" json:"notes,omitempty"`
+	Notes []Note `gorm:"foreignKey:AgendaID;constraint:OnDelete:CASCADE" json:"notes,omitempty"`
 }
 
 func (*Agenda) TableName() string { return "deep_v1.agendas" }
@@ -88,7 +88,7 @@ type Meeting struct {
 	RuleID *string `gorm:"column:rule_id;index:idx_meetings_rule_id" json:"rule_id,omitempty"`
 	Rule   *Rule   `gorm:"foreignKey:RuleID;constraint:OnDelete:SET NULL" json:"rule,omitempty"`
 	// Back-relation: Tag records that reference this via meeting_id.
-	Tags []Tag `gorm:"foreignKey:MeetingID" json:"tags,omitempty"`
+	Tags []Tag `gorm:"foreignKey:MeetingID;constraint:OnDelete:CASCADE" json:"tags,omitempty"`
 }
 
 func (*Meeting) TableName() string { return "deep_v1.meetings" }
@@ -100,7 +100,7 @@ type Zone struct {
 	// Database version.
 	Version *string `gorm:"column:version" json:"version,omitempty"`
 	// Back-relation: Agenda records that reference this via zone_id.
-	Agendas []Agenda `gorm:"foreignKey:ZoneID" json:"agendas,omitempty"`
+	Agendas []Agenda `gorm:"foreignKey:ZoneID;constraint:OnDelete:SET NULL" json:"agendas,omitempty"`
 }
 
 func (*Zone) TableName() string { return "deep_v1.zones" }
@@ -146,15 +146,15 @@ type Moment struct {
 	// The instant.
 	At time.Time `gorm:"column:at;type:timestamptz;not null" json:"at" validate:"required"`
 	// Back-relation: Meeting records that reference this via start_id.
-	Meetings []Meeting `gorm:"foreignKey:StartID" json:"meetings,omitempty"`
+	Meetings []Meeting `gorm:"foreignKey:StartID;constraint:OnDelete:CASCADE" json:"meetings,omitempty"`
 	// Back-relation: Meeting records that reference this via end_id.
-	Meetings2 []Meeting `gorm:"foreignKey:EndID" json:"meetings2,omitempty"`
+	Meetings2 []Meeting `gorm:"foreignKey:EndID;constraint:OnDelete:SET NULL" json:"meetings2,omitempty"`
 	// Back-relation: Slot records that reference this via start_id.
-	Slots []Slot `gorm:"foreignKey:StartID" json:"slots,omitempty"`
+	Slots []Slot `gorm:"foreignKey:StartID;constraint:OnDelete:CASCADE" json:"slots,omitempty"`
 	// Back-relation: Slot records that reference this via end_id.
-	Slots2 []Slot `gorm:"foreignKey:EndID" json:"slots2,omitempty"`
+	Slots2 []Slot `gorm:"foreignKey:EndID;constraint:OnDelete:SET NULL" json:"slots2,omitempty"`
 	// Back-relation: Rule records that reference this via until_id.
-	Rules []Rule `gorm:"foreignKey:UntilID" json:"rules,omitempty"`
+	Rules []Rule `gorm:"foreignKey:UntilID;constraint:OnDelete:SET NULL" json:"rules,omitempty"`
 }
 
 func (*Moment) TableName() string { return "deep_v1.moments" }
@@ -173,9 +173,9 @@ type Rule struct {
 	UntilID *string `gorm:"column:until_id;index:idx_rules_until_id" json:"until_id,omitempty"`
 	Until   *Moment `gorm:"foreignKey:UntilID;constraint:OnDelete:SET NULL" json:"until,omitempty"`
 	// Back-relation: Meeting records that reference this via rule_id.
-	Meetings []Meeting `gorm:"foreignKey:RuleID" json:"meetings,omitempty"`
+	Meetings []Meeting `gorm:"foreignKey:RuleID;constraint:OnDelete:SET NULL" json:"meetings,omitempty"`
 	// Back-relation: Day records that reference this via rule_id.
-	Days []Day `gorm:"foreignKey:RuleID" json:"days,omitempty"`
+	Days []Day `gorm:"foreignKey:RuleID;constraint:OnDelete:CASCADE" json:"days,omitempty"`
 }
 
 func (*Rule) TableName() string { return "deep_v1.rules" }

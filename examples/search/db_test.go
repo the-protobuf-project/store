@@ -29,7 +29,7 @@ const dsnEnv = "STORE_TEST_POSTGRES_DSN"
 func freshDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db := emptyDB(t)
-	ddl, err := os.ReadFile(filepath.Join("gen", "sql", "search", "migrate.sql"))
+	ddl, err := os.ReadFile(filepath.Join("..", "generated", "sql", "search", "search", "migrate.sql"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -20,10 +20,10 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
 
-	"github.com/the-protobuf-project/store/examples/search/gen/gorm/filterx"
-	"github.com/the-protobuf-project/store/examples/search/gen/pb/searchdemov1"
-	"github.com/the-protobuf-project/store/examples/search/gen/repository/repox"
-	"github.com/the-protobuf-project/store/examples/search/gen/repository/search/search"
+	"github.com/the-protobuf-project/store/examples/generated/go/gorm/search/filterx"
+	"github.com/the-protobuf-project/store/examples/generated/go/protobuf/search/searchdemov1"
+	"github.com/the-protobuf-project/store/examples/generated/go/repository/search/repox"
+	"github.com/the-protobuf-project/store/examples/generated/go/repository/search/search/search"
 )
 
 // days are the days the projection covers; rooms are open 08:00-18:00 UTC.

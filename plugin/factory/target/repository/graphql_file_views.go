@@ -125,8 +125,8 @@ func graphqlParentViews(db *schema.Database, s *schema.Schema, pkg string, rs []
 }
 
 // graphqlReferrerViews prepares graphql_referrers_<schema>.go for each schema
-// holding foreign keys into the resources of s that a purge asks about
-// (gqlReferrer), keyed by file name.
+// holding foreign keys into the resources of s that a purge, or a delete
+// without one, asks about (gqlReferrer), keyed by file name.
 func graphqlReferrerViews(db *schema.Database, s *schema.Schema, pkg string, rs []gqlResourceView) map[string]map[string]any {
 	client := dbGraphQLModule(db)
 	bySchema := map[string][]gqlReferrer{}
@@ -149,9 +149,12 @@ func graphqlReferrerViews(db *schema.Database, s *schema.Schema, pkg string, rs 
 		}
 		for _, f := range fs {
 			imports[client+"/"+f.DomPkg+"/"+f.ResPkg] = f.ResPkg
+			if f.ExceptField != "" {
+				imports[graphqlDSLModule] = ""
+			}
 		}
 		out["graphql_referrers_"+strings.TrimSuffix(dom, "ql")+".go"] = map[string]any{
-			"Header":    fileHeader(db, s, "Referrers in schema "+strings.TrimSuffix(dom, "ql")+" a purge asks about, by key."),
+			"Header":    fileHeader(db, s, "Referrers in schema "+strings.TrimSuffix(dom, "ql")+" a purge or delete asks about, by key."),
 			"Package":   pkg,
 			"ClientPkg": clientPkgName(client),
 			"Imports":   renderImports(imports),

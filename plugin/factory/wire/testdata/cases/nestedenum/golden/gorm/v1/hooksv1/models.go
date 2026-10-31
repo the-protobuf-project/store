@@ -57,7 +57,7 @@ type Webhook struct {
 	// When the webhook was created.
 	CreateTime time.Time `gorm:"column:create_time;type:timestamptz;not null;autoCreateTime" json:"create_time"`
 	// Back-relation: Delivery records that reference this via webhook_id.
-	Deliveries []Delivery `gorm:"foreignKey:WebhookID" json:"deliveries,omitempty"`
+	Deliveries []Delivery `gorm:"foreignKey:WebhookID;constraint:OnDelete:CASCADE" json:"deliveries,omitempty"`
 }
 
 func (*Webhook) TableName() string { return "hooks_v1.webhooks" }

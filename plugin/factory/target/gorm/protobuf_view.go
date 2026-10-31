@@ -635,7 +635,7 @@ func convertView(idx *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 			fromSkips = append(fromSkips, fieldName+" (sub-row graph)")
 			qual := bt.Target.LocalName + "ToProto"
 			if bt.CrossPkg != "" {
-				imports.add(dbGoModule(db) + "/" + db.Name + "/" + bt.CrossPkg)
+				imports.add(dbGoModule(db) + "/" + gopkg.Dir(db.Name) + "/" + bt.CrossPkg)
 				qual = bt.CrossPkg + "." + qual
 			}
 			expr := qual + "(m." + bt.Field + ")"

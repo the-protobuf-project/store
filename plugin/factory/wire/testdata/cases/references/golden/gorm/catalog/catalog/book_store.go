@@ -48,6 +48,9 @@ type BookStoreIface interface {
 	GetByID(ctx context.Context, id string) (*Book, error)
 	DeleteByID(ctx context.Context, id string) error
 	GetByName(ctx context.Context, v string) (*Book, error)
+	ListByPrimaryGenreID(ctx context.Context, id string, opts gormx.ListOptions) ([]Book, error)
+	ListByFormerGenreID(ctx context.Context, id string, opts gormx.ListOptions) ([]Book, error)
+	ListByReturnsToID(ctx context.Context, id string, opts gormx.ListOptions) ([]Book, error)
 	ListByShelfID(ctx context.Context, id string, opts gormx.ListOptions) ([]Book, error)
 }
 
@@ -132,6 +135,36 @@ func (s *BookStore) GetByName(ctx context.Context, v string) (*Book, error) {
 		return nil, err
 	}
 	return &m, nil
+}
+
+// ListByPrimaryGenreID returns the Book records whose primary_genre matches id, with opts applied.
+func (s *BookStore) ListByPrimaryGenreID(ctx context.Context, id string, opts gormx.ListOptions) ([]Book, error) {
+	var out []Book
+	q := opts.Apply(s.DB.WithContext(ctx).Where("primary_genre = ?", id))
+	if err := q.Find(&out).Error; err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ListByFormerGenreID returns the Book records whose former_genre matches id, with opts applied.
+func (s *BookStore) ListByFormerGenreID(ctx context.Context, id string, opts gormx.ListOptions) ([]Book, error) {
+	var out []Book
+	q := opts.Apply(s.DB.WithContext(ctx).Where("former_genre = ?", id))
+	if err := q.Find(&out).Error; err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ListByReturnsToID returns the Book records whose returns_to matches id, with opts applied.
+func (s *BookStore) ListByReturnsToID(ctx context.Context, id string, opts gormx.ListOptions) ([]Book, error) {
+	var out []Book
+	q := opts.Apply(s.DB.WithContext(ctx).Where("returns_to = ?", id))
+	if err := q.Find(&out).Error; err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // ListByShelfID returns the Book records whose shelf_id matches id, with opts applied.

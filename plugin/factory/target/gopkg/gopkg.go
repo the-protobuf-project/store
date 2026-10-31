@@ -25,7 +25,15 @@ import (
 	"strings"
 
 	"google.golang.org/protobuf/compiler/protogen"
+
+	"github.com/the-protobuf-project/protokit/naming"
 )
+
+// Dir is the directory, and so the import path segment, a database's Go output
+// lives in: the name without underscores, as every Go path this plugin
+// generates is, "bookstore_db" → "bookstoredb". The database itself keeps its
+// name; only the path changes.
+func Dir(database string) string { return naming.GoPackage(database) }
 
 // Names maps a generated Go import path to the package name declared at it.
 type Names map[string]string

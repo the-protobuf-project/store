@@ -1,0 +1,13 @@
+# The sensors example: the generated Rust client in examples/generated/rust/influxdb/sensors,
+# exercised against Arrow captures and, when INFLUX_HOST is set, InfluxDB 3.
+# Run: just test-sensors   (or: cargo test)
+[package]
+name = "sensors-example"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+sensors = { path = "../generated/rust/influxdb/sensors" }
+tpp-database = { git = "https://github.com/the-protobuf-project/runtime-rs", branch = "main" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

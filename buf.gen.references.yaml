@@ -10,32 +10,32 @@ inputs:
 
 plugins:
   - remote: buf.build/protocolbuffers/go:v1.36.11
-    out: examples/references/gen/pb
+    out: examples/generated/go/protobuf/references
     opt:
-      - module=github.com/the-protobuf-project/store/examples/references/gen/pb
+      - module=github.com/the-protobuf-project/store/examples/generated/go/protobuf/references
 
   - local: protoc-gen-store
-    out: examples/references/gen/gorm
+    out: examples/generated/go/gorm/references
     strategy: all
     opt:
       - target=gorm
       - stores=true
       - converters=true
       - filters=true
-      - go_module=github.com/the-protobuf-project/store/examples/references/gen/gorm
+      - go_module=github.com/the-protobuf-project/store/examples/generated/go/gorm/references
       - config=examples/references/store.yaml
 
   - local: protoc-gen-store
-    out: examples/references/gen/repository
+    out: examples/generated/go/repository/references
     strategy: all
     opt:
       - target=repository
-      - go_module=github.com/the-protobuf-project/store/examples/references/gen/repository
-      - gorm_module=github.com/the-protobuf-project/store/examples/references/gen/gorm
+      - go_module=github.com/the-protobuf-project/store/examples/generated/go/repository/references
+      - gorm_module=github.com/the-protobuf-project/store/examples/generated/go/gorm/references
       - config=examples/references/store.yaml
 
   - local: protoc-gen-store
-    out: examples/references/gen/sql
+    out: examples/generated/sql/references
     strategy: all
     opt:
       - target=sql

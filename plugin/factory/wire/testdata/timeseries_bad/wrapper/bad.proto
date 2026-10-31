@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package bad.v1;
+
+import "google/api/resource.proto";
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/wrappers.proto";
+import "store/v1/annotations.proto";
+
+// Location is a value message: a field of it becomes a child table.
+message Location {
+  double lat = 1;
+  double lng = 2;
+}
+
+// Sample is the measurement under test.
+message Sample {
+  option (google.api.resource) = {
+    type: "bad.v1/Sample"
+    pattern: "samples/{sample}"
+  };
+  option (store.v1.table) = {
+    time_series: {time: "at", tags: ["device"]}
+  };
+
+  string device = 1;
+  google.protobuf.Timestamp at = 2;
+  google.protobuf.DoubleValue value = 3;
+}

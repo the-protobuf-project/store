@@ -1,0 +1,105 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+// Package sensors.v1 is a fleet of field sensors reporting time series: the
+// messages the influxdb target renders as InfluxDB 3 and Arrow capture stores.
+//
+// This file holds the environment schema: what the sensors measure. Its
+// sibling device.proto holds the fleet schema: how the sensors themselves are
+// doing. Both land in one database, sensors_db.
+package sensors.v1;
+
+import "entity/v1/annotations.proto";
+import "google/api/resource.proto";
+import "google/protobuf/timestamp.proto";
+import "store/v1/annotations.proto";
+
+option go_package = "github.com/the-protobuf-project/store/examples/gen/sensors/v1;sensorsv1";
+option (entity.v1.datasource) = {
+  database: "sensors_db"
+  schema: "environment"
+};
+
+// ReadingQuality grades a sample.
+enum ReadingQuality {
+  // Not graded.
+  READING_QUALITY_UNSPECIFIED = 0;
+  // Within calibration.
+  READING_QUALITY_GOOD = 1;
+  // Past its calibration date.
+  READING_QUALITY_STALE_CALIBRATION = 2;
+  // Outside the sensor's rated range.
+  READING_QUALITY_OUT_OF_RANGE = 3;
+}
+
+// ClimateReading is one sample of a climate sensor.
+message ClimateReading {
+  option (google.api.resource) = {
+    type: "sensors.v1/ClimateReading"
+    pattern: "climateReadings/{climate_reading}"
+  };
+  option (store.v1.table) = {
+    time_series: {
+      time: "observe_time"
+      tags: ["device_id", "site"]
+    }
+  };
+
+  // The sensor that sampled.
+  string device_id = 1;
+
+  // Where the sensor is deployed.
+  string site = 2;
+
+  // When the sample was taken.
+  google.protobuf.Timestamp observe_time = 3;
+
+  // Air temperature in degrees Celsius.
+  double temperature_c = 4;
+
+  // Relative humidity, percent.
+  double humidity_pct = 5;
+
+  // Barometric pressure in hectopascals.
+  float pressure_hpa = 6;
+
+  // Carbon dioxide in parts per million.
+  uint32 co2_ppm = 7;
+
+  // How far to trust the sample.
+  ReadingQuality quality = 8;
+}
+
+// AirQualityReading is one sample of a particulate sensor.
+message AirQualityReading {
+  option (google.api.resource) = {
+    type: "sensors.v1/AirQualityReading"
+    pattern: "airQualityReadings/{air_quality_reading}"
+  };
+  option (store.v1.table) = {
+    time_series: {
+      time: "observe_time"
+      tags: ["device_id", "site"]
+    }
+  };
+
+  // The sensor that sampled.
+  string device_id = 1;
+
+  // Where the sensor is deployed.
+  string site = 2;
+
+  // When the sample was taken.
+  google.protobuf.Timestamp observe_time = 3;
+
+  // Fine particulate matter, micrograms per cubic metre.
+  double pm2_5 = 4;
+
+  // Coarse particulate matter, micrograms per cubic metre.
+  double pm10 = 5;
+
+  // Volatile organic compounds index, 0-500.
+  int32 voc_index = 6;
+}

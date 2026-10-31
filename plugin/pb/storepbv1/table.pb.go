@@ -68,7 +68,23 @@ type TableOptions struct {
 	//	option (store.v1.table) = {
 	//	  no_overlap: {key: ["resource"], start: "start_time", end: "end_time"}
 	//	};
-	NoOverlap     []*NoOverlap `protobuf:"bytes,2,rep,name=no_overlap,json=noOverlap,proto3" json:"no_overlap,omitempty"`
+	NoOverlap []*NoOverlap `protobuf:"bytes,2,rep,name=no_overlap,json=noOverlap,proto3" json:"no_overlap,omitempty"`
+	// time_series makes this message a measurement: a stream of points, each
+	// identified by its tag set and its time, rather than a row identified by a
+	// key. It is what the influxdb target renders — InfluxDB 3 and Arrow IPC
+	// captures through the tpp-database runtime — and only messages declaring it
+	// are rendered there.
+	//
+	// Every field that is neither the time nor a tag is a stored value. All of
+	// them must be scalars without explicit presence: a point is written whole,
+	// and neither backend stores a null.
+	//
+	// Applied via:
+	//
+	//	option (store.v1.table) = {
+	//	  time_series: {time: "observe_time", tags: ["device", "site"]}
+	//	};
+	TimeSeries    *TimeSeries `protobuf:"bytes,3,opt,name=time_series,json=timeSeries,proto3" json:"time_series,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -117,6 +133,71 @@ func (x *TableOptions) GetNoOverlap() []*NoOverlap {
 	return nil
 }
 
+func (x *TableOptions) GetTimeSeries() *TimeSeries {
+	if x != nil {
+		return x.TimeSeries
+	}
+	return nil
+}
+
+// TimeSeries names the fields that identify a point.
+type TimeSeries struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// time is the field holding the observation time: a
+	// google.protobuf.Timestamp, or an int64 of epoch nanoseconds.
+	Time string `protobuf:"bytes,1,opt,name=time,proto3" json:"time,omitempty"`
+	// tags lists the string fields (proto snake_case) forming the series
+	// identity, e.g. ["device", "site"]. Writing a point whose tags and time
+	// match an existing one replaces its values. May be empty.
+	Tags          []string `protobuf:"bytes,2,rep,name=tags,proto3" json:"tags,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TimeSeries) Reset() {
+	*x = TimeSeries{}
+	mi := &file_store_v1_table_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TimeSeries) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TimeSeries) ProtoMessage() {}
+
+func (x *TimeSeries) ProtoReflect() protoreflect.Message {
+	mi := &file_store_v1_table_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TimeSeries.ProtoReflect.Descriptor instead.
+func (*TimeSeries) Descriptor() ([]byte, []int) {
+	return file_store_v1_table_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *TimeSeries) GetTime() string {
+	if x != nil {
+		return x.Time
+	}
+	return ""
+}
+
+func (x *TimeSeries) GetTags() []string {
+	if x != nil {
+		return x.Tags
+	}
+	return nil
+}
+
 // NoOverlap is one exclusion rule over a table's time ranges.
 type NoOverlap struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -137,7 +218,7 @@ type NoOverlap struct {
 
 func (x *NoOverlap) Reset() {
 	*x = NoOverlap{}
-	mi := &file_store_v1_table_proto_msgTypes[1]
+	mi := &file_store_v1_table_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -149,7 +230,7 @@ func (x *NoOverlap) String() string {
 func (*NoOverlap) ProtoMessage() {}
 
 func (x *NoOverlap) ProtoReflect() protoreflect.Message {
-	mi := &file_store_v1_table_proto_msgTypes[1]
+	mi := &file_store_v1_table_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -162,7 +243,7 @@ func (x *NoOverlap) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NoOverlap.ProtoReflect.Descriptor instead.
 func (*NoOverlap) Descriptor() ([]byte, []int) {
-	return file_store_v1_table_proto_rawDescGZIP(), []int{1}
+	return file_store_v1_table_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *NoOverlap) GetKey() []string {
@@ -197,11 +278,17 @@ var File_store_v1_table_proto protoreflect.FileDescriptor
 
 const file_store_v1_table_proto_rawDesc = "" +
 	"\n" +
-	"\x14store/v1/table.proto\x12\bstore.v1\"Z\n" +
+	"\x14store/v1/table.proto\x12\bstore.v1\"\x91\x01\n" +
 	"\fTableOptions\x12\x16\n" +
 	"\x06outbox\x18\x01 \x01(\bR\x06outbox\x122\n" +
 	"\n" +
-	"no_overlap\x18\x02 \x03(\v2\x13.store.v1.NoOverlapR\tnoOverlap\"e\n" +
+	"no_overlap\x18\x02 \x03(\v2\x13.store.v1.NoOverlapR\tnoOverlap\x125\n" +
+	"\vtime_series\x18\x03 \x01(\v2\x14.store.v1.TimeSeriesR\n" +
+	"timeSeries\"4\n" +
+	"\n" +
+	"TimeSeries\x12\x12\n" +
+	"\x04time\x18\x01 \x01(\tR\x04time\x12\x12\n" +
+	"\x04tags\x18\x02 \x03(\tR\x04tags\"e\n" +
 	"\tNoOverlap\x12\x10\n" +
 	"\x03key\x18\x01 \x03(\tR\x03key\x12\x14\n" +
 	"\x05start\x18\x02 \x01(\tR\x05start\x12\x10\n" +
@@ -224,18 +311,20 @@ func file_store_v1_table_proto_rawDescGZIP() []byte {
 	return file_store_v1_table_proto_rawDescData
 }
 
-var file_store_v1_table_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_store_v1_table_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_store_v1_table_proto_goTypes = []any{
 	(*TableOptions)(nil), // 0: store.v1.TableOptions
-	(*NoOverlap)(nil),    // 1: store.v1.NoOverlap
+	(*TimeSeries)(nil),   // 1: store.v1.TimeSeries
+	(*NoOverlap)(nil),    // 2: store.v1.NoOverlap
 }
 var file_store_v1_table_proto_depIdxs = []int32{
-	1, // 0: store.v1.TableOptions.no_overlap:type_name -> store.v1.NoOverlap
-	1, // [1:1] is the sub-list for method output_type
-	1, // [1:1] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	2, // 0: store.v1.TableOptions.no_overlap:type_name -> store.v1.NoOverlap
+	1, // 1: store.v1.TableOptions.time_series:type_name -> store.v1.TimeSeries
+	2, // [2:2] is the sub-list for method output_type
+	2, // [2:2] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_store_v1_table_proto_init() }
@@ -249,7 +338,7 @@ func file_store_v1_table_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_store_v1_table_proto_rawDesc), len(file_store_v1_table_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

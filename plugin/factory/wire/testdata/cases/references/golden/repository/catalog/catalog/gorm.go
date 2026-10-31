@@ -107,6 +107,15 @@ func (r *GormBookRepository) Create(ctx context.Context, parent string, in *refd
 	m.ID = id
 	m.Name = in.GetName()
 	m.ShelfID = parentIDs[0]
+	if v := in.GetPrimaryGenre(); v != "" {
+		m.PrimaryGenreID = repox.Ptr(repox.LastSegment(v))
+	}
+	if v := in.GetFormerGenre(); v != "" {
+		m.FormerGenreID = repox.Ptr(repox.LastSegment(v))
+	}
+	if v := in.GetReturnsTo(); v != "" {
+		m.ReturnsToID = repox.Ptr(repox.LastSegment(v))
+	}
 	m.Etag = repox.Ptr(repox.NewULID())
 	if err := r.DB.Transaction(func(tx *gorm.DB) error { return r.insertTx(ctx, tx, in, m) }); err != nil {
 		return nil, repox.MapGormErr(err)
@@ -156,6 +165,15 @@ func (r *GormBookRepository) get(ctx context.Context, key string) (*refdemov1.Bo
 // for m alone when nil.
 func (r *GormBookRepository) toProto(ctx context.Context, m *catalog.Book, joined repox.Joined) (*refdemov1.Book, error) {
 	out := catalog.BookToProto(m)
+	if m.PrimaryGenreID != nil && *m.PrimaryGenreID != "" {
+		out.PrimaryGenre = "genres/" + *m.PrimaryGenreID
+	}
+	if m.FormerGenreID != nil && *m.FormerGenreID != "" {
+		out.FormerGenre = "genres/" + *m.FormerGenreID
+	}
+	if m.ReturnsToID != nil && *m.ReturnsToID != "" {
+		out.ReturnsTo = "shelves/" + *m.ReturnsToID
+	}
 	if joined == nil {
 		var err error
 		if joined, err = r.readJoins(ctx, r.DB, nil, m.ID); err != nil {
@@ -351,10 +369,13 @@ func (r *GormBookRepository) reads(db *gorm.DB, in repox.ListInput) *gorm.DB {
 // bookColumns are the row's columns by the field each stores, for
 // a read mask to leave out.
 var bookColumns = map[string][]string{
-	"title":       {"title"},
-	"etag":        {"etag"},
-	"delete_time": {"delete_time"},
-	"expire_time": {"expire_time"},
+	"title":         {"title"},
+	"etag":          {"etag"},
+	"delete_time":   {"delete_time"},
+	"expire_time":   {"expire_time"},
+	"primary_genre": {"primary_genre"},
+	"former_genre":  {"former_genre"},
+	"returns_to":    {"returns_to"},
 }
 
 // Update persists the masked fields of in; an empty mask replaces every
@@ -401,6 +422,18 @@ func (r *GormBookRepository) updateTx(ctx context.Context, tx *gorm.DB, key stri
 		return repox.ErrConflict
 	}
 	existingPB := catalog.BookToProto(&existing)
+	{
+		m, out := &existing, existingPB
+		if m.PrimaryGenreID != nil && *m.PrimaryGenreID != "" {
+			out.PrimaryGenre = "genres/" + *m.PrimaryGenreID
+		}
+		if m.FormerGenreID != nil && *m.FormerGenreID != "" {
+			out.FormerGenre = "genres/" + *m.FormerGenreID
+		}
+		if m.ReturnsToID != nil && *m.ReturnsToID != "" {
+			out.ReturnsTo = "shelves/" + *m.ReturnsToID
+		}
+	}
 	joined, err := r.readJoins(ctx, tx, nil, id)
 	if err != nil {
 		return err
@@ -419,6 +452,21 @@ func (r *GormBookRepository) updateTx(ctx context.Context, tx *gorm.DB, key stri
 	_ = next
 	existing.Name = next.Name
 	existing.Title = next.Title
+	if v := merged.GetPrimaryGenre(); v != "" {
+		existing.PrimaryGenreID = repox.Ptr(repox.LastSegment(v))
+	} else {
+		existing.PrimaryGenreID = nil
+	}
+	if v := merged.GetFormerGenre(); v != "" {
+		existing.FormerGenreID = repox.Ptr(repox.LastSegment(v))
+	} else {
+		existing.FormerGenreID = nil
+	}
+	if v := merged.GetReturnsTo(); v != "" {
+		existing.ReturnsToID = repox.Ptr(repox.LastSegment(v))
+	} else {
+		existing.ReturnsToID = nil
+	}
 	if len(outputPaths) > 0 {
 		paths := outputPaths
 		if repox.InMask(paths, "expire_time") {
@@ -510,6 +558,15 @@ func (r *GormBookRepository) newRow(parent string, in *refdemov1.Book) (*catalog
 	m.ID = id
 	m.Name = in.GetName()
 	m.ShelfID = parentIDs[0]
+	if v := in.GetPrimaryGenre(); v != "" {
+		m.PrimaryGenreID = repox.Ptr(repox.LastSegment(v))
+	}
+	if v := in.GetFormerGenre(); v != "" {
+		m.FormerGenreID = repox.Ptr(repox.LastSegment(v))
+	}
+	if v := in.GetReturnsTo(); v != "" {
+		m.ReturnsToID = repox.Ptr(repox.LastSegment(v))
+	}
 	m.Etag = repox.Ptr(repox.NewULID())
 	return m, in, nil
 }
@@ -987,7 +1044,7 @@ func (r *GormGenreRepository) Delete(ctx context.Context, name string) error {
 			return err
 		}
 	}
-	if err := r.refuseJoined(ctx, r.DB, key, name); err != nil {
+	if err := r.refuseReferenced(ctx, r.DB, key, name); err != nil {
 		return err
 	}
 	var existing catalog.Genre
@@ -997,25 +1054,26 @@ func (r *GormGenreRepository) Delete(ctx context.Context, name string) error {
 	return repox.MapGormErr(r.store(r.DB).DeleteByID(ctx, existing.ID))
 }
 
-// refuseJoined refuses to delete the row found by key (rowKey), named name,
-// through db while a join table's row names it (repox.ReferencedByJoin), as
-// a singular reference's constraint refuses it: the join's key would
-// cascade, taking the record out of the repeated reference.
-func (r *GormGenreRepository) refuseJoined(ctx context.Context, db *gorm.DB, key, name string) error {
+// refuseReferenced refuses to delete the row found by key (rowKey), named
+// name, through db while a join table's row or an optional reference names
+// it (repox.ReferencedByRow), as a required reference's constraint refuses it:
+// the join's key would cascade, taking the record out of the repeated
+// reference, and an optional reference's old SET NULL would blank it.
+func (r *GormGenreRepository) refuseReferenced(ctx context.Context, db *gorm.DB, key, name string) error {
 	var referenced bool
-	if err := db.WithContext(ctx).Raw(genreJoinReferencedSQL, key).Scan(&referenced).Error; err != nil {
+	if err := db.WithContext(ctx).Raw(genreDeleteReferencedSQL, key).Scan(&referenced).Error; err != nil {
 		return repox.MapGormErr(err)
 	}
 	if referenced {
-		return repox.ReferencedByJoin("catalog.example.com/Genre", name)
+		return repox.ReferencedByRow("catalog.example.com/Genre", name)
 	}
 	return nil
 }
 
-// genreJoinReferencedSQL asks whether a join table's row, its
-// owner deleted or not, still names the Genre row with the given key
-// (rowKey).
-const genreJoinReferencedSQL = `SELECT EXISTS (SELECT 1 FROM "catalog"."book_genres" r0 WHERE r0."genre_id" = t."id") FROM "catalog"."genres" t WHERE t."id" = ?`
+// genreDeleteReferencedSQL asks whether a join table's row or an
+// optional reference, its owner deleted or not, still names the Genre
+// row with the given key (rowKey).
+const genreDeleteReferencedSQL = `SELECT EXISTS (SELECT 1 FROM "catalog"."book_genres" r0 WHERE r0."genre_id" = t."id") OR EXISTS (SELECT 1 FROM "catalog"."books" r1 WHERE r1."primary_genre" = t."id") FROM "catalog"."genres" t WHERE t."id" = ?`
 
 // ListByKeys reads every record whose filter field field is one of keys; see
 // repox.ListByKeys.
@@ -1950,7 +2008,7 @@ func (r *GormShelfRepository) purge(ctx context.Context, db *gorm.DB, key, name 
 
 // shelfReferencedSQL asks whether any row, deleted or not, still
 // holds a foreign key to the Shelf row with the given key (rowKey).
-const shelfReferencedSQL = `SELECT EXISTS (SELECT 1 FROM "catalog"."book_filed_under" r0 WHERE r0."shelf_id" = t."id") OR EXISTS (SELECT 1 FROM "catalog"."books" r1 WHERE r1."shelf_id" = t."id") OR EXISTS (SELECT 1 FROM "catalog"."pages" r2 WHERE r2."shelf_id" = t."id") FROM "catalog"."shelves" t WHERE t."id" = ?`
+const shelfReferencedSQL = `SELECT EXISTS (SELECT 1 FROM "catalog"."book_filed_under" r0 WHERE r0."shelf_id" = t."id") OR EXISTS (SELECT 1 FROM "catalog"."books" r1 WHERE r1."returns_to" = t."id") OR EXISTS (SELECT 1 FROM "catalog"."books" r2 WHERE r2."shelf_id" = t."id") OR EXISTS (SELECT 1 FROM "catalog"."pages" r3 WHERE r3."shelf_id" = t."id") FROM "catalog"."shelves" t WHERE t."id" = ?`
 
 // PurgeExpired removes for good every deleted record whose expire_time is at
 // or before now, keeping the ones something still refers to (see purge).
@@ -2164,7 +2222,7 @@ func (b *gormBatch) DeleteGenre(name string) {
 	}
 	queueGenreDelete(b.u, name, true)
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
-		if err := r.refuseJoined(ctx, tx, key, name); err != nil {
+		if err := r.refuseReferenced(ctx, tx, key, name); err != nil {
 			return err
 		}
 		return tx.WithContext(ctx).Delete(&catalog.Genre{}, "id = ?", key).Error

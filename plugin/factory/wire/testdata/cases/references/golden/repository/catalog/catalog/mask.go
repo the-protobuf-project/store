@@ -32,6 +32,15 @@ func applyBookMask(merged, in *refdemov1.Book, paths []string) {
 	if repox.InMask(paths, "title") {
 		merged.Title = in.GetTitle()
 	}
+	if repox.InMask(paths, "primary_genre") {
+		merged.PrimaryGenre = in.GetPrimaryGenre()
+	}
+	if repox.InMask(paths, "former_genre") {
+		merged.FormerGenre = in.GetFormerGenre()
+	}
+	if repox.InMask(paths, "returns_to") {
+		merged.ReturnsTo = in.GetReturnsTo()
+	}
 	if repox.InMask(paths, "filed_under") {
 		merged.FiledUnder = in.GetFiledUnder()
 	}

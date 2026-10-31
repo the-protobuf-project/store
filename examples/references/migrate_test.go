@@ -13,8 +13,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/the-protobuf-project/store/examples/references/gen/gorm/catalog"
-	"github.com/the-protobuf-project/store/examples/references/gen/gorm/lending"
+	"github.com/the-protobuf-project/store/examples/generated/go/gorm/references/catalog"
+	"github.com/the-protobuf-project/store/examples/generated/go/gorm/references/lending"
 	"gorm.io/gorm"
 )
 
@@ -48,7 +48,7 @@ func constraint(t *testing.T, db *gorm.DB) (exists, valid bool) {
 
 func runSQL(t *testing.T, db *gorm.DB, file string) {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join("gen", "sql", file))
+	b, err := os.ReadFile(filepath.Join("..", "generated", "sql", "references", file))
 	if err != nil {
 		t.Fatal(err)
 	}

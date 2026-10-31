@@ -54,6 +54,15 @@ func bookToCreateInput(in *refdemov1.Book) booksql.CreateInput {
 	var ci booksql.CreateInput
 	ci.Name = in.GetName()
 	ci.Title = in.GetTitle()
+	if v := in.GetPrimaryGenre(); v != "" {
+		ci.PrimaryGenre = repox.LastSegment(v)
+	}
+	if v := in.GetFormerGenre(); v != "" {
+		ci.FormerGenre = repox.LastSegment(v)
+	}
+	if v := in.GetReturnsTo(); v != "" {
+		ci.ReturnsTo = repox.LastSegment(v)
+	}
 	ci.ExpireTime = tsToStr(in.GetExpireTime())
 	return ci
 }
@@ -65,6 +74,21 @@ func bookToUpdatePatch(merged *refdemov1.Book) booksql.UpdateInput {
 	var patch booksql.UpdateInput
 	patch.Name = graphql.Value(merged.GetName())
 	patch.Title = graphql.Value(merged.GetTitle())
+	if v := repox.LastSegment(merged.GetPrimaryGenre()); v != "" {
+		patch.PrimaryGenre = graphql.Value(v)
+	} else {
+		patch.PrimaryGenre = graphql.Null[string]()
+	}
+	if v := repox.LastSegment(merged.GetFormerGenre()); v != "" {
+		patch.FormerGenre = graphql.Value(v)
+	} else {
+		patch.FormerGenre = graphql.Null[string]()
+	}
+	if v := repox.LastSegment(merged.GetReturnsTo()); v != "" {
+		patch.ReturnsTo = graphql.Value(v)
+	} else {
+		patch.ReturnsTo = graphql.Null[string]()
+	}
 	return patch
 }
 
@@ -97,6 +121,15 @@ func bookFromRow(row *booksql.CatalogBooks) *refdemov1.Book {
 	out := &refdemov1.Book{}
 	out.Name = row.Name
 	out.Title = row.Title
+	if v := repox.Deref(row.PrimaryGenre); v != "" {
+		out.PrimaryGenre = "genres/" + v
+	}
+	if v := repox.Deref(row.FormerGenre); v != "" {
+		out.FormerGenre = "genres/" + v
+	}
+	if v := repox.Deref(row.ReturnsTo); v != "" {
+		out.ReturnsTo = "shelves/" + v
+	}
 	out.Etag = repox.Deref(row.Etag)
 	out.DeleteTime = strToTs(repox.Deref(row.DeleteTime))
 	out.ExpireTime = strToTs(repox.Deref(row.ExpireTime))

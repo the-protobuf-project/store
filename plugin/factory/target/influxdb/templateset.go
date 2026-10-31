@@ -1,0 +1,18 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
+package influxdb
+
+// templateset.go embeds this target's templates and parses them into the set the renderer executes.
+
+import (
+	"embed"
+
+	"github.com/the-protobuf-project/protokit/templates"
+)
+
+//go:embed templates/rust/*.tpl
+var templateFS embed.FS
+
+// tmpl is this target's own parsed template set, keyed by file base name.
+var tmpl = templates.MustParse(templateFS, "templates/rust/*.tpl")

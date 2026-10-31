@@ -1,0 +1,87 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+// The fleet schema of sensors.v1: each sensor's own health and position,
+// stored in the same sensors_db database as the environment schema.
+package sensors.v1;
+
+import "entity/v1/annotations.proto";
+import "google/api/resource.proto";
+import "google/protobuf/timestamp.proto";
+import "store/v1/annotations.proto";
+
+option go_package = "github.com/the-protobuf-project/store/examples/gen/sensors/v1;sensorsv1";
+option (entity.v1.datasource) = {
+  database: "sensors_db"
+  schema: "fleet"
+};
+
+// DeviceHealth is a sensor's periodic self-report.
+message DeviceHealth {
+  option (google.api.resource) = {
+    type: "sensors.v1/DeviceHealth"
+    pattern: "deviceHealths/{device_health}"
+  };
+  option (store.v1.table) = {
+    time_series: {
+      time: "report_time"
+      tags: ["device_id", "firmware"]
+    }
+  };
+
+  // The reporting sensor.
+  string device_id = 1;
+
+  // The firmware it runs, so a rollout's effect shows per version.
+  string firmware = 2;
+
+  // When the report was made.
+  google.protobuf.Timestamp report_time = 3;
+
+  // Battery charge, percent.
+  float battery_pct = 4;
+
+  // Radio signal strength in dBm.
+  int32 rssi_dbm = 5;
+
+  // Seconds since the last boot.
+  uint64 uptime_s = 6;
+
+  // Whether the sensor is on external power.
+  bool charging = 7;
+}
+
+// GpsFix is a sensor's position fix.
+message GpsFix {
+  option (google.api.resource) = {
+    type: "sensors.v1/GpsFix"
+    pattern: "gpsFixes/{gps_fix}"
+    plural: "gpsFixes"
+  };
+  option (store.v1.table) = {
+    time_series: {
+      time: "fix_time"
+      tags: ["device_id"]
+    }
+  };
+
+  // The sensor that took the fix.
+  string device_id = 1;
+
+  // When the fix was taken.
+  google.protobuf.Timestamp fix_time = 2;
+
+  // Latitude in degrees.
+  double latitude = 3;
+
+  // Longitude in degrees.
+  double longitude = 4;
+
+  // Altitude above sea level in metres.
+  float altitude_m = 5;
+
+  // Satellites in view.
+  uint32 satellites = 6;
+}

@@ -19,10 +19,12 @@ version: v2
 # (or nothing) by leaving the opt off.
 inputs:
   - directory: examples/proto
+    paths:
+      - examples/proto/bookstore
 
 plugins:
   - local: protoc-gen-store
-    out: examples/generated/prisma
+    out: examples/generated/typescript/prisma/bookstore
     opt:
       - target=prisma
       - 'license_header=Copyright 2026 The Protobuf Project authors.\nSPDX-License-Identifier: Apache-2.0'
@@ -30,13 +32,13 @@ plugins:
       - Mbookstore/v1/inventory.proto=github.com/the-protobuf-project/store/examples/gen/bookstore/v1
 
   - local: protoc-gen-store
-    out: examples/generated/gorm
+    out: examples/generated/go/gorm/bookstore
     opt:
       - target=gorm
       - 'license_header=Copyright 2026 The Protobuf Project authors.\nSPDX-License-Identifier: Apache-2.0'
       # go_module is the import path of the gorm out: directory, so the generated
       # migration aggregator can import each per-schema models package.
-      - go_module=github.com/the-protobuf-project/store/examples/generated/gorm
+      - go_module=github.com/the-protobuf-project/store/examples/generated/go/gorm/bookstore
       # stores emits a typed CRUD store per resource (one <model>_store.go file);
       # it adds a gorm.io/gorm dependency to each generated models package.
       - stores=true
@@ -55,7 +57,7 @@ plugins:
       - Mbookstore/v1/inventory.proto=github.com/the-protobuf-project/store/examples/gen/bookstore/v1
 
   - local: protoc-gen-store
-    out: examples/generated/sql
+    out: examples/generated/sql/bookstore
     opt:
       - target=sql
       - 'license_header=Copyright 2026 The Protobuf Project authors.\nSPDX-License-Identifier: Apache-2.0'
@@ -67,7 +69,7 @@ plugins:
   # opt) for its schema, dialect, package and go_module. The committed SDL keeps
   # this offline and reproducible; see that file for the endpoint alternative.
   - local: protoc-gen-store
-    out: examples/generated/graphql
+    out: examples/generated/go/graphql/bookstore
     opt:
       - target=graphql
       - 'license_header=Copyright 2026 The Protobuf Project authors.\nSPDX-License-Identifier: Apache-2.0'

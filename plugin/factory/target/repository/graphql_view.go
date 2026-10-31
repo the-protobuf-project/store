@@ -93,8 +93,13 @@ type gqlResourceView struct {
 	// table (referrerFK) a purge asks first, as the GORM adapter's
 	// ReferencedSQL does: one whose action cascades or sets null would not
 	// refuse the delete (graphql_referrers.go.tpl). Without soft delete, the
-	// join tables' keys a Delete asks, as JoinReferencedSQL.
+	// join tables' keys and optional references a Delete asks, as
+	// DeleteReferencedSQL, refusing with RefusedBy.
 	GQLReferrers []gqlReferrer
+	RefusedBy    string
+	// TableKey is the resource's table, "schema.table": what a Batch delete
+	// tells the Unit it removes a row of (repox.Unit.Removing).
+	TableKey string
 
 	// Deep value-object graph fragments (graph_gql.go); empty without one.
 	HasDeep             bool
@@ -136,17 +141,23 @@ type gqlReferrer struct {
 	Table                    string // schema.table.column, for the comment
 	Func                     string // e.g. "catalogFixedPackageSpacesHoldsSpaceId"
 	Value                    string // what purge holds the key in: "id" or "name"
+	// ExceptField and ExceptTable name the row whose removal, earlier in the
+	// same Batch, releases a referring row (repox.Unit.RemovedIn): the row
+	// itself, by its key, or for a join table's row its owner, by the
+	// owner's key. Empty when there is none to tell.
+	ExceptField, ExceptTable string
 }
 
 // gqlReferrersOf lists the referrers of r a GraphQL purge can ask -- or with
-// joinsOnly, a delete of a resource without soft delete: the join tables'
-// rows (referrerFK.Join) -- those of db (its client), whose key is the
-// record's id or name; any other is left to the constraint.
-func gqlReferrersOf(db *schema.Database, r *resource, joinsOnly bool) []gqlReferrer {
+// deleteOnly, a delete of a resource without soft delete: the join tables'
+// rows and optional references (referrerFK.refusesDelete) -- those of db (its
+// client), whose key is the record's id or name; any other is left to the
+// constraint.
+func gqlReferrersOf(db *schema.Database, r *resource, deleteOnly bool) []gqlReferrer {
 	var out []gqlReferrer
 	seen := map[string]bool{}
 	for _, f := range r.ReferencedBy {
-		if f.DB != db || f.From == nil || (joinsOnly && !f.Join) {
+		if f.DB != db || f.From == nil || (deleteOnly && !f.refusesDelete()) {
 			continue
 		}
 		val := ""
@@ -165,12 +176,32 @@ func gqlReferrersOf(db *schema.Database, r *resource, joinsOnly bool) []gqlRefer
 			continue
 		}
 		seen[fn] = true
-		out = append(out, gqlReferrer{
+		g := gqlReferrer{
 			Domain: nm.Domain, Resource: nm.Resource, ResPkg: nm.ResPkg, DomPkg: nm.DomPkg,
 			Field: field, Table: f.Schema + "." + f.Table + "." + f.Column, Func: fn, Value: val,
-		})
+		}
+		g.ExceptField, g.ExceptTable = releasedBy(f)
+		out = append(out, g)
 	}
 	return out
+}
+
+// releasedBy names the row whose delete releases a referring row of f in the
+// same Batch (gqlReferrer.ExceptField, ExceptTable): a join table's row goes
+// with its owner, any other row with itself.
+func releasedBy(f referrerFK) (field, table string) {
+	if f.Join {
+		for _, fk := range f.From.ForeignKeys {
+			if joinOwnerFK(f.From, fk) && fk.ReferencedTable != "" {
+				return export(camel(fk.Column)), fk.ReferencedSchema + "." + fk.ReferencedTable
+			}
+		}
+		return "", ""
+	}
+	if f.From.PKColumn == "" {
+		return "", ""
+	}
+	return export(camel(f.From.PKColumn)), f.Schema + "." + f.Table
 }
 
 // parentLookupOf is the lookup of nested ancestor table t.
@@ -392,6 +423,8 @@ func gqlResourceViews(pb *pbIndex, db *schema.Database, s *schema.Schema, resour
 		v.ViaLookups = lastViaLookups(v.ViaLookups)
 		v.PKInputField = export(camel(r.Cols.PK.Name))
 		v.GQLReferrers = gqlReferrersOf(db, r, !v.SoftDelete)
+		v.RefusedBy = refusedBy(r)
+		v.TableKey = r.Schema.Name + "." + r.Table.Name
 		gg := graphGQLFragments(pb, r)
 		if len(r.Graph) > 0 {
 			v.HasDeep = true

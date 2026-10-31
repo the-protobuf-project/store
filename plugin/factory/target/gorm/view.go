@@ -16,6 +16,7 @@ import (
 
 	"github.com/the-protobuf-project/store/plugin/factory/facets"
 	"github.com/the-protobuf-project/store/plugin/factory/provenance"
+	"github.com/the-protobuf-project/store/plugin/factory/target/gopkg"
 	"github.com/the-protobuf-project/store/plugin/factory/target/searchindex"
 	"github.com/the-protobuf-project/store/plugin/factory/target/types"
 	"github.com/the-protobuf-project/store/telemetry"
@@ -97,7 +98,7 @@ func packageView(db *schema.Database, s *schema.Schema, pkg string, typeOf types
 				typ := loc(col.FKModel)
 				if bt.CrossPkg != "" {
 					typ = bt.CrossPkg + "." + bt.Target.LocalName
-					assocImports[dbGoModule(db)+"/"+db.Name+"/"+bt.CrossPkg] = true
+					assocImports[dbGoModule(db)+"/"+gopkg.Dir(db.Name)+"/"+bt.CrossPkg] = true
 				}
 				jsonName := strings.ToLower(bt.Field)
 				if jsonName == col.Name {
@@ -120,14 +121,13 @@ func packageView(db *schema.Database, s *schema.Schema, pkg string, typeOf types
 			childModel := loc(hm.Ref.Model)
 			refs := ""
 			if child := tableByModelFunc(db)(hm.Ref.Model); child != nil {
-				refs = referencesTag(child, hm.Ref.ViaFK, t)
-				// A join table's actions too: AutoMigrate builds a constraint
-				// from the back-relation as well, and one without them (NO
-				// ACTION) would refuse the delete the join's CASCADE allows,
-				// its rows going with the records they join.
-				if child.Join != nil {
-					refs += constraintTag(child, hm.Ref.ViaFK)
-				}
+				// The child FK's actions too: AutoMigrate builds the constraint
+				// from the back-relation, not the belongs-to (GORM skips a
+				// belongs-to a has-many matches), so one without them (NO
+				// ACTION) would drop the CASCADE or SET NULL the FK says --
+				// a join table's, an owned child's, an explicit on_delete --
+				// and disagree with the Prisma schema.
+				refs = referencesTag(child, hm.Ref.ViaFK, t) + constraintTag(child, hm.Ref.ViaFK)
 			}
 			m.Fields = append(m.Fields, fieldView{
 				Comment: "Back-relation: " + childModel + " records that reference this via " + hm.Ref.ViaFK + ".",

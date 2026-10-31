@@ -24,6 +24,7 @@ import (
 	"github.com/the-protobuf-project/protokit/schema"
 	"github.com/the-protobuf-project/store/plugin/factory/facets"
 	"github.com/the-protobuf-project/store/plugin/factory/provenance"
+	"github.com/the-protobuf-project/store/plugin/factory/target/gopkg"
 	"github.com/the-protobuf-project/store/plugin/factory/target/nooverlap"
 	"github.com/the-protobuf-project/store/plugin/factory/target/types"
 	"github.com/the-protobuf-project/store/telemetry"
@@ -87,7 +88,7 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 		}
 		for _, s := range db.Schemas {
 			pkg := naming.GoPackage(s.Name)
-			f := p.NewGeneratedFile(fmt.Sprintf("%s/%s/models.go", db.Name, pkg), "")
+			f := p.NewGeneratedFile(fmt.Sprintf("%s/%s/models.go", gopkg.Dir(db.Name), pkg), "")
 			if err := renderGo(f, "models.go.tpl", packageView(db, s, pkg, typeOf, tel, fx)); err != nil {
 				return fmt.Errorf("gorm: %s/%s: %w", db.Name, pkg, err)
 			}
@@ -102,7 +103,7 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 					return fmt.Errorf("gorm: %s/%s/protobuf.go: %w", db.Name, pkg, err)
 				}
 				if view != nil {
-					cf := p.NewGeneratedFile(fmt.Sprintf("%s/%s/protobuf.go", db.Name, pkg), "")
+					cf := p.NewGeneratedFile(fmt.Sprintf("%s/%s/protobuf.go", gopkg.Dir(db.Name), pkg), "")
 					if err := renderGo(cf, "protobuf.go.tpl", view); err != nil {
 						return fmt.Errorf("gorm: %s/%s/protobuf.go: %w", db.Name, pkg, err)
 					}
@@ -114,7 +115,7 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 			// telemetry opt — an telemetry Observer adapter).
 			if dbFilters(db) && len(s.Tables) > 0 {
 				if view := filtersView(db, s, pkg, fx); view != nil {
-					ff := p.NewGeneratedFile(fmt.Sprintf("%s/%s/filters.go", db.Name, pkg), "")
+					ff := p.NewGeneratedFile(fmt.Sprintf("%s/%s/filters.go", gopkg.Dir(db.Name), pkg), "")
 					if err := renderGo(ff, "filters.go.tpl", view); err != nil {
 						return fmt.Errorf("gorm: %s/%s/filters.go: %w", db.Name, pkg, err)
 					}
@@ -153,7 +154,7 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 					gormxEmitted = true
 				}
 				for _, t := range s.Tables {
-					sf := p.NewGeneratedFile(fmt.Sprintf("%s/%s/%s", db.Name, pkg, storeFileName(t)), "")
+					sf := p.NewGeneratedFile(fmt.Sprintf("%s/%s/%s", gopkg.Dir(db.Name), pkg, storeFileName(t)), "")
 					if err := renderGo(sf, "store_model.go.tpl", storeModelView(db, s, pkg, t, typeOf, tel, fx)); err != nil {
 						return fmt.Errorf("gorm: %s/%s/%s: %w", db.Name, pkg, storeFileName(t), err)
 					}
@@ -182,7 +183,7 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 		// import path, so it can only be generated when go_module gives us the
 		// output tree's base import path.
 		if dbGoModule(db) != "" {
-			mf := p.NewGeneratedFile(fmt.Sprintf("%s/migrate.go", db.Name), "")
+			mf := p.NewGeneratedFile(fmt.Sprintf("%s/migrate.go", gopkg.Dir(db.Name)), "")
 			if err := renderGo(mf, "migrate.go.tpl", aggregateView(db, fx)); err != nil {
 				return fmt.Errorf("gorm: %s/migrate.go: %w", db.Name, err)
 			}
@@ -197,7 +198,7 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 // writeReadme documents the generated package tree: an ER diagram and per-model
 // reference under the bare, schema-local names the Go packages use.
 func writeReadme(p *protogen.Plugin, db *schema.Database, typeOf types.TypeOf) error {
-	rf := p.NewGeneratedFile(db.Name+"/README.md", "")
+	rf := p.NewGeneratedFile(gopkg.Dir(db.Name)+"/README.md", "")
 	outputs := []string{
 		"`<schema>/models.go` — one Go package per schema, one struct per table.",
 		"`migrate.go` — a factory `Registry` (with a preloaded `Default`) that migrates every model in one call; emitted when the `go_module` opt is set. Call `Default.EnsureSchemas(db)` before `Default.Migrate(db)` so the schema-qualified tables have their Postgres schemas.",

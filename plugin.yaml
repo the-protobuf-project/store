@@ -62,4 +62,6 @@ outputs:
   - '**/*.sql'
   - '**/*.prisma'
   - '**/*.ts'
+  - '**/*.rs'
+  - '**/Cargo.toml'
   - '**/README.md'

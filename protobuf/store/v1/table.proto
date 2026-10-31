@@ -55,6 +55,35 @@ message TableOptions {
   //	  no_overlap: {key: ["resource"], start: "start_time", end: "end_time"}
   //	};
   repeated NoOverlap no_overlap = 2;
+
+  // time_series makes this message a measurement: a stream of points, each
+  // identified by its tag set and its time, rather than a row identified by a
+  // key. It is what the influxdb target renders — InfluxDB 3 and Arrow IPC
+  // captures through the tpp-database runtime — and only messages declaring it
+  // are rendered there.
+  //
+  // Every field that is neither the time nor a tag is a stored value. All of
+  // them must be scalars without explicit presence: a point is written whole,
+  // and neither backend stores a null.
+  //
+  // Applied via:
+  //
+  //	option (store.v1.table) = {
+  //	  time_series: {time: "observe_time", tags: ["device", "site"]}
+  //	};
+  TimeSeries time_series = 3;
+}
+
+// TimeSeries names the fields that identify a point.
+message TimeSeries {
+  // time is the field holding the observation time: a
+  // google.protobuf.Timestamp, or an int64 of epoch nanoseconds.
+  string time = 1;
+
+  // tags lists the string fields (proto snake_case) forming the series
+  // identity, e.g. ["device", "site"]. Writing a point whose tags and time
+  // match an existing one replaces its values. May be empty.
+  repeated string tags = 2;
 }
 
 // NoOverlap is one exclusion rule over a table's time ranges.

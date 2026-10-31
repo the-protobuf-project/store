@@ -1,0 +1,22 @@
+# Generates the Rust time-series client from the sensors example protos: an
+# InfluxDB 3 / Arrow capture store per (store.v1.table).time_series message.
+# Run: just sensors   (or: buf generate --template buf.gen.sensors.yaml)
+#
+# Out: examples/generated/rust/influxdb/sensors — one crate, laid out as gorm's output:
+#   Cargo.toml + lib.rs, seriesx/ (shared runtime), sensors_db/mod.rs (selects
+#   the database), sensors_db/<schema>/{models.rs, <model>_store.rs}
+version: v2
+
+inputs:
+  - directory: examples/proto
+    paths:
+      - examples/proto/sensors
+
+plugins:
+  - local: protoc-gen-store
+    out: examples/generated/rust/influxdb/sensors
+    opt:
+      - lang=rust
+      - target=influxdb
+      - crate=sensors
+      - 'license_header=Copyright 2026 The Protobuf Project authors.\nSPDX-License-Identifier: Apache-2.0'

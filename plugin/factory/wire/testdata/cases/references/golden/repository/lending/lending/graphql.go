@@ -786,6 +786,7 @@ func (b *graphQLBatch) PurgeLoan(name string) {
 		if err != nil {
 			return nil, err
 		}
+		b.u.Removing("lending.loans", id)
 		ops.Add(b.svc.Mutation.Lending.Loans.DeleteOp(id, new(loansql.DeleteLendingLoansByIdResponse)))
 		return nil, nil
 	})

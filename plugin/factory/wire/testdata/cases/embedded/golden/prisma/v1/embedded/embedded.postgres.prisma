@@ -131,7 +131,7 @@ model Metadata {
   ownerID String? @map("owner")
 
   /// Relation to Attendee via owner.
-  owner Attendee? @relation(fields: [ownerID], references: [name])
+  owner Attendee? @relation(fields: [ownerID], references: [name], onDelete: Restrict)
 
   /// Back-relation: Event records that reference this model via metadata_id.
   events Event[]

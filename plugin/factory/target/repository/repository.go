@@ -120,7 +120,7 @@ func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 				return err
 			}
 			for _, pv := range projections {
-				name := fmt.Sprintf("%s/%s/projection_%s.go", db.Name, pv.Package, naming.SnakeCase(pv.Model))
+				name := fmt.Sprintf("%s/%s/projection_%s.go", gopkg.Dir(db.Name), pv.Package, naming.SnakeCase(pv.Model))
 				if err := renderGo(p.NewGeneratedFile(name, ""), "projection.go.tpl", pv); err != nil {
 					return fmt.Errorf("repository: %s: %w", name, err)
 				}
@@ -197,7 +197,7 @@ func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 				}{"graphql_protobuf.tpl", graphqlConvertView(pb, db, s, pkg, gqlViews, voConvs, needs)}
 			}
 			for name, render := range files {
-				f := p.NewGeneratedFile(fmt.Sprintf("%s/%s/%s", db.Name, pkg, name), "")
+				f := p.NewGeneratedFile(fmt.Sprintf("%s/%s/%s", gopkg.Dir(db.Name), pkg, name), "")
 				if err := renderGo(f, render.tpl, render.view); err != nil {
 					return fmt.Errorf("repository: %s/%s/%s: %w", db.Name, pkg, name, err)
 				}

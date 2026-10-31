@@ -107,7 +107,8 @@ func main() {
 	// flags are populated by protogen (ParamFunc maps each buf.gen.yaml opt:
 	// "key=value" to flags.Set) before the Run closure reads them.
 	var flags flag.FlagSet
-	target := flags.String("target", "", "output backend: gorm | sql | prisma | repository | opensearch | graphql")
+	target := flags.String("target", "", "output backend: gorm | sql | prisma | repository | opensearch | influxdb | graphql")
+	lang := flags.String("lang", "", "language to emit, among those the target supports (default: the target's own)")
 	strict := flags.String("strict", "",
 		"per-rule severity for schema problems: \"\"=all warn, \"true\"=all error, "+
 			"or \"ref:error,collision:warn,index:error,lint:warn\"")
@@ -147,6 +148,9 @@ func main() {
 	repositoryModule := flags.String("repository_module", "",
 		"opensearch target only: Go import path of the generated repository output whose "+
 			"projections (store.v1.projection) the OpenSearch indices copy")
+	rustCrate := flags.String("crate", "",
+		"influxdb target, lang=rust: the Cargo package name of the output tree, which is one crate "+
+			"as gorm's go_module is one Go module (default \"generated\")")
 	references := flags.String("references", "",
 		"comma-separated descriptor images (binary FileDescriptorSets, e.g. from "+
 			"`buf build <module> -o x.binpb`) read only to discover the targets of "+
@@ -180,7 +184,7 @@ func main() {
 		// proto descriptors, so it takes its own path — but still runs as part of a
 		// normal plugin invocation and returns files through the protoc response.
 		if *target == "graphql" {
-			return runGraphQL(p, *config, *goModule, v)
+			return runGraphQL(p, *config, *goModule, *lang, v)
 		}
 
 		// store owns its layout config (protokit has none): load it here and split it
@@ -197,7 +201,8 @@ func main() {
 		reader := backend.New(cfg, *goModule, *stores, *telemetry, *converters, *filters).
 			WithRepositoryModules(*gormModule, *graphqlModule).
 			WithGraphQLRootFieldPrefix(*graphqlRootFieldPrefix).
-			WithSearchModules(*repositoryModule)
+			WithSearchModules(*repositoryModule).
+			WithRustCrate(*rustCrate)
 		reg := wire.Registry(
 			protokit.Options{Target: *target, Strict: *strict, Version: v, References: referenceImages(cfg, *references)},
 			backend.Readers(reader),
@@ -211,12 +216,16 @@ func main() {
 			return fmt.Errorf("unknown target %q — valid targets: %s", *target, reg.TargetNames())
 		}
 
+		language, err := wire.Language(tgt, *lang)
+		if err != nil {
+			return err
+		}
 		ctx := factory.Ctx{Plugin: p}
 		model, err := reg.Sources["proto"].Build(ctx)
 		if err != nil {
 			return err
 		}
-		return tgt.Generate(ctx, model, "go")
+		return tgt.Generate(ctx, model, language)
 	})
 }
 
@@ -224,7 +233,7 @@ func main() {
 // endpoint (or cached schema) and conventions from store.yaml's graphql block,
 // introspects, and returns the generated files through the protoc response so buf
 // writes them to the plugin entry's out: directory.
-func runGraphQL(p *protogen.Plugin, configPath, goModuleOpt, version string) error {
+func runGraphQL(p *protogen.Plugin, configPath, goModuleOpt, lang, version string) error {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return err
@@ -236,6 +245,9 @@ func runGraphQL(p *protogen.Plugin, configPath, goModuleOpt, version string) err
 	// so it is built with no readers and no layout policy.
 	validationReg := wire.Registry(protokit.Options{}, nil, nil)
 	if err := cfg.Validate(validationReg); err != nil {
+		return err
+	}
+	if _, err := wire.Language(validationReg.Targets["graphql"], lang); err != nil {
 		return err
 	}
 

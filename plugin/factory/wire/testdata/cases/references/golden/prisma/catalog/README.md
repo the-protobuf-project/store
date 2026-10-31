@@ -15,6 +15,9 @@ erDiagram
     direction LR
     Book {
         string id PK
+        string primary_genre FK
+        string former_genre FK
+        string returns_to FK
         string shelf_id FK
     }
     BookFiledUnder {
@@ -43,6 +46,9 @@ erDiagram
         string shelf_id FK
         string book_id FK
     }
+    Book }o--|| Genre : "primary_genre"
+    Book }o--|| Genre : "former_genre"
+    Book }o--|| Shelf : "returns_to"
     Book }o--|| Shelf : "shelf_id"
     BookFiledUnder }o--|| Book : "book_id"
     BookFiledUnder }o--|| Shelf : "shelf_id"
