@@ -1286,12 +1286,36 @@ func (r *GormUserRepository) Delete(ctx context.Context, name string) error {
 			return err
 		}
 	}
+	if err := r.refuseReferenced(ctx, r.DB, key, name); err != nil {
+		return err
+	}
 	var existing orgv1gorm.User
 	if err := r.DB.WithContext(ctx).First(&existing, "id = ?", key).Error; err != nil {
 		return repox.MapGormErr(err)
 	}
 	return repox.MapGormErr(r.store(r.DB).DeleteByID(ctx, existing.ID))
 }
+
+// refuseReferenced refuses to delete the row found by key (rowKey), named
+// name, through db while a join table's row or an optional reference names
+// it (repox.ReferencedByRow), as a required reference's constraint refuses it:
+// the join's key would cascade, taking the record out of the repeated
+// reference, and an optional reference's old SET NULL would blank it.
+func (r *GormUserRepository) refuseReferenced(ctx context.Context, db *gorm.DB, key, name string) error {
+	var referenced bool
+	if err := db.WithContext(ctx).Raw(userDeleteReferencedSQL, key).Scan(&referenced).Error; err != nil {
+		return repox.MapGormErr(err)
+	}
+	if referenced {
+		return repox.ReferencedByRow("org.v1/User", name)
+	}
+	return nil
+}
+
+// userDeleteReferencedSQL asks whether a join table's row or an
+// optional reference, its owner deleted or not, still names the User
+// row with the given key (rowKey).
+const userDeleteReferencedSQL = `SELECT EXISTS (SELECT 1 FROM "org_v1"."members" r0 WHERE r0."inviter" = t."id") FROM "org_v1"."users" t WHERE t."id" = ?`
 
 // ListByKeys reads every record whose filter field field is one of keys; see
 // repox.ListByKeys.
@@ -1497,6 +1521,9 @@ func (b *gormBatch) DeleteUser(name string) {
 	}
 	queueUserDelete(b.u, name, true)
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
+		if err := r.refuseReferenced(ctx, tx, key, name); err != nil {
+			return err
+		}
 		return tx.WithContext(ctx).Delete(&orgv1gorm.User{}, "id = ?", key).Error
 	})
 	b.u.Record(repox.Change{Type: "org.v1/User", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getUser)})

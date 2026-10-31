@@ -24,6 +24,7 @@
 - [Output layout](#output-layout)
 - [GraphQL client SDK](#graphql-client-sdk)
 - [Projections and search](#projections-and-search)
+- [Time series in Rust (`target=rust`)](#time-series-in-rust-targetrust)
 - [Reference integrity](#reference-integrity)
 - [Annotations reference](#annotations-reference)
 - [Configuration — `store.yaml`](#configuration--ormyaml)
@@ -58,6 +59,7 @@ Both run through the same binary on `buf generate`, selected per output by a
 | proto | **prisma** | A complete, runnable Prisma 7 project — multi-file schema, `package.json`, `tsconfig.json`, config, and a `.env.example` to copy to `.env`. |
 | proto | **gorm** | Go structs with GORM tags + a migration registry; optional [CRUD stores + first-party telemetry](#gorm-stores-and-tracing), [AIP-160 filter / AIP-132 order_by list engines for **SQL and Hasura GraphQL**](#aip-160-filters-and-list-engines-sql--hasura), and [proto ↔ model converters](#proto--model-converters). |
 | proto | **sql** | PostgreSQL DDL — per-schema reference files **and** one transactional, **idempotent** `migrate.sql`; FK constraints, indexes, `updated_at` triggers, `COMMENT ON`. |
+| proto | **rust** | A Rust [time-series client](#time-series-in-rust-targetrust) laid out like gorm's output: per database a module that selects the **InfluxDB 3** database or **Arrow IPC** captures, per `time_series` message a model and a typed store (writes, tag filters, windows, latest, aggregates). |
 | graphql | **graphql** | A typed Go GraphQL client — row models, a fluent predicate DSL, CRUD/subscription methods (see [GraphQL client SDK](#graphql-client-sdk)). |
 
 Each database target also emits a `README.md` with a Mermaid ER diagram and a
@@ -1112,6 +1114,134 @@ is gone, and drops the old index.
 The example in [`examples/search`](examples/search) runs all of this against
 Postgres and OpenSearch (`just search`, `just test-search`).
 
+## Time series in Rust (`target=rust`)
+
+A message that declares `(store.v1.table).time_series` is a **measurement**: a
+stream of points identified by their tags and time, not rows identified by a key.
+The `rust` target renders every measurement as a Rust client for
+[tpp-database](https://github.com/the-protobuf-project/runtime-rs) (the
+`database` crate of runtime-rs, pulled from its `main` branch), whose backends are
+**InfluxDB 3** and **Arrow IPC captures**. Messages without `time_series` render
+nothing here, so the target runs over a mixed tree while gorm, prisma and sql keep
+rendering the relational messages.
+
+```proto
+option (entity.v1.datasource) = {database: "sensors_db" schema: "environment"};
+
+message ClimateReading {
+  option (google.api.resource) = {type: "sensors.v1/ClimateReading" pattern: "climateReadings/{climate_reading}"};
+  option (store.v1.table) = {
+    time_series: {time: "observe_time", tags: ["device_id", "site"]}
+  };
+
+  string device_id = 1;                       // tag
+  string site = 2;                            // tag
+  google.protobuf.Timestamp observe_time = 3; // the point's time
+  double temperature_c = 4;                   // every other field is a stored value
+  ReadingQuality quality = 5;
+}
+```
+
+```yaml
+- local: protoc-gen-store
+  out: gen/rust
+  strategy: all
+  opt:
+    - target=rust
+    - crate=sensors   # the Cargo package name; default "generated"
+```
+
+### Output layout
+
+The tree is laid out as the gorm target lays out Go: one crate for the whole
+output, as gorm's is one Go module.
+
+```text
+gen/rust/
+  Cargo.toml, lib.rs                     the crate                  (gorm: go_module)
+  seriesx/mod.rs                         shared runtime: Query, ... (gorm: gormx/)
+  sensors_db/mod.rs                      selects the database       (gorm: migrate.go)
+  sensors_db/README.md
+  sensors_db/environment/models.rs       structs, enums, descriptors (gorm: models.go)
+  sensors_db/environment/climate_reading_store.rs   one store per table (gorm: <model>_store.go)
+  sensors_db/fleet/...
+```
+
+### How storage is divided
+
+| Proto | InfluxDB 3 | Arrow captures | Rust |
+| --- | --- | --- | --- |
+| database (`entity.v1.datasource`) | a database | `<root>/<database>/` | `<db>` module: `DATABASE`, `connect_influx*`, `open_arrow`, `mirror` |
+| schema | — (InfluxDB has none) | — | a module |
+| message | a table | `<root>/<database>/<table>/` | a struct and its `<Model>Store` |
+| `time_series.tags` | tags | tag columns | `<Model>Tag` and one query filter per tag |
+| `time_series.time` | `time` | the time column | `i64` epoch nanoseconds |
+| any other field | a field | a column | a struct field; `<Model>Field` when numeric |
+
+Because a schema is only a module, two schemas of one database declaring the
+same table would write into one InfluxDB table, so generation refuses it.
+
+### Using it
+
+```rust
+use sensors::sensors_db::{self, environment::*};
+
+// Select the database: InfluxDB 3 from INFLUX_HOST / INFLUX_TOKEN
+// (INFLUX_DATABASE overrides "sensors_db"), Arrow captures, or both.
+let influx = sensors_db::connect_influx_env().await?;
+let arrow = sensors_db::open_arrow("captures").await?;
+let db = sensors_db::mirror(influx, arrow);
+sensors_db::ensure_schema(&db).await?;
+
+// Select the table: one store per measurement.
+let climate = ClimateReadingStore::new(&db);   // ClimateReadingStore::TABLE == "climate_readings"
+climate.create_many(&points).await?;
+
+let north = climate.query().between(start, end).site("north").all().await?;
+let newest = climate.query().device_id("probe-2").latest().await?;
+let per_minute = climate
+    .query()
+    .between(start, end)
+    .group_by(ClimateReadingTag::Site)
+    .aggregate(Duration::from_secs(60), [ClimateReadingField::TemperatureC.avg()])
+    .await?;
+```
+
+`Query` reads a page (`fetch`), every point (`all`), the newest (`latest`), a
+`count`, or reduced buckets (`aggregate`); `filter` adds any AIP-160 clause. A
+proto enum becomes a Rust `enum` with `TryFrom<i32>`, while the field keeps the
+`i32`, as prost does. `provision_influx` creates the database with a retention.
+
+| Proto | Rust | `Kind` |
+| --- | --- | --- |
+| `string` | `String` | `String` |
+| `bool` | `bool` | `Bool` |
+| `int32` / `int64` | `i32` / `i64` | `Int` |
+| `uint32` / `uint64` | `u32` / `u64` | `Uint` |
+| `float` / `double` | `f32` / `f64` | `Float` |
+| `enum` | `i32` + a Rust `enum` | `Enum` |
+| `Timestamp` | `i64` epoch nanoseconds | `Timestamp` for the time field, `Int` otherwise |
+
+The time field is a `google.protobuf.Timestamp` or an `int64` of epoch
+nanoseconds; tags are `string` fields. Only the message's own fields are
+rendered: the surrogate key and audit timestamps the relational targets
+synthesize are not part of a point. A point is written whole and neither backend
+stores a null, so generation fails, naming the field, on anything a point cannot
+hold: repeated fields, maps and documents, wrappers and other messages, `optional`
+and `oneof` fields, `bytes` and the remaining well-known types, and a field that
+becomes a child table. Mark such a field `(entity.v1.column).skip` to leave it out
+everywhere.
+
+[`examples/generated/rust`](examples/generated/rust) is the client generated from
+[`examples/proto/sensors`](examples/proto/sensors). To build against a local
+runtime-rs checkout, redirect the dependency from your workspace rather than
+editing generated output:
+
+```toml
+[patch."https://github.com/the-protobuf-project/runtime-rs"]
+tpp-database = { path = "../runtime-rs/database" }
+```
+
 ## Reference integrity
 
 A `google.api.resource_reference` is enforced where it can be, and checked
@@ -1135,6 +1265,35 @@ so existing rows are not checked until `ValidateExternal` (or `validate.sql`)
 runs `VALIDATE CONSTRAINT` — do that once the data is clean. A violation
 surfaces as `repox.ErrForeignKey` (PostgreSQL 23503 on GORM; the engine's
 "violates foreign key constraint" on GraphQL).
+
+**A delete refuses a referenced record, whatever the reference.** A foreign
+key from a reference takes no action by default, required or optional,
+singular or repeated: the database refuses to delete a record a row still
+names. Prisma's own default for an optional relation would set it null, so
+the Prisma target writes `onDelete: Restrict` for it, as Prisma does by
+itself for a required one; GORM and SQL write no clause (NO ACTION). A
+resource without soft delete asks first, on both backends: `Delete` and
+`Batch.Delete<Model>` refuse with `repox.ErrForeignKey` while a join table's
+row (`repox.ReferencedByJoin`) or an optional reference
+(`repox.ReferencedByRow`) names it, so a database still holding an older
+SET NULL constraint is refused too. In a Batch the question is asked as the
+writes run: a row the same Batch deletes first (a referring record, or a join
+row's owner) no longer counts, on GraphQL as on GORM. A required reference is
+left to its constraint. To have a delete blank an optional reference instead, say so on
+the field:
+
+```proto
+string menu = 7 [
+  (google.api.field_behavior) = OPTIONAL,
+  (google.api.resource_reference) = {type: "catalog.example.com/Menu"},
+  (store.v1.column).on_delete = REFERENTIAL_ACTION_SET_NULL
+];
+```
+
+An explicit `on_delete` wins on every target (Prisma `SetNull`, GORM
+`constraint:OnDelete:SET NULL` on both sides of the relation, SQL `ON DELETE
+SET NULL`), and the delete no longer asks first. A purge keeps a record any
+of these still names, whatever its action.
 
 **Purge keeps referenced rows.** `Purge`, `PurgeExpired(ctx, now)` (resources
 with an AIP-164 `expire_time`) and `Batch.Purge<Model>` leave a row in place —
@@ -1279,7 +1438,7 @@ and queried, which no other plugin needs to agree with.
 | `precision` / `scale` | `NUMERIC(p, s)`. |
 | `default_value` | SQL default expression, written verbatim. |
 | `unique`, `index` | Single-column constraint / index. |
-| `on_delete` / `on_update` | FK referential action (`CASCADE`, `SET_NULL`, …) for a `resource_reference` field. |
+| `on_delete` / `on_update` | FK referential action (`CASCADE`, `SET_NULL`, …) for a `resource_reference` field. Unset, a reference takes no action, optional or not: a delete is refused while a row names the record (see [Reference integrity](#reference-integrity)). |
 
 ### `(store.v1.table)` — message level
 
@@ -1287,6 +1446,7 @@ and queried, which no other plugin needs to agree with.
 | --- | --- |
 | `outbox` | Emit a companion `<table>_outbox` table — id, `aggregate_id`, `event_type`, `payload`, `created_at`, `published_at` — so a change event can be written in the same transaction as the row it describes. The table only: draining it belongs to a streams generator. Off by default. |
 | `no_overlap` | Forbid two rows that share `key` from covering overlapping time, as a PostgreSQL exclusion constraint: `EXCLUDE USING gist (key WITH =, tstzrange(start, end, '[)') WITH &&)`. `start` and `end` name `google.protobuf.Timestamp` fields, and ranges are half-open, so back-to-back rows don't overlap. The SQL target writes the constraint, and the gorm `Registry.Migrate` adds it after AutoMigrate (with `btree_gist` installed by `EnsureSchemas`). A write that would overlap fails with SQLSTATE 23P01, which the repositories report as `repox.ErrConflict`. Beside it, a `BEFORE INSERT OR UPDATE` trigger takes a transaction-scoped advisory lock on the row's key, so concurrent writers of one key take turns instead of deadlocking (exclusion constraints check against uncommitted rows, so two conflicting inserts can each wait on the other). A misspelt field or a non-Timestamp bound fails generation. |
+| `time_series` | Make the message a measurement for the [`rust` target](#time-series-in-rust-targetrust): `time` names the `google.protobuf.Timestamp` (or `int64` epoch-nanosecond) field holding each point's time, `tags` the `string` fields forming its series identity; every other field is a stored value. Only messages declaring it are rendered by `rust`; the other targets ignore it. A misspelt field, a non-string tag, or a field a point cannot hold fails generation. |
 
 ### `(store.v1.query)` — field level
 
@@ -1508,7 +1668,7 @@ Passed via `opt:` in `buf.gen.yaml`.
 
 | Option | Description |
 | --- | --- |
-| `target` | What to emit: `prisma` \| `gorm` \| `sql` \| `repository` \| `opensearch` \| `graphql`. Required. (`graphql` reads its endpoint from `store.yaml`'s [`graphql`](#top-level-keys) block — see [GraphQL client SDK](#graphql-client-sdk).) |
+| `target` | What to emit: `prisma` \| `gorm` \| `sql` \| `repository` \| `opensearch` \| `rust` \| `graphql`. Required. (`graphql` reads its endpoint from `store.yaml`'s [`graphql`](#top-level-keys) block — see [GraphQL client SDK](#graphql-client-sdk).) |
 | `go_module` | **gorm only.** Go import path of the output directory (e.g. `github.com/me/gen`). Enables the `migrate.go` factory registry, whose package imports each per-schema models package. Omit it and the per-schema model packages still generate, just without the aggregator. |
 | `stores` | **gorm only.** Also emit a typed CRUD store per resource — one `<model>_store.go` file each (see [GORM stores](#gorm-stores-and-tracing)). Off by default; turning it on adds a `gorm.io/gorm` dependency to each models package. |
 | `filters` | **gorm only.** Emit AIP-160 filter / AIP-132 order_by specs per schema (`filters.go`) plus the shared `filterx` engine package serving both **SQL (GORM)** and **Hasura DDN GraphQL** (see [filters and list engines](#aip-160-filters-and-list-engines-sql--hasura)). Off by default; requires `go_module`. The Hasura engine adds a `github.com/the-protobuf-project/runtime-go` dependency. With `telemetry`, also emits a [telemetry](https://github.com/the-protobuf-project/telemetry) `Observer` adapter (`filterx.TelemetryObserver`) for the list engines' spans and debug events. |
@@ -1519,6 +1679,7 @@ Passed via `opt:` in `buf.gen.yaml`.
 | `license_header` | Copyright/licence lines to place above the banner of every generated file — `\n`-separated, e.g. `license_header=Copyright 2026 Me.\nSPDX-License-Identifier: Apache-2.0`. Write them **without** comment markers: each target applies its own (`//` for Go, Prisma and TypeScript, `--` for SQL), so one value covers the whole output tree. Unset (the default) stamps nothing, because generated code belongs to whoever ran the generator, not to this plugin. |
 | `gorm_module` / `graphql_module` | **repository** (and `gorm_module` for **opensearch**): import paths of the generated gorm output and GraphQL client. |
 | `graphql_root_field_prefix` | **repository**: the DDN subgraph's `graphqlRootFieldPrefix` (the graphql target's `root_field_prefix`), carried by the root fields the DDN reference plugin's config names. Default none. |
+| `crate` | **rust only.** The Cargo package name of the output crate (default `generated`). |
 | `repository_module` | **opensearch only.** Import path of the generated repository output whose projections the indices copy. |
 | `references` | Comma-separated descriptor images for reference discovery, added to `store.yaml`'s [`references`](#top-level-keys). |
 | `M<proto>=<import>` | Go import-path mapping for a proto file, required when protos omit `option go_package`. |
@@ -1689,6 +1850,7 @@ examples/proto/bookstore/v1/   # annotated source protos
 examples/generated/prisma/     # ─┐
 examples/generated/gorm/       #  ├─ regenerated output, one tree per target
 examples/generated/sql/        # ─┘
+examples/generated/rust/       # the time-series client for examples/proto/sensors
 ```
 
 Regenerate it with:

@@ -7,7 +7,7 @@
 // database: v1
 // schema:   deep_v1
 //
-// Referrers in schema deepv1 a purge asks about, by key.
+// Referrers in schema deepv1 a purge or delete asks about, by key.
 // annotations: entity.v1 (unknown), store.v1 (unknown)
 // engine:      protokit (unknown)
 //
@@ -19,12 +19,20 @@ import (
 	"context"
 	"example.com/test/genql"
 	"example.com/test/genql/deepv1ql/meetingsql"
+	"github.com/the-protobuf-project/runtime-go/network/graphql"
 )
 
 // deepV1MeetingsHoldsAgendaId reports whether a DeepV1.Meetings row, deleted or not,
-// holds key in deep_v1.meetings.agenda_id: a referrer that keeps the record it names.
-func deepV1MeetingsHoldsAgendaId(ctx context.Context, svc *genql.Service, key string) (bool, error) {
-	row, err := svc.Query.DeepV1.Meetings.Find(ctx, meetingsql.List().Where(meetingsql.AgendaId.Eq(key)))
+// holds key in deep_v1.meetings.agenda_id: a referrer that keeps the record it names (a
+// purge keeps it; a delete without one is refused).
+// A row whose Id is one of except -- removed earlier in the
+// same Batch (repox.Unit.RemovedIn) -- does not count.
+func deepV1MeetingsHoldsAgendaId(ctx context.Context, svc *genql.Service, key string, except []string) (bool, error) {
+	where := meetingsql.AgendaId.Eq(key)
+	if len(except) > 0 {
+		where = graphql.And(where, graphql.Not(meetingsql.Id.In(except...)))
+	}
+	row, err := svc.Query.DeepV1.Meetings.Find(ctx, meetingsql.List().Where(where))
 	if err != nil {
 		return false, mapGraphQLErr(err)
 	}

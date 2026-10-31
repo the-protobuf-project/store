@@ -41,7 +41,7 @@ type Event struct {
 	MetadataID *string   `gorm:"column:metadata_id;index:idx_events_metadata_id" json:"metadata_id,omitempty"`
 	Metadata   *Metadata `gorm:"foreignKey:MetadataID;constraint:OnDelete:SET NULL" json:"metadata,omitempty"`
 	// Back-relation: Attendee records that reference this via event_id.
-	Attendees []Attendee `gorm:"foreignKey:EventID" json:"attendees,omitempty"`
+	Attendees []Attendee `gorm:"foreignKey:EventID;constraint:OnDelete:CASCADE" json:"attendees,omitempty"`
 	// Back-relation: EventAttendees records that reference this via event_id.
 	EventAttendees []EventAttendees `gorm:"foreignKey:EventID;constraint:OnDelete:CASCADE" json:"eventattendees,omitempty"`
 }
@@ -76,9 +76,9 @@ type Location struct {
 	// Venue name within the city.
 	Venue *string `gorm:"column:venue" json:"venue,omitempty"`
 	// Back-relation: Event records that reference this via location_id.
-	Events []Event `gorm:"foreignKey:LocationID" json:"events,omitempty"`
+	Events []Event `gorm:"foreignKey:LocationID;constraint:OnDelete:CASCADE" json:"events,omitempty"`
 	// Back-relation: Event records that reference this via billing_id.
-	Events2 []Event `gorm:"foreignKey:BillingID" json:"events2,omitempty"`
+	Events2 []Event `gorm:"foreignKey:BillingID;constraint:OnDelete:SET NULL" json:"events2,omitempty"`
 }
 
 func (*Location) TableName() string { return "embedded_v1.locations" }
@@ -95,7 +95,7 @@ type Metadata struct {
 	OwnerID *string   `gorm:"column:owner;index:idx_metadatas_owner" json:"owner,omitempty"`
 	Owner   *Attendee `gorm:"foreignKey:OwnerID;references:Name" json:"owner_rel,omitempty"`
 	// Back-relation: Event records that reference this via metadata_id.
-	Events []Event `gorm:"foreignKey:MetadataID" json:"events,omitempty"`
+	Events []Event `gorm:"foreignKey:MetadataID;constraint:OnDelete:SET NULL" json:"events,omitempty"`
 }
 
 func (*Metadata) TableName() string { return "embedded_v1.metadatas" }

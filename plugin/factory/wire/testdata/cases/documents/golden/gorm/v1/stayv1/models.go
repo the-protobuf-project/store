@@ -65,7 +65,7 @@ type Note struct {
 	// The note.
 	Text *string `gorm:"column:text" json:"text,omitempty"`
 	// Back-relation: Booking records that reference this via note_id.
-	Bookings []Booking `gorm:"foreignKey:NoteID" json:"bookings,omitempty"`
+	Bookings []Booking `gorm:"foreignKey:NoteID;constraint:OnDelete:SET NULL" json:"bookings,omitempty"`
 }
 
 func (*Note) TableName() string { return "stay_v1.notes" }

@@ -1,0 +1,22 @@
+{
+  "name": "sensors-db-prisma",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Generated Prisma schema for the sensors_db database. Managed by protoc-gen-store — edit the source .proto, not these files.",
+  "scripts": {
+    "prisma:generate": "prisma generate --config sensors_db.config.ts",
+    "prisma:migrate": "prisma migrate dev --config sensors_db.config.ts",
+    "prisma:deploy": "prisma migrate deploy --config sensors_db.config.ts",
+    "prisma:studio": "prisma studio --config sensors_db.config.ts",
+    "prisma:format": "prisma format --config sensors_db.config.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "7.10.1"
+  },
+  "devDependencies": {
+    "prisma": "7.10.1",
+    "dotenv": "^18.0.9",
+    "typescript": "^5.9.3",
+    "@types/node": "^24.19.2"
+  }
+}

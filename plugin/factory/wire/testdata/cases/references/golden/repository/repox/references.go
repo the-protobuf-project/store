@@ -141,6 +141,16 @@ func ReferencedByJoin(resourceType, name string) error {
 		Cause: fmt.Errorf("%s is still named by a repeated reference", name)}
 }
 
+// ReferencedByRow is the refusal of a delete of name (of resourceType): a
+// row still names it, by an optional reference or a join table's row. It is
+// ErrForeignKey, as a required reference's constraint refuses it: an optional
+// reference takes no action unless its field says SET_NULL, and is asked
+// before the database is, since one migrated before that still sets null.
+func ReferencedByRow(resourceType, name string) error {
+	return &ReferenceError{Err: ErrForeignKey, ResourceType: resourceType, Name: name,
+		Cause: fmt.Errorf("%s is still named by a reference", name)}
+}
+
 // IsForeignKeyViolation reports whether err is a foreign key refusing a
 // write, mapped or not.
 func IsForeignKeyViolation(err error) bool {

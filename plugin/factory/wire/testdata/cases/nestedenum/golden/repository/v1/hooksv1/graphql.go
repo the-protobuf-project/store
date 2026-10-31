@@ -1097,6 +1097,7 @@ func (b *graphQLBatch) DeleteDelivery(name string) {
 		if err != nil {
 			return nil, err
 		}
+		b.u.Removing("hooks_v1.deliveries", id)
 		ops.Add(b.svc.Mutation.HooksV1.Deliveries.DeleteOp(id, new(deliveriesql.DeleteHooksV1DeliveriesByIdResponse)))
 		return nil, nil
 	})
@@ -1159,6 +1160,7 @@ func (b *graphQLBatch) DeleteWebhook(name string) {
 		if err != nil {
 			return nil, err
 		}
+		b.u.Removing("hooks_v1.webhooks", id)
 		ops.Add(b.svc.Mutation.HooksV1.Webhooks.DeleteOp(id, new(webhooksql.DeleteHooksV1WebhooksByIdResponse)))
 		return nil, nil
 	})

@@ -124,6 +124,9 @@ type Unit struct {
 {{- if .GraphQLModule}}
 	ahead []func(ctx context.Context) error
 	gql   []func(ctx context.Context, ops *Ops) (Check, error)
+	// removing are the rows the GraphQL request being built deletes, by
+	// table ("schema.table") then key (see Removing).
+	removing map[string][]string
 {{- end}}
 	names   []string
 	changes []Change // what the queued writes change, for Conn.Projections
@@ -152,6 +155,27 @@ func (u *Unit) QueueGorm(locks []string, op func(ctx context.Context, tx *gorm.D
 // ops, and may return a Check to run once the request has been answered.
 func (u *Unit) QueueGraphQL(op func(ctx context.Context, ops *Ops) (Check, error)) {
 	u.gql = append(u.gql, op)
+}
+
+// Removing records, as Commit builds the GraphQL request, that the request
+// deletes the row of table ("schema.table") whose key is key. A delete
+// queued after it that asks its referrers first (a join table's row, an
+// optional reference) leaves that row out (RemovedIn), as the GORM
+// transaction, running the writes in turn, would no longer see it.
+func (u *Unit) Removing(table, key string) {
+	if u.removing == nil {
+		u.removing = map[string][]string{}
+	}
+	u.removing[table] = append(u.removing[table], key)
+}
+
+// RemovedIn lists the keys of the rows of table the request being built
+// deletes (Removing); nil for a nil Unit, outside a Batch.
+func (u *Unit) RemovedIn(table string) []string {
+	if u == nil {
+		return nil
+	}
+	return u.removing[table]
 }
 
 // QueueGraphQLAhead queues a write Commit sends on its own, before the

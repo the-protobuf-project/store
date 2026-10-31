@@ -32,8 +32,11 @@ model Shelf {
   /// When the soft-deleted shelf goes for good.
   expireTime DateTime? @catalog.Timestamptz(6) @map("expire_time")
 
+  /// Back-relation: Book records that reference this model via returns_to.
+  books Book[] @relation("BookReturnsTo")
+
   /// Back-relation: Book records that reference this model via shelf_id.
-  books Book[]
+  books2 Book[] @relation("BookShelf")
 
   /// Back-relation: Page records that reference this model via shelf_id.
   pages Page[]
@@ -72,11 +75,29 @@ model Book {
   /// When the soft-deleted book goes for good.
   expireTime DateTime? @catalog.Timestamptz(6) @map("expire_time")
 
+  /// The genre the book is shelved by: an optional reference to a resource deleted outright, which takes no action, so a delete refuses while a book names it.
+  primaryGenreID String? @map("primary_genre")
+
+  /// Relation to Genre via primary_genre.
+  primaryGenre Genre? @relation("BookPrimaryGenre", fields: [primaryGenreID], references: [id], onDelete: Restrict)
+
+  /// A genre the book was once classed under: an optional reference that says SET_NULL, so deleting the genre blanks it.
+  formerGenreID String? @map("former_genre")
+
+  /// Relation to Genre via former_genre.
+  formerGenre Genre? @relation("BookFormerGenre", fields: [formerGenreID], references: [id], onDelete: SetNull)
+
+  /// The shelf the book goes back to: an optional reference to a soft-deleted resource, which keeps a purged shelf while a book names it.
+  returnsToID String? @map("returns_to")
+
+  /// Relation to Shelf via returns_to.
+  returnsTo Shelf? @relation("BookReturnsTo", fields: [returnsToID], references: [id], onDelete: Restrict)
+
   /// Parent reference to Shelf (from the AIP resource pattern).
   shelfID String @map("shelf_id")
 
   /// Relation to Shelf via shelf_id.
-  shelf Shelf @relation(fields: [shelfID], references: [id], onDelete: Cascade)
+  shelf Shelf @relation("BookShelf", fields: [shelfID], references: [id], onDelete: Cascade)
 
   /// Back-relation: Page records that reference this model via book_id.
   pages Page[]
@@ -94,6 +115,12 @@ model Book {
   @@index([deleteTime])
   /// Composite index on [shelf_id, id].
   @@index([shelfID, id])
+  /// Index on [primary_genre].
+  @@index([primaryGenreID])
+  /// Index on [former_genre].
+  @@index([formerGenreID])
+  /// Index on [returns_to].
+  @@index([returnsToID])
   /// Maps the model to the "books" table in the database.
   @@map("books")
   /// Maps the model to the "catalog" schema in the database.
@@ -110,6 +137,12 @@ model Genre {
 
   /// The genre as it is shown.
   displayName String @map("display_name")
+
+  /// Back-relation: Book records that reference this model via primary_genre.
+  books Book[] @relation("BookPrimaryGenre")
+
+  /// Back-relation: Book records that reference this model via former_genre.
+  books2 Book[] @relation("BookFormerGenre")
 
   /// Back-relation: BookGenres records that reference this model via genre_id.
   bookGenres BookGenres[]

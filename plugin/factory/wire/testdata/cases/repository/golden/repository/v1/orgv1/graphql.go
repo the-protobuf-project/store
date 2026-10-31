@@ -1717,6 +1717,14 @@ func (r *GraphQLUserRepository) Delete(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
+	// A join table's row naming it would cascade away with it, and an
+	// optional reference's old SET NULL would blank it: refused, as a required
+	// reference's constraint refuses it.
+	if referenced, err := r.referenced(ctx, nil, id, name); err != nil {
+		return err
+	} else if referenced {
+		return repox.ReferencedByRow("org.v1/User", name)
+	}
 	return r.remove(ctx, id)
 }
 
@@ -1730,6 +1738,27 @@ func (r *GraphQLUserRepository) remove(ctx context.Context, id string) error {
 		return repox.ErrNotFound
 	}
 	return nil
+}
+
+// referenced reports whether a row of this database, deleted or not, still
+// holds a foreign key to row id, named name -- what the GORM adapter asks
+// with its DeleteReferencedSQL: a join table's row or an optional reference. A key whose
+// action cascades (a join table's) or sets null (an optional reference
+// migrated before it took no action) would not refuse the delete. In a Batch
+// (u), a row u's request removes before this one does not count.
+func (r *GraphQLUserRepository) referenced(ctx context.Context, u *repox.Unit, id, name string) (bool, error) {
+	for _, holds := range []struct {
+		f      func(context.Context, *genql.Service, string, []string) (bool, error)
+		key    string
+		except string
+	}{
+		{orgV1MembersHoldsInviter, id, "org_v1.members"},
+	} {
+		if found, err := holds.f(ctx, r.Svc, holds.key, u.RemovedIn(holds.except)); err != nil || found {
+			return found, err
+		}
+	}
+	return false, nil
 }
 
 // ListByKeys reads every record whose filter field field is one of keys; see
@@ -1823,6 +1852,7 @@ func (b *graphQLBatch) DeleteMember(name string) {
 		if err != nil {
 			return nil, err
 		}
+		b.u.Removing("org_v1.members", id)
 		return r.purgeOps(ctx, ops, id)
 	})
 	b.u.Record(repox.Change{Type: "org.v1/Member", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getMember)})
@@ -1939,6 +1969,7 @@ func (b *graphQLBatch) DeleteOrganisation(name string) {
 		if err != nil {
 			return nil, err
 		}
+		b.u.Removing("org_v1.organisations", id)
 		return r.purgeOps(ctx, ops, id)
 	})
 	b.u.Record(repox.Change{Type: "org.v1/Organisation", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getOrganisation)})
@@ -2000,6 +2031,12 @@ func (b *graphQLBatch) DeleteUser(name string) {
 		if err != nil {
 			return nil, err
 		}
+		if referenced, err := r.referenced(ctx, b.u, id, name); err != nil {
+			return nil, err
+		} else if referenced {
+			return nil, repox.ReferencedByRow("org.v1/User", name)
+		}
+		b.u.Removing("org_v1.users", id)
 		ops.Add(b.svc.Mutation.OrgV1.Users.DeleteOp(id, new(usersql.DeleteOrgV1UsersByIdResponse)))
 		return nil, nil
 	})

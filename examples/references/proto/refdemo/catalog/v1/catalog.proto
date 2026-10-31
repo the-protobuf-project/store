@@ -11,6 +11,7 @@ import "entity/v1/annotations.proto";
 import "google/api/field_behavior.proto";
 import "google/api/resource.proto";
 import "google/protobuf/timestamp.proto";
+import "store/v1/annotations.proto";
 
 option go_package = "github.com/the-protobuf-project/store/examples/references/gen/pb/catalogv1;catalogv1";
 option java_multiple_files = true;
@@ -88,6 +89,29 @@ message Book {
   repeated string genres = 7 [
     (google.api.field_behavior) = OPTIONAL,
     (google.api.resource_reference) = {type: "catalog.example.com/Genre"}
+  ];
+
+  // The genre the book is shelved by: an optional reference to a resource
+  // deleted outright, which takes no action, so a delete refuses while a
+  // book names it.
+  string primary_genre = 8 [
+    (google.api.field_behavior) = OPTIONAL,
+    (google.api.resource_reference) = {type: "catalog.example.com/Genre"}
+  ];
+
+  // A genre the book was once classed under: an optional reference that
+  // says SET_NULL, so deleting the genre blanks it.
+  string former_genre = 9 [
+    (google.api.field_behavior) = OPTIONAL,
+    (google.api.resource_reference) = {type: "catalog.example.com/Genre"},
+    (store.v1.column).on_delete = REFERENTIAL_ACTION_SET_NULL
+  ];
+
+  // The shelf the book goes back to: an optional reference to a
+  // soft-deleted resource, which keeps a purged shelf while a book names it.
+  string returns_to = 10 [
+    (google.api.field_behavior) = OPTIONAL,
+    (google.api.resource_reference) = {type: "catalog.example.com/Shelf"}
   ];
 }
 

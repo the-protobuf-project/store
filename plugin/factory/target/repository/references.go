@@ -16,7 +16,9 @@ package repository
 //     that hold a real foreign key to a resource's table, in any database of
 //     the run -- a join table's row, keeping one element of a repeated
 //     reference, among them. A purge leaves a row they still name in place
-//     instead of failing on the constraint (or cascading through it).
+//     instead of failing on the constraint (or cascading through it), and a
+//     delete without a purge (no soft delete) refuses to go under a join
+//     table's row or an optional reference (referrerFK.refusesDelete).
 
 import (
 	"encoding/json"
@@ -57,6 +59,45 @@ type referrerFK struct {
 	// of a repeated reference, which a delete without a purge (no soft
 	// delete) refuses to go under, as a singular reference's constraint does.
 	Join bool
+	// Optional marks a nullable column whose key refuses a delete (no
+	// on_delete, or NO ACTION / RESTRICT): an optional singular reference.
+	// Its constraint refuses the delete, as a required one's does, but a
+	// database migrated before that keeps Prisma's old SET NULL, which would
+	// blank the reference, and GraphQL's refusal is not a clear one: a delete
+	// without a purge asks first. An explicit SET NULL or CASCADE is left to
+	// the database.
+	Optional bool
+}
+
+// refusesDelete reports whether a delete without a purge (no soft delete)
+// asks f first, and refuses while it names the record: a join table's row, or
+// an optional reference (see Join, Optional). A required reference is left to
+// its constraint.
+func (f referrerFK) refusesDelete() bool { return f.Join || f.Optional }
+
+// refusingAction reports whether a foreign key's ON DELETE refuses to delete
+// a record a row names: none (no action, the default protokit leaves for a
+// reference that sets none), NO ACTION or RESTRICT.
+func refusingAction(onDelete string) bool {
+	switch strings.ToUpper(strings.TrimSpace(onDelete)) {
+	case "", "NO ACTION", "RESTRICT":
+		return true
+	}
+	return false
+}
+
+// optionalRef reports whether fk, of t, is an optional reference whose
+// action refuses a delete (referrerFK.Optional): its column is nullable.
+func optionalRef(t *schema.Table, fk *schema.ForeignKey) bool {
+	if joinTargetFK(t, fk) || !refusingAction(fk.OnDelete) {
+		return false
+	}
+	for _, c := range t.Columns {
+		if c.Name == fk.Column {
+			return !c.NotNull
+		}
+	}
+	return false
 }
 
 // tableKey identifies a table across the run's databases.
@@ -83,7 +124,7 @@ func referrerIndex(dbs []*schema.Database) map[tableKey][]referrerFK {
 					k := tableKey{fk.ReferencedSchema, fk.ReferencedTable}
 					idx[k] = append(idx[k], referrerFK{
 						Schema: s.Name, Table: t.Name, Column: fk.Column, RefColumn: fk.ReferencedColumn,
-						DB: db, From: t, Join: joinTargetFK(t, fk),
+						DB: db, From: t, Join: joinTargetFK(t, fk), Optional: optionalRef(t, fk),
 					})
 				}
 				for _, fk := range t.ForeignKeys {
@@ -193,21 +234,34 @@ func referencedSQL(r *resource) string {
 	return referencedSQLOf(r, r.ReferencedBy)
 }
 
-// joinReferencedSQL is the query a GORM delete of a resource without soft
-// delete asks first: does a join table's row still name it (referrerFK.Join)?
-// Empty when none can, or when the resource is soft-deleted (its purge asks
-// referencedSQL).
-func joinReferencedSQL(r *resource) string {
+// deleteReferencedSQL is the query a GORM delete of a resource without soft
+// delete asks first: does a join table's row or an optional reference still
+// name it (referrerFK.refusesDelete)? Empty when none can, or when the
+// resource is soft-deleted (its purge asks referencedSQL).
+func deleteReferencedSQL(r *resource) string {
 	if r.Cols.DeleteTime != nil {
 		return ""
 	}
-	var joins []referrerFK
+	var fs []referrerFK
 	for _, f := range r.ReferencedBy {
-		if f.Join {
-			joins = append(joins, f)
+		if f.refusesDelete() {
+			fs = append(fs, f)
 		}
 	}
-	return referencedSQLOf(r, joins)
+	return referencedSQLOf(r, fs)
+}
+
+// refusedBy names the repox function a delete without a purge refuses with
+// while a referrer deleteReferencedSQL asks names the record:
+// ReferencedByJoin when every one is a join table's, ReferencedByRow
+// otherwise.
+func refusedBy(r *resource) string {
+	for _, f := range r.ReferencedBy {
+		if f.Optional {
+			return "ReferencedByRow"
+		}
+	}
+	return "ReferencedByJoin"
 }
 
 // referencedSQLOf is referencedSQL over the referrers fs.

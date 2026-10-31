@@ -9,7 +9,7 @@
 //
 // Field-mask merge functions shared by every adapter of this schema.
 // annotations: entity.v1 dev, store.v1 dev
-// engine:      protokit v1.3.4
+// engine:      protokit v1.3.8
 //
 // store — https://github.com/the-protobuf-project/store
 
@@ -31,6 +31,15 @@ func applyBookMask(merged, in *catalogv1.Book, paths []string) {
 	}
 	if repox.InMask(paths, "title") {
 		merged.Title = in.GetTitle()
+	}
+	if repox.InMask(paths, "primary_genre") {
+		merged.PrimaryGenre = in.GetPrimaryGenre()
+	}
+	if repox.InMask(paths, "former_genre") {
+		merged.FormerGenre = in.GetFormerGenre()
+	}
+	if repox.InMask(paths, "returns_to") {
+		merged.ReturnsTo = in.GetReturnsTo()
 	}
 	if repox.InMask(paths, "filed_under") {
 		merged.FiledUnder = in.GetFiledUnder()

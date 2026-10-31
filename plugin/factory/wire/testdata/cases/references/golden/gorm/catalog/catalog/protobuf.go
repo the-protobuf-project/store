@@ -59,6 +59,7 @@ func BookToProto(m *Book) *refdemov1.Book {
 		return nil
 	}
 	out := &refdemov1.Book{}
+	// not mapped here: primary_genre (resource reference), former_genre (resource reference), returns_to (resource reference)
 	out.Name = m.Name
 	out.Title = m.Title
 	out.Etag = fromPtr(m.Etag)
@@ -75,6 +76,7 @@ func BookFromProto(pb *refdemov1.Book) *Book {
 		return nil
 	}
 	m := &Book{}
+	// not mapped here: primary_genre (resource reference), former_genre (resource reference), returns_to (resource reference)
 	m.Name = pb.GetName()
 	m.Title = pb.GetTitle()
 	m.Etag = toPtr(pb.GetEtag())

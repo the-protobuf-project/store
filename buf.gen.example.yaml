@@ -3,6 +3,10 @@ version: v2
 # Generates store's database targets from the bookstore example protos.
 # Run: buf generate --template buf.gen.example.yaml
 #
+# strategy: all hands every example package to one plugin run, so the files a
+# target writes once per tree (gorm's telemetry/ and gormx/) are written once
+# rather than once per proto directory.
+#
 # Output layout mirrors the hand-written schema/ tree:
 #   prisma/<db>/schema.prisma + <db>/<schema>/<domain>.postgres.prisma
 #   gorm/<db>/<schemapkg>/models.go + gorm/<db>/migrate.go (factory registry)
@@ -23,6 +27,7 @@ inputs:
 plugins:
   - local: protoc-gen-store
     out: examples/generated/prisma
+    strategy: all
     opt:
       - target=prisma
       - 'license_header=Copyright 2026 The Protobuf Project authors.\nSPDX-License-Identifier: Apache-2.0'
@@ -31,6 +36,7 @@ plugins:
 
   - local: protoc-gen-store
     out: examples/generated/gorm
+    strategy: all
     opt:
       - target=gorm
       - 'license_header=Copyright 2026 The Protobuf Project authors.\nSPDX-License-Identifier: Apache-2.0'
@@ -56,6 +62,7 @@ plugins:
 
   - local: protoc-gen-store
     out: examples/generated/sql
+    strategy: all
     opt:
       - target=sql
       - 'license_header=Copyright 2026 The Protobuf Project authors.\nSPDX-License-Identifier: Apache-2.0'
@@ -68,6 +75,7 @@ plugins:
   # this offline and reproducible; see that file for the endpoint alternative.
   - local: protoc-gen-store
     out: examples/generated/graphql
+    strategy: all
     opt:
       - target=graphql
       - 'license_header=Copyright 2026 The Protobuf Project authors.\nSPDX-License-Identifier: Apache-2.0'
@@ -75,5 +83,14 @@ plugins:
       # buf hands the .proto input to every plugin entry, and protogen refuses to
       # start without an import path for each file — even though this target
       # renders from the GraphQL schema and reads none of them.
+      - Mbookstore/v1/bookstore.proto=github.com/the-protobuf-project/store/examples/gen/bookstore/v1
+      - Mbookstore/v1/inventory.proto=github.com/the-protobuf-project/store/examples/gen/bookstore/v1
+
+  - local: protoc-gen-store
+    out: examples/generated/rust
+    strategy: all
+    opt:
+      - target=rust
+      - 'license_header=Copyright 2026 The Protobuf Project authors.\nSPDX-License-Identifier: Apache-2.0'
       - Mbookstore/v1/bookstore.proto=github.com/the-protobuf-project/store/examples/gen/bookstore/v1
       - Mbookstore/v1/inventory.proto=github.com/the-protobuf-project/store/examples/gen/bookstore/v1

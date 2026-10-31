@@ -883,7 +883,7 @@ func (r *GraphQLBookRepository) Purge(ctx context.Context, name string) error {
 // cascades, because of a referrer. repox.ErrNotFound when there is no such
 // row.
 func (r *GraphQLBookRepository) purge(ctx context.Context, id, name string, askReferrers bool) (kept bool, err error) {
-	if referenced, err := r.referenced(ctx, id, name); err != nil {
+	if referenced, err := r.referenced(ctx, nil, id, name); err != nil {
 		return false, err
 	} else if referenced {
 		r.Refs.Kept(ctx, name, "foreign key")
@@ -959,18 +959,20 @@ func (r *GraphQLBookRepository) remove(ctx context.Context, id string) error {
 
 // referenced reports whether a row of this database, deleted or not, still
 // holds a foreign key to row id, named name -- what the GORM adapter asks
-// with its ReferencedSQL. A key whose action cascades or
-// sets null (a join table's, a reference Prisma made optional) would not
-// refuse the delete.
-func (r *GraphQLBookRepository) referenced(ctx context.Context, id, name string) (bool, error) {
+// with its ReferencedSQL. A key whose
+// action cascades (a join table's) or sets null (an optional reference
+// migrated before it took no action) would not refuse the delete. In a Batch
+// (u), a row u's request removes before this one does not count.
+func (r *GraphQLBookRepository) referenced(ctx context.Context, u *repox.Unit, id, name string) (bool, error) {
 	for _, holds := range []struct {
-		f   func(context.Context, *genql.Service, string) (bool, error)
-		key string
+		f      func(context.Context, *genql.Service, string, []string) (bool, error)
+		key    string
+		except string
 	}{
-		{catalogPagesHoldsBookId, id},
-		{catalogShelfFeaturedHoldsBookId, id},
+		{catalogPagesHoldsBookId, id, "catalog.pages"},
+		{catalogShelfFeaturedHoldsBookId, id, "catalog.shelves"},
 	} {
-		if found, err := holds.f(ctx, r.Svc, holds.key); err != nil || found {
+		if found, err := holds.f(ctx, r.Svc, holds.key, u.RemovedIn(holds.except)); err != nil || found {
 			return found, err
 		}
 	}
@@ -1327,12 +1329,13 @@ func (r *GraphQLGenreRepository) Delete(ctx context.Context, name string) error 
 	if err != nil {
 		return err
 	}
-	// A join table's row naming it would cascade away with it: refused, as a
-	// singular reference's constraint refuses it.
-	if referenced, err := r.referenced(ctx, id, name); err != nil {
+	// A join table's row naming it would cascade away with it, and an
+	// optional reference's old SET NULL would blank it: refused, as a required
+	// reference's constraint refuses it.
+	if referenced, err := r.referenced(ctx, nil, id, name); err != nil {
 		return err
 	} else if referenced {
-		return repox.ReferencedByJoin("catalog.example.com/Genre", name)
+		return repox.ReferencedByRow("catalog.example.com/Genre", name)
 	}
 	return r.remove(ctx, id)
 }
@@ -1351,17 +1354,20 @@ func (r *GraphQLGenreRepository) remove(ctx context.Context, id string) error {
 
 // referenced reports whether a row of this database, deleted or not, still
 // holds a foreign key to row id, named name -- what the GORM adapter asks
-// with its JoinReferencedSQL: a join table's row. A key whose action cascades or
-// sets null (a join table's, a reference Prisma made optional) would not
-// refuse the delete.
-func (r *GraphQLGenreRepository) referenced(ctx context.Context, id, name string) (bool, error) {
+// with its DeleteReferencedSQL: a join table's row or an optional reference. A key whose
+// action cascades (a join table's) or sets null (an optional reference
+// migrated before it took no action) would not refuse the delete. In a Batch
+// (u), a row u's request removes before this one does not count.
+func (r *GraphQLGenreRepository) referenced(ctx context.Context, u *repox.Unit, id, name string) (bool, error) {
 	for _, holds := range []struct {
-		f   func(context.Context, *genql.Service, string) (bool, error)
-		key string
+		f      func(context.Context, *genql.Service, string, []string) (bool, error)
+		key    string
+		except string
 	}{
-		{catalogBookGenresHoldsGenreId, id},
+		{catalogBookGenresHoldsGenreId, id, "catalog.books"},
+		{catalogBooksHoldsPrimaryGenre, id, "catalog.books"},
 	} {
-		if found, err := holds.f(ctx, r.Svc, holds.key); err != nil || found {
+		if found, err := holds.f(ctx, r.Svc, holds.key, u.RemovedIn(holds.except)); err != nil || found {
 			return found, err
 		}
 	}
@@ -2520,7 +2526,7 @@ func (r *GraphQLShelfRepository) Purge(ctx context.Context, name string) error {
 // cascades, because of a referrer. repox.ErrNotFound when there is no such
 // row.
 func (r *GraphQLShelfRepository) purge(ctx context.Context, id, name string, askReferrers bool) (kept bool, err error) {
-	if referenced, err := r.referenced(ctx, id, name); err != nil {
+	if referenced, err := r.referenced(ctx, nil, id, name); err != nil {
 		return false, err
 	} else if referenced {
 		r.Refs.Kept(ctx, name, "foreign key")
@@ -2596,19 +2602,22 @@ func (r *GraphQLShelfRepository) remove(ctx context.Context, id string) error {
 
 // referenced reports whether a row of this database, deleted or not, still
 // holds a foreign key to row id, named name -- what the GORM adapter asks
-// with its ReferencedSQL. A key whose action cascades or
-// sets null (a join table's, a reference Prisma made optional) would not
-// refuse the delete.
-func (r *GraphQLShelfRepository) referenced(ctx context.Context, id, name string) (bool, error) {
+// with its ReferencedSQL. A key whose
+// action cascades (a join table's) or sets null (an optional reference
+// migrated before it took no action) would not refuse the delete. In a Batch
+// (u), a row u's request removes before this one does not count.
+func (r *GraphQLShelfRepository) referenced(ctx context.Context, u *repox.Unit, id, name string) (bool, error) {
 	for _, holds := range []struct {
-		f   func(context.Context, *genql.Service, string) (bool, error)
-		key string
+		f      func(context.Context, *genql.Service, string, []string) (bool, error)
+		key    string
+		except string
 	}{
-		{catalogBookFiledUnderHoldsShelfId, id},
-		{catalogBooksHoldsShelfId, id},
-		{catalogPagesHoldsShelfId, id},
+		{catalogBookFiledUnderHoldsShelfId, id, "catalog.books"},
+		{catalogBooksHoldsReturnsTo, id, "catalog.books"},
+		{catalogBooksHoldsShelfId, id, "catalog.books"},
+		{catalogPagesHoldsShelfId, id, "catalog.pages"},
 	} {
-		if found, err := holds.f(ctx, r.Svc, holds.key); err != nil || found {
+		if found, err := holds.f(ctx, r.Svc, holds.key, u.RemovedIn(holds.except)); err != nil || found {
 			return found, err
 		}
 	}
@@ -2794,12 +2803,13 @@ func (b *graphQLBatch) PurgeBook(name string) {
 		if err != nil {
 			return nil, err
 		}
-		if referenced, err := r.referenced(ctx, id, name); err != nil || referenced {
+		if referenced, err := r.referenced(ctx, b.u, id, name); err != nil || referenced {
 			if referenced {
 				r.Refs.Kept(ctx, name, "foreign key")
 			}
 			return nil, err
 		}
+		b.u.Removing("catalog.books", id)
 		return r.purgeOps(ctx, ops, id)
 	})
 	b.u.Record(repox.Change{Type: "catalog.example.com/Book", Name: name, Op: repox.ChangePurge, LoadPrior: repox.PriorOf(name, getBook)})
@@ -2861,11 +2871,12 @@ func (b *graphQLBatch) DeleteGenre(name string) {
 		if err != nil {
 			return nil, err
 		}
-		if referenced, err := r.referenced(ctx, id, name); err != nil {
+		if referenced, err := r.referenced(ctx, b.u, id, name); err != nil {
 			return nil, err
 		} else if referenced {
-			return nil, repox.ReferencedByJoin("catalog.example.com/Genre", name)
+			return nil, repox.ReferencedByRow("catalog.example.com/Genre", name)
 		}
+		b.u.Removing("catalog.genres", id)
 		ops.Add(b.svc.Mutation.Catalog.Genres.DeleteOp(id, new(genresql.DeleteCatalogGenresByIdResponse)))
 		return nil, nil
 	})
@@ -2931,6 +2942,7 @@ func (b *graphQLBatch) DeletePage(name string) {
 		if err != nil {
 			return nil, err
 		}
+		b.u.Removing("catalog.pages", id)
 		ops.Add(b.svc.Mutation.Catalog.Pages.DeleteOp(id, new(pagesql.DeleteCatalogPagesByIdResponse)))
 		return nil, nil
 	})
@@ -3079,12 +3091,13 @@ func (b *graphQLBatch) PurgeShelf(name string) {
 		if err != nil {
 			return nil, err
 		}
-		if referenced, err := r.referenced(ctx, id, name); err != nil || referenced {
+		if referenced, err := r.referenced(ctx, b.u, id, name); err != nil || referenced {
 			if referenced {
 				r.Refs.Kept(ctx, name, "foreign key")
 			}
 			return nil, err
 		}
+		b.u.Removing("catalog.shelves", id)
 		return r.purgeOps(ctx, ops, id)
 	})
 	b.u.Record(repox.Change{Type: "catalog.example.com/Shelf", Name: name, Op: repox.ChangePurge, LoadPrior: repox.PriorOf(name, getShelf)})

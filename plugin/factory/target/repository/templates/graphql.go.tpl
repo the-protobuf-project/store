@@ -1199,7 +1199,7 @@ func (r *GraphQL{{.Model}}Repository) Delete(ctx context.Context, name string) e
 // row.
 func (r *GraphQL{{.Model}}Repository) purge(ctx context.Context, id, name string, askReferrers bool) (kept bool, err error) {
 	{{- if .GQLReferrers}}
-	if referenced, err := r.referenced(ctx, id, name); err != nil {
+	if referenced, err := r.referenced(ctx, nil, id, name); err != nil {
 		return false, err
 	} else if referenced {
 		r.Refs.Kept(ctx, name, "foreign key")
@@ -1268,12 +1268,13 @@ func (r *GraphQL{{.Model}}Repository) PurgeExpired(ctx context.Context, now time
 {{- end}}
 	{{- else}}
 	{{- if .GQLReferrers}}
-	// A join table's row naming it would cascade away with it: refused, as a
-	// singular reference's constraint refuses it.
-	if referenced, err := r.referenced(ctx, id, name); err != nil {
+	// A join table's row naming it would cascade away with it, and an
+	// optional reference's old SET NULL would blank it: refused, as a required
+	// reference's constraint refuses it.
+	if referenced, err := r.referenced(ctx, nil, id, name); err != nil {
 		return err
 	} else if referenced {
-		return repox.ReferencedByJoin({{printf "%q" .Type}}, name)
+		return repox.{{.RefusedBy}}({{printf "%q" .Type}}, name)
 	}
 	{{- end}}
 	return r.remove(ctx, id)
@@ -1307,19 +1308,21 @@ func (r *GraphQL{{.Model}}Repository) remove(ctx context.Context, id string) err
 
 // referenced reports whether a row of this database, deleted or not, still
 // holds a foreign key to row id, named name -- what the GORM adapter asks
-// with its {{if .SoftDelete}}ReferencedSQL{{else}}JoinReferencedSQL: a join table's row{{end}}. A key whose action cascades or
-// sets null (a join table's, a reference Prisma made optional) would not
-// refuse the delete.
-func (r *GraphQL{{.Model}}Repository) referenced(ctx context.Context, id, name string) (bool, error) {
+// with its {{if .SoftDelete}}ReferencedSQL{{else}}DeleteReferencedSQL: a join table's row or an optional reference{{end}}. A key whose
+// action cascades (a join table's) or sets null (an optional reference
+// migrated before it took no action) would not refuse the delete. In a Batch
+// (u), a row u's request removes before this one does not count.
+func (r *GraphQL{{.Model}}Repository) referenced(ctx context.Context, u *repox.Unit, id, name string) (bool, error) {
 	for _, holds := range []struct {
-		f   func(context.Context, *{{$.ClientPkg}}.Service, string) (bool, error)
-		key string
+		f      func(context.Context, *{{$.ClientPkg}}.Service, string, []string) (bool, error)
+		key    string
+		except string
 	}{
 		{{- range .GQLReferrers}}
-		{ {{- .Func}}, {{.Value -}} },
+		{ {{- .Func}}, {{.Value}}, {{printf "%q" .ExceptTable -}} },
 		{{- end}}
 	} {
-		if found, err := holds.f(ctx, r.Svc, holds.key); err != nil || found {
+		if found, err := holds.f(ctx, r.Svc, holds.key, u.RemovedIn(holds.except)); err != nil || found {
 			return found, err
 		}
 	}
@@ -1541,19 +1544,20 @@ func (b *graphQLBatch) {{if .SoftDelete}}Purge{{else}}Delete{{end}}{{.Model}}(na
 			return nil, err
 		}
 		{{- if and .SoftDelete .GQLReferrers}}
-		if referenced, err := r.referenced(ctx, id, name); err != nil || referenced {
+		if referenced, err := r.referenced(ctx, b.u, id, name); err != nil || referenced {
 			if referenced {
 				r.Refs.Kept(ctx, name, "foreign key")
 			}
 			return nil, err
 		}
 		{{- else if .GQLReferrers}}
-		if referenced, err := r.referenced(ctx, id, name); err != nil {
+		if referenced, err := r.referenced(ctx, b.u, id, name); err != nil {
 			return nil, err
 		} else if referenced {
-			return nil, repox.ReferencedByJoin({{printf "%q" .Type}}, name)
+			return nil, repox.{{.RefusedBy}}({{printf "%q" .Type}}, name)
 		}
 		{{- end}}
+		b.u.Removing({{printf "%q" .TableKey}}, id)
 		{{- if .Flat}}
 		ops.Add(b.svc.Mutation.{{.Domain}}.{{.Resource}}.DeleteOp(id, new({{.DeleteResp}})))
 		return nil, nil

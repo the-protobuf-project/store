@@ -11,7 +11,7 @@
 // schema:   bookstore_v1
 //
 // annotations: entity.v1 dev, store.v1 dev
-// engine:      protokit v1.3.4
+// engine:      protokit v1.3.8
 //
 // store — https://github.com/the-protobuf-project/store
 
@@ -51,7 +51,7 @@ type Author struct {
 	// Timestamp when the record was last updated.
 	UpdatedAt time.Time `gorm:"column:updated_at;type:timestamptz;not null;autoUpdateTime" json:"updated_at"`
 	// Back-relation: Book records that reference this via author_id.
-	Books []Book `gorm:"foreignKey:AuthorID" json:"books,omitempty"`
+	Books []Book `gorm:"foreignKey:AuthorID;constraint:OnDelete:CASCADE" json:"books,omitempty"`
 }
 
 func (*Author) TableName() string { return "bookstore_v1.authors" }

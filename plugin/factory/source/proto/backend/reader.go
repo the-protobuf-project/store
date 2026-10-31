@@ -60,6 +60,8 @@ type Reader struct {
 	graphqlRootFieldPrefix string
 	// repositoryModule is the opensearch target's repository_module opt.
 	repositoryModule string
+	// rustCrate is the rust target's crate opt.
+	rustCrate string
 }
 
 // Compile-time proof that Reader satisfies all three halves of the seam.
@@ -94,6 +96,13 @@ func (r Reader) WithGraphQLRootFieldPrefix(prefix string) Reader {
 // repository module path (the repository_module plugin opt).
 func (r Reader) WithSearchModules(repositoryModule string) Reader {
 	r.repositoryModule = repositoryModule
+	return r
+}
+
+// WithRustCrate returns a copy of r carrying the rust target's crate name (the
+// crate plugin opt).
+func (r Reader) WithRustCrate(name string) Reader {
+	r.rustCrate = name
 	return r
 }
 
@@ -248,6 +257,9 @@ func (r Reader) Enrich(ir *protokit.IR) error {
 			db.Opts["graphql_root_field_prefix"] = r.graphqlRootFieldPrefix
 		}
 		db.Opts["repository_module"] = r.repositoryModule
+		if r.rustCrate != "" {
+			db.Opts["rust_crate"] = r.rustCrate
+		}
 		if r.cfg != nil && len(r.cfg.ReferenceServices) > 0 {
 			b, err := json.Marshal(r.cfg.ReferenceServices)
 			if err != nil {

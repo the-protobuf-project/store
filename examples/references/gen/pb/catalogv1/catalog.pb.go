@@ -14,6 +14,7 @@ package catalogv1
 
 import (
 	_ "github.com/the-protobuf-project/store/plugin/entity/pb/entitypbv1"
+	_ "github.com/the-protobuf-project/store/plugin/pb/storepbv1"
 	_ "google.golang.org/genproto/googleapis/api/annotations"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
@@ -141,7 +142,17 @@ type Book struct {
 	FiledUnder []string `protobuf:"bytes,6,rep,name=filed_under,json=filedUnder,proto3" json:"filed_under,omitempty"`
 	// The book's genres: a repeated reference to a resource deleted outright
 	// (no soft delete), which a delete refuses while a book names it.
-	Genres        []string `protobuf:"bytes,7,rep,name=genres,proto3" json:"genres,omitempty"`
+	Genres []string `protobuf:"bytes,7,rep,name=genres,proto3" json:"genres,omitempty"`
+	// The genre the book is shelved by: an optional reference to a resource
+	// deleted outright, which takes no action, so a delete refuses while a
+	// book names it.
+	PrimaryGenre string `protobuf:"bytes,8,opt,name=primary_genre,json=primaryGenre,proto3" json:"primary_genre,omitempty"`
+	// A genre the book was once classed under: an optional reference that
+	// says SET_NULL, so deleting the genre blanks it.
+	FormerGenre string `protobuf:"bytes,9,opt,name=former_genre,json=formerGenre,proto3" json:"former_genre,omitempty"`
+	// The shelf the book goes back to: an optional reference to a
+	// soft-deleted resource, which keeps a purged shelf while a book names it.
+	ReturnsTo     string `protobuf:"bytes,10,opt,name=returns_to,json=returnsTo,proto3" json:"returns_to,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -223,6 +234,27 @@ func (x *Book) GetGenres() []string {
 		return x.Genres
 	}
 	return nil
+}
+
+func (x *Book) GetPrimaryGenre() string {
+	if x != nil {
+		return x.PrimaryGenre
+	}
+	return ""
+}
+
+func (x *Book) GetFormerGenre() string {
+	if x != nil {
+		return x.FormerGenre
+	}
+	return ""
+}
+
+func (x *Book) GetReturnsTo() string {
+	if x != nil {
+		return x.ReturnsTo
+	}
+	return ""
 }
 
 // A genre books are classed under: deleted outright, with no soft delete.
@@ -340,7 +372,7 @@ var File_refdemo_catalog_v1_catalog_proto protoreflect.FileDescriptor
 
 const file_refdemo_catalog_v1_catalog_proto_rawDesc = "" +
 	"\n" +
-	" refdemo/catalog/v1/catalog.proto\x12\x12refdemo.catalog.v1\x1a\x1bentity/v1/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xea\x02\n" +
+	" refdemo/catalog/v1/catalog.proto\x12\x12refdemo.catalog.v1\x1a\x1bentity/v1/annotations.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1astore/v1/annotations.proto\"\xea\x02\n" +
 	"\x05Shelf\x12\x17\n" +
 	"\x04name\x18\x01 \x01(\tB\x03\xe0A\bR\x04name\x12&\n" +
 	"\fdisplay_name\x18\x02 \x01(\tB\x03\xe0A\x02R\vdisplayName\x12\x17\n" +
@@ -351,7 +383,7 @@ const file_refdemo_catalog_v1_catalog_proto_rawDesc = "" +
 	"expireTime\x12<\n" +
 	"\bfeatured\x18\x06 \x03(\tB \xe0A\x01\xfaA\x1a\n" +
 	"\x18catalog.example.com/BookR\bfeatured:E\xeaA<\n" +
-	"\x19catalog.example.com/Shelf\x12\x0fshelves/{shelf}*\ashelves2\x05shelf\xca\xf3\x18\x02\x18\x01\"\xa6\x03\n" +
+	"\x19catalog.example.com/Shelf\x12\x0fshelves/{shelf}*\ashelves2\x05shelf\xca\xf3\x18\x02\x18\x01\"\xfc\x04\n" +
 	"\x04Book\x12\x17\n" +
 	"\x04name\x18\x01 \x01(\tB\x03\xe0A\bR\x04name\x12\x19\n" +
 	"\x05title\x18\x02 \x01(\tB\x03\xe0A\x02R\x05title\x12\x17\n" +
@@ -364,7 +396,15 @@ const file_refdemo_catalog_v1_catalog_proto_rawDesc = "" +
 	"\x19catalog.example.com/ShelfR\n" +
 	"filedUnder\x129\n" +
 	"\x06genres\x18\a \x03(\tB!\xe0A\x01\xfaA\x1b\n" +
-	"\x19catalog.example.com/GenreR\x06genres:N\xeaAE\n" +
+	"\x19catalog.example.com/GenreR\x06genres\x12F\n" +
+	"\rprimary_genre\x18\b \x01(\tB!\xe0A\x01\xfaA\x1b\n" +
+	"\x19catalog.example.com/GenreR\fprimaryGenre\x12J\n" +
+	"\fformer_genre\x18\t \x01(\tB'\xe0A\x01\xfaA\x1b\n" +
+	"\x19catalog.example.com/Genreڵ\x18\x02@\x03R\vformerGenre\x12@\n" +
+	"\n" +
+	"returns_to\x18\n" +
+	" \x01(\tB!\xe0A\x01\xfaA\x1b\n" +
+	"\x19catalog.example.com/ShelfR\treturnsTo:N\xeaAE\n" +
 	"\x18catalog.example.com/Book\x12\x1cshelves/{shelf}/books/{book}*\x05books2\x04book\xca\xf3\x18\x02\x18\x01\"\x8d\x01\n" +
 	"\x05Genre\x12\x17\n" +
 	"\x04name\x18\x01 \x01(\tB\x03\xe0A\bR\x04name\x12&\n" +

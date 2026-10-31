@@ -50,6 +50,12 @@ CREATE TABLE IF NOT EXISTS "catalog"."books" (
     "delete_time"  TIMESTAMPTZ,
     -- When the soft-deleted book goes for good.
     "expire_time"  TIMESTAMPTZ,
+    -- The genre the book is shelved by: an optional reference to a resource deleted outright, which takes no action, so a delete refuses while a book names it.
+    "primary_genre"  CHAR(26),
+    -- A genre the book was once classed under: an optional reference that says SET_NULL, so deleting the genre blanks it.
+    "former_genre"  CHAR(26),
+    -- The shelf the book goes back to: an optional reference to a soft-deleted resource, which keeps a purged shelf while a book names it.
+    "returns_to"  CHAR(26),
     -- Parent reference to Shelf (from the AIP resource pattern).
     "shelf_id"  CHAR(26)  NOT NULL
 );
@@ -111,6 +117,12 @@ CREATE TABLE IF NOT EXISTS "catalog"."book_genres" (
 );
 
 -- Foreign keys
+ALTER TABLE "catalog"."books" DROP CONSTRAINT IF EXISTS "fk_books_primary_genre";
+ALTER TABLE "catalog"."books" ADD CONSTRAINT "fk_books_primary_genre" FOREIGN KEY ("primary_genre") REFERENCES "catalog"."genres"("id");
+ALTER TABLE "catalog"."books" DROP CONSTRAINT IF EXISTS "fk_books_former_genre";
+ALTER TABLE "catalog"."books" ADD CONSTRAINT "fk_books_former_genre" FOREIGN KEY ("former_genre") REFERENCES "catalog"."genres"("id") ON DELETE SET NULL;
+ALTER TABLE "catalog"."books" DROP CONSTRAINT IF EXISTS "fk_books_returns_to";
+ALTER TABLE "catalog"."books" ADD CONSTRAINT "fk_books_returns_to" FOREIGN KEY ("returns_to") REFERENCES "catalog"."shelves"("id");
 ALTER TABLE "catalog"."books" DROP CONSTRAINT IF EXISTS "fk_books_shelf_id";
 ALTER TABLE "catalog"."books" ADD CONSTRAINT "fk_books_shelf_id" FOREIGN KEY ("shelf_id") REFERENCES "catalog"."shelves"("id") ON DELETE CASCADE;
 ALTER TABLE "catalog"."pages" DROP CONSTRAINT IF EXISTS "fk_pages_shelf_id";
@@ -134,6 +146,9 @@ ALTER TABLE "catalog"."book_genres" ADD CONSTRAINT "fk_book_genres_genre_id" FOR
 CREATE INDEX IF NOT EXISTS "idx_shelves_delete_time" ON "catalog"."shelves" ("delete_time");
 CREATE INDEX IF NOT EXISTS "idx_books_delete_time" ON "catalog"."books" ("delete_time");
 CREATE INDEX IF NOT EXISTS "idx_books_shelf_id_id" ON "catalog"."books" ("shelf_id", "id");
+CREATE INDEX IF NOT EXISTS "idx_books_primary_genre" ON "catalog"."books" ("primary_genre");
+CREATE INDEX IF NOT EXISTS "idx_books_former_genre" ON "catalog"."books" ("former_genre");
+CREATE INDEX IF NOT EXISTS "idx_books_returns_to" ON "catalog"."books" ("returns_to");
 CREATE INDEX IF NOT EXISTS "idx_pages_book_id_id" ON "catalog"."pages" ("book_id", "id");
 CREATE INDEX IF NOT EXISTS "idx_pages_shelf_id" ON "catalog"."pages" ("shelf_id");
 CREATE UNIQUE INDEX IF NOT EXISTS "idx_shelf_featured_shelf_id_book_id" ON "catalog"."shelf_featured" ("shelf_id", "book_id");
@@ -158,6 +173,9 @@ COMMENT ON COLUMN "catalog"."books"."title" IS 'The title.';
 COMMENT ON COLUMN "catalog"."books"."etag" IS 'Optimistic-concurrency token.';
 COMMENT ON COLUMN "catalog"."books"."delete_time" IS 'When the book was soft-deleted.';
 COMMENT ON COLUMN "catalog"."books"."expire_time" IS 'When the soft-deleted book goes for good.';
+COMMENT ON COLUMN "catalog"."books"."primary_genre" IS 'The genre the book is shelved by: an optional reference to a resource deleted outright, which takes no action, so a delete refuses while a book names it.';
+COMMENT ON COLUMN "catalog"."books"."former_genre" IS 'A genre the book was once classed under: an optional reference that says SET_NULL, so deleting the genre blanks it.';
+COMMENT ON COLUMN "catalog"."books"."returns_to" IS 'The shelf the book goes back to: an optional reference to a soft-deleted resource, which keeps a purged shelf while a book names it.';
 COMMENT ON COLUMN "catalog"."books"."shelf_id" IS 'Parent reference to Shelf (from the AIP resource pattern).';
 COMMENT ON TABLE "catalog"."genres" IS 'A genre books are classed under: deleted outright, with no soft delete.';
 COMMENT ON COLUMN "catalog"."genres"."id" IS 'Unique identifier for the record.';

@@ -143,7 +143,7 @@ func modelViewOf(t *schema.Table, provider types.Provider, dsName string, typeOf
 			}
 			args += "fields: [" + scalarFieldName(col) + "], references: [" +
 				naming.Camel(fk.ReferencedColumn) + "]"
-			if a := prismaAction(fk.OnDelete); a != "" {
+			if a := prismaOnDelete(fk.OnDelete, col.Optional); a != "" {
 				args += ", onDelete: " + a
 			}
 			if a := prismaAction(fk.OnUpdate); a != "" {

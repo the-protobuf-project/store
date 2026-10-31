@@ -36,7 +36,7 @@ type Money struct {
 	// units is the whole-currency amount.
 	Units *int64 `gorm:"column:units" json:"units,omitempty"`
 	// Back-relation: Order records that reference this via total_id.
-	Orders []Order `gorm:"foreignKey:TotalID" json:"orders,omitempty"`
+	Orders []Order `gorm:"foreignKey:TotalID;constraint:OnDelete:CASCADE" json:"orders,omitempty"`
 }
 
 func (*Money) TableName() string { return "ordering.moneys" }

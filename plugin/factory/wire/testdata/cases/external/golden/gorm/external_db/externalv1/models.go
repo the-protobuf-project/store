@@ -40,7 +40,7 @@ type Money struct {
 	// Number of nano (10^-9) units of the amount.
 	Nanos *int32 `gorm:"column:nanos" json:"nanos,omitempty"`
 	// Back-relation: Product records that reference this via price_id.
-	Products []Product `gorm:"foreignKey:PriceID" json:"products,omitempty"`
+	Products []Product `gorm:"foreignKey:PriceID;constraint:OnDelete:CASCADE" json:"products,omitempty"`
 }
 
 func (*Money) TableName() string { return "external_v1.moneys" }

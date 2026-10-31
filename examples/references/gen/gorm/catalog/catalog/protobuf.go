@@ -8,7 +8,7 @@
 // schema:   catalog
 //
 // annotations: entity.v1 dev, store.v1 dev
-// engine:      protokit v1.3.4
+// engine:      protokit v1.3.8
 //
 // store — https://github.com/the-protobuf-project/store
 
@@ -59,6 +59,7 @@ func BookToProto(m *Book) *catalogv1.Book {
 		return nil
 	}
 	out := &catalogv1.Book{}
+	// not mapped here: primary_genre (resource reference), former_genre (resource reference), returns_to (resource reference)
 	out.Name = m.Name
 	out.Title = m.Title
 	out.Etag = fromPtr(m.Etag)
@@ -75,6 +76,7 @@ func BookFromProto(pb *catalogv1.Book) *Book {
 		return nil
 	}
 	m := &Book{}
+	// not mapped here: primary_genre (resource reference), former_genre (resource reference), returns_to (resource reference)
 	m.Name = pb.GetName()
 	m.Title = pb.GetTitle()
 	m.Etag = toPtr(pb.GetEtag())

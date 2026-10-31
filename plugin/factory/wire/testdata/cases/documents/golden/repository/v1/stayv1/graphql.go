@@ -644,6 +644,7 @@ func (b *graphQLBatch) DeleteBooking(name string) {
 		if err != nil {
 			return nil, err
 		}
+		b.u.Removing("stay_v1.bookings", id)
 		return r.purgeOps(ctx, ops, id)
 	})
 	b.u.Record(repox.Change{Type: "stay.v1/Booking", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getBooking)})

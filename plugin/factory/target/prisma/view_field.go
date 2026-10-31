@@ -100,6 +100,21 @@ func prismaAction(sqlAction string) string {
 	return b.String()
 }
 
+// prismaOnDelete is a relation's onDelete: the foreign key's action, or for
+// one with none on an optional relation, Restrict. protokit leaves the action
+// empty for a reference that sets none, which means no action: the database
+// refuses to delete a record a row still names. Prisma writes that by itself
+// for a required relation (Restrict) but sets null on an optional one, which
+// would silently blank the reference -- so it is written out, matching the
+// required case. An explicit on_delete ((store.v1.column).on_delete, e.g.
+// REFERENTIAL_ACTION_SET_NULL) still wins.
+func prismaOnDelete(sqlAction string, optional bool) string {
+	if sqlAction == "" && optional {
+		return "Restrict"
+	}
+	return prismaAction(sqlAction)
+}
+
 // fieldDoc returns the /// documentation for a column: the proto comment when
 // present, otherwise a generated description.
 func fieldDoc(col *schema.Column) string {

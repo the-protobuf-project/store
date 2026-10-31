@@ -140,7 +140,7 @@ Overrides table-level structure for a `google.api.resource` message.
 | `precision` / `scale` | `NUMERIC(p, s)` for numeric fields. |
 | `default_value` | SQL default expression, written verbatim. |
 | `unique` / `index` | Single-column constraint / index. |
-| `on_delete` / `on_update` | FK referential action (`REFERENTIAL_ACTION_CASCADE`, `…_SET_NULL`, …) for a `resource_reference` field. |
+| `on_delete` / `on_update` | FK referential action (`REFERENTIAL_ACTION_CASCADE`, `…_SET_NULL`, …) for a `resource_reference` field. Unset, a reference takes no action, optional or not (Prisma: `Restrict`): a delete is refused while a row names the record; `REFERENTIAL_ACTION_SET_NULL` has it blank an optional reference instead. |
 
 ### `(store.v1.table)` — message level
 

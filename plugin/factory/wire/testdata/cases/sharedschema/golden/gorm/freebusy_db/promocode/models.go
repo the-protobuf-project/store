@@ -30,7 +30,7 @@ type PromoCode struct {
 	AmountOffID *string       `gorm:"column:amount_off_id;index:idx_promo_codes_amount_off_id" json:"amount_off_id,omitempty"`
 	AmountOff   *common.Money `gorm:"foreignKey:AmountOffID;constraint:OnDelete:SET NULL" json:"amountoff,omitempty"`
 	// Back-relation: Redemption records that reference this via promo_code_id.
-	Redemptions []Redemption `gorm:"foreignKey:PromoCodeID" json:"redemptions,omitempty"`
+	Redemptions []Redemption `gorm:"foreignKey:PromoCodeID;constraint:OnDelete:CASCADE" json:"redemptions,omitempty"`
 }
 
 func (*PromoCode) TableName() string { return "promocode.promo_codes" }

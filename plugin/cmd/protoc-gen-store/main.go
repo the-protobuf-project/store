@@ -107,7 +107,7 @@ func main() {
 	// flags are populated by protogen (ParamFunc maps each buf.gen.yaml opt:
 	// "key=value" to flags.Set) before the Run closure reads them.
 	var flags flag.FlagSet
-	target := flags.String("target", "", "output backend: gorm | sql | prisma | repository | opensearch | graphql")
+	target := flags.String("target", "", "output backend: gorm | sql | prisma | repository | opensearch | rust | graphql")
 	strict := flags.String("strict", "",
 		"per-rule severity for schema problems: \"\"=all warn, \"true\"=all error, "+
 			"or \"ref:error,collision:warn,index:error,lint:warn\"")
@@ -147,6 +147,9 @@ func main() {
 	repositoryModule := flags.String("repository_module", "",
 		"opensearch target only: Go import path of the generated repository output whose "+
 			"projections (store.v1.projection) the OpenSearch indices copy")
+	rustCrate := flags.String("crate", "",
+		"rust target only: the Cargo package name of the output tree, which is one crate "+
+			"as gorm's go_module is one Go module (default \"generated\")")
 	references := flags.String("references", "",
 		"comma-separated descriptor images (binary FileDescriptorSets, e.g. from "+
 			"`buf build <module> -o x.binpb`) read only to discover the targets of "+
@@ -197,7 +200,8 @@ func main() {
 		reader := backend.New(cfg, *goModule, *stores, *telemetry, *converters, *filters).
 			WithRepositoryModules(*gormModule, *graphqlModule).
 			WithGraphQLRootFieldPrefix(*graphqlRootFieldPrefix).
-			WithSearchModules(*repositoryModule)
+			WithSearchModules(*repositoryModule).
+			WithRustCrate(*rustCrate)
 		reg := wire.Registry(
 			protokit.Options{Target: *target, Strict: *strict, Version: v, References: referenceImages(cfg, *references)},
 			backend.Readers(reader),

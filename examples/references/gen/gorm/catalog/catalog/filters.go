@@ -9,7 +9,7 @@
 //
 // AIP-160 filter / AIP-132 order_by specs — data for the shared filterx engines.
 // annotations: entity.v1 dev, store.v1 dev
-// engine:      protokit v1.3.4
+// engine:      protokit v1.3.8
 //
 // store — https://github.com/the-protobuf-project/store
 
@@ -46,14 +46,17 @@ var ShelfFilterSpec = filterx.Spec{
 var BookFilterSpec = filterx.Spec{
 	Table: `"catalog"."books"`,
 	Fields: map[string]filterx.FieldSpec{
-		"delete_time": {Column: "delete_time", Kind: filterx.KindTimestamp},
-		"etag":        {Column: "etag", Kind: filterx.KindText},
-		"expire_time": {Column: "expire_time", Kind: filterx.KindTimestamp},
-		"filed_under": {Column: "id", Kind: filterx.KindRef, Via: &filterx.Via{Table: `"catalog"."book_filed_under"`, Key: "book_id", Column: "shelf_id", Many: true}},
-		"genres":      {Column: "id", Kind: filterx.KindRef, Via: &filterx.Via{Table: `"catalog"."book_genres"`, Key: "book_id", Column: "genre_id", Many: true}},
-		"name":        {Column: "name", Kind: filterx.KindText},
-		"shelf":       {Column: "shelf_id", Kind: filterx.KindRef},
-		"title":       {Column: "title", Kind: filterx.KindText},
+		"delete_time":   {Column: "delete_time", Kind: filterx.KindTimestamp},
+		"etag":          {Column: "etag", Kind: filterx.KindText},
+		"expire_time":   {Column: "expire_time", Kind: filterx.KindTimestamp},
+		"filed_under":   {Column: "id", Kind: filterx.KindRef, Via: &filterx.Via{Table: `"catalog"."book_filed_under"`, Key: "book_id", Column: "shelf_id", Many: true}},
+		"former_genre":  {Column: "former_genre", Kind: filterx.KindRef},
+		"genres":        {Column: "id", Kind: filterx.KindRef, Via: &filterx.Via{Table: `"catalog"."book_genres"`, Key: "book_id", Column: "genre_id", Many: true}},
+		"name":          {Column: "name", Kind: filterx.KindText},
+		"primary_genre": {Column: "primary_genre", Kind: filterx.KindRef},
+		"returns_to":    {Column: "returns_to", Kind: filterx.KindRef},
+		"shelf":         {Column: "shelf_id", Kind: filterx.KindRef},
+		"title":         {Column: "title", Kind: filterx.KindText},
 	},
 	Sort: map[string]filterx.SortSpec{
 		"delete_time": {Column: "delete_time", Kind: filterx.KindTimestamp},

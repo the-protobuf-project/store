@@ -865,6 +865,7 @@ func (b *graphQLBatch) DeleteBooking(name string) {
 		if err != nil {
 			return nil, err
 		}
+		b.u.Removing("projdemo_v1.bookings", id)
 		ops.Add(b.svc.Mutation.ProjdemoV1.Bookings.DeleteOp(id, new(bookingsql.DeleteProjdemoV1BookingsByIdResponse)))
 		return nil, nil
 	})
@@ -927,6 +928,7 @@ func (b *graphQLBatch) DeleteRoom(name string) {
 		if err != nil {
 			return nil, err
 		}
+		b.u.Removing("projdemo_v1.rooms", id)
 		ops.Add(b.svc.Mutation.ProjdemoV1.Rooms.DeleteOp(id, new(roomsql.DeleteProjdemoV1RoomsByIdResponse)))
 		return nil, nil
 	})

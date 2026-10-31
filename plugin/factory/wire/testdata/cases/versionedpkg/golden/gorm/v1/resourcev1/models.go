@@ -55,7 +55,7 @@ type Window struct {
 	// Window end.
 	EndTime *time.Time `gorm:"column:end_time;type:timestamptz" json:"end_time,omitempty"`
 	// Back-relation: Event records that reference this via window_id.
-	Events []Event `gorm:"foreignKey:WindowID" json:"events,omitempty"`
+	Events []Event `gorm:"foreignKey:WindowID;constraint:OnDelete:SET NULL" json:"events,omitempty"`
 }
 
 func (*Window) TableName() string { return "resource_v1.windows" }

@@ -47,9 +47,13 @@ type resourceView struct {
 	// ReferencedSQL is the query a GORM purge asks first: is the row still
 	// named by a foreign key? Empty when nothing can name it.
 	ReferencedSQL string
-	// JoinReferencedSQL is the query a GORM delete (no soft delete) asks
-	// first: does a join table's row still name the row? Empty when none can.
-	JoinReferencedSQL string
+	// DeleteReferencedSQL is the query a GORM delete (no soft delete) asks
+	// first: does a join table's row or an optional reference still name the
+	// row? Empty when none can.
+	DeleteReferencedSQL string
+	// RefusedBy is the repox function the refusal is: ReferencedByJoin, or
+	// ReferencedByRow when an optional reference can name the row.
+	RefusedBy string
 	// WildcardParent reads across every parent (AIP-159), for a scan of a
 	// parented resource ("calendars/-").
 	WildcardParent string
@@ -106,21 +110,22 @@ func schemaView(pb *pbIndex, db *schema.Database, s *schema.Schema, resources ma
 		pkgName := pb.names.Of(pbPkg)
 		imports[pbPkg] = pkgName
 		views = append(views, resourceView{
-			Model:             r.Table.LocalName,
-			LowerModel:        naming.CamelFirst(r.Table.LocalName),
-			PluralField:       naming.PascalGo(naming.Pluralize(naming.SnakeCase(r.Table.LocalName))),
-			PB:                pkgName + "." + msg.GoIdent.GoName,
-			Parented:          r.Parent != nil || len(r.Segments) > 1,
-			Pattern:           r.Pattern,
-			SoftDelete:        r.Cols.DeleteTime != nil,
-			Expiring:          r.Cols.ExpireTime != nil,
-			OutputOnly:        len(serverOwned(r)) > 0,
-			Flat:              len(r.VOs) == 0 && len(r.Graph) == 0 && len(r.Joins) == 0,
-			Type:              r.Type,
-			ExtRefs:           r.ExtRefs,
-			ReferencedSQL:     referencedSQL(r),
-			JoinReferencedSQL: joinReferencedSQL(r),
-			WildcardParent:    wildcardParent(r),
+			Model:               r.Table.LocalName,
+			LowerModel:          naming.CamelFirst(r.Table.LocalName),
+			PluralField:         naming.PascalGo(naming.Pluralize(naming.SnakeCase(r.Table.LocalName))),
+			PB:                  pkgName + "." + msg.GoIdent.GoName,
+			Parented:            r.Parent != nil || len(r.Segments) > 1,
+			Pattern:             r.Pattern,
+			SoftDelete:          r.Cols.DeleteTime != nil,
+			Expiring:            r.Cols.ExpireTime != nil,
+			OutputOnly:          len(serverOwned(r)) > 0,
+			Flat:                len(r.VOs) == 0 && len(r.Graph) == 0 && len(r.Joins) == 0,
+			Type:                r.Type,
+			ExtRefs:             r.ExtRefs,
+			ReferencedSQL:       referencedSQL(r),
+			DeleteReferencedSQL: deleteReferencedSQL(r),
+			RefusedBy:           refusedBy(r),
+			WildcardParent:      wildcardParent(r),
 		})
 	}
 	gormPkg := addGormModelsImport(pb, db, s, pkg, imports)

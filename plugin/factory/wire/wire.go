@@ -25,6 +25,7 @@ import (
 	"github.com/the-protobuf-project/store/plugin/factory/target/opensearch"
 	"github.com/the-protobuf-project/store/plugin/factory/target/prisma"
 	"github.com/the-protobuf-project/store/plugin/factory/target/repository"
+	"github.com/the-protobuf-project/store/plugin/factory/target/rust"
 	"github.com/the-protobuf-project/store/plugin/factory/target/sql"
 )
 
@@ -40,6 +41,7 @@ func ProtoTargets() map[string]schema.Target {
 		"prisma":     &prisma.Generator{},
 		"repository": &repository.Generator{},
 		"opensearch": &opensearch.Generator{},
+		"rust":       &rust.Generator{},
 	}
 }
 

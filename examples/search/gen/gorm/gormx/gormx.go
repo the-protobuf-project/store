@@ -8,7 +8,7 @@
 //
 // Shared GORM runtime: ListOptions, the generic Store interface, the GenericStore engine, and EnsureSchemas.
 // annotations: entity.v1 dev, store.v1 dev
-// engine:      protokit v1.3.4
+// engine:      protokit v1.3.8
 // runtime:     gorm.io/gorm
 //
 // store — https://github.com/the-protobuf-project/store

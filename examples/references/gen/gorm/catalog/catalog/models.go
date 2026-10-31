@@ -8,7 +8,7 @@
 // schema:   catalog
 //
 // annotations: entity.v1 dev, store.v1 dev
-// engine:      protokit v1.3.4
+// engine:      protokit v1.3.8
 //
 // store — https://github.com/the-protobuf-project/store
 
@@ -32,10 +32,12 @@ type Shelf struct {
 	DeleteTime *time.Time `gorm:"column:delete_time;type:timestamptz;index:idx_shelves_delete_time" json:"delete_time,omitempty"`
 	// When the soft-deleted shelf goes for good.
 	ExpireTime *time.Time `gorm:"column:expire_time;type:timestamptz" json:"expire_time,omitempty"`
+	// Back-relation: Book records that reference this via returns_to.
+	Books []Book `gorm:"foreignKey:ReturnsToID" json:"books,omitempty"`
 	// Back-relation: Book records that reference this via shelf_id.
-	Books []Book `gorm:"foreignKey:ShelfID" json:"books,omitempty"`
+	Books2 []Book `gorm:"foreignKey:ShelfID;constraint:OnDelete:CASCADE" json:"books2,omitempty"`
 	// Back-relation: Page records that reference this via shelf_id.
-	Pages []Page `gorm:"foreignKey:ShelfID" json:"pages,omitempty"`
+	Pages []Page `gorm:"foreignKey:ShelfID;constraint:OnDelete:CASCADE" json:"pages,omitempty"`
 	// Back-relation: ShelfFeatured records that reference this via shelf_id.
 	ShelfFeatured []ShelfFeatured `gorm:"foreignKey:ShelfID;constraint:OnDelete:CASCADE" json:"shelffeatured,omitempty"`
 	// Back-relation: BookFiledUnder records that reference this via shelf_id.
@@ -58,11 +60,20 @@ type Book struct {
 	DeleteTime *time.Time `gorm:"column:delete_time;type:timestamptz;index:idx_books_delete_time" json:"delete_time,omitempty"`
 	// When the soft-deleted book goes for good.
 	ExpireTime *time.Time `gorm:"column:expire_time;type:timestamptz" json:"expire_time,omitempty"`
+	// The genre the book is shelved by: an optional reference to a resource deleted outright, which takes no action, so a delete refuses while a book names it.
+	PrimaryGenreID *string `gorm:"column:primary_genre;index:idx_books_primary_genre" json:"primary_genre,omitempty"`
+	PrimaryGenre   *Genre  `gorm:"foreignKey:PrimaryGenreID" json:"primarygenre,omitempty"`
+	// A genre the book was once classed under: an optional reference that says SET_NULL, so deleting the genre blanks it.
+	FormerGenreID *string `gorm:"column:former_genre;index:idx_books_former_genre" json:"former_genre,omitempty"`
+	FormerGenre   *Genre  `gorm:"foreignKey:FormerGenreID;constraint:OnDelete:SET NULL" json:"formergenre,omitempty"`
+	// The shelf the book goes back to: an optional reference to a soft-deleted resource, which keeps a purged shelf while a book names it.
+	ReturnsToID *string `gorm:"column:returns_to;index:idx_books_returns_to" json:"returns_to,omitempty"`
+	ReturnsTo   *Shelf  `gorm:"foreignKey:ReturnsToID" json:"returnsto,omitempty"`
 	// Parent reference to Shelf (from the AIP resource pattern).
 	ShelfID string `gorm:"column:shelf_id;not null;index:idx_books_shelf_id_id,priority:1" json:"shelf_id" validate:"required"`
 	Shelf   *Shelf `gorm:"foreignKey:ShelfID;constraint:OnDelete:CASCADE" json:"shelf,omitempty"`
 	// Back-relation: Page records that reference this via book_id.
-	Pages []Page `gorm:"foreignKey:BookID" json:"pages,omitempty"`
+	Pages []Page `gorm:"foreignKey:BookID;constraint:OnDelete:CASCADE" json:"pages,omitempty"`
 	// Back-relation: ShelfFeatured records that reference this via book_id.
 	ShelfFeatured []ShelfFeatured `gorm:"foreignKey:BookID" json:"shelffeatured,omitempty"`
 	// Back-relation: BookFiledUnder records that reference this via book_id.
@@ -81,6 +92,10 @@ type Genre struct {
 	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
 	// The genre as it is shown.
 	DisplayName string `gorm:"column:display_name;not null" json:"display_name" validate:"required"`
+	// Back-relation: Book records that reference this via primary_genre.
+	Books []Book `gorm:"foreignKey:PrimaryGenreID" json:"books,omitempty"`
+	// Back-relation: Book records that reference this via former_genre.
+	Books2 []Book `gorm:"foreignKey:FormerGenreID;constraint:OnDelete:SET NULL" json:"books2,omitempty"`
 	// Back-relation: BookGenres records that reference this via genre_id.
 	BookGenres []BookGenres `gorm:"foreignKey:GenreID" json:"bookgenres,omitempty"`
 }

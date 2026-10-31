@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package beta.v1;
+
+import "entity/v1/annotations.proto";
+import "google/api/resource.proto";
+import "google/protobuf/timestamp.proto";
+import "store/v1/annotations.proto";
+
+option (entity.v1.datasource) = {
+  database: "shared_db"
+  schema: "beta"
+};
+
+// Sample lands in table "samples" from both schemas.
+message Sample {
+  option (google.api.resource) = {
+    type: "beta.v1/Sample"
+    pattern: "samples/{sample}"
+  };
+  option (store.v1.table) = {
+    time_series: {time: "at"}
+  };
+
+  google.protobuf.Timestamp at = 1;
+  double value = 2;
+}
