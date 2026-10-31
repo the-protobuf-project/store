@@ -16,10 +16,10 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/the-protobuf-project/store/examples/search/gen/gorm/filterx"
-	"github.com/the-protobuf-project/store/examples/search/gen/pb/searchdemov1"
-	"github.com/the-protobuf-project/store/examples/search/gen/repository/repox"
-	"github.com/the-protobuf-project/store/examples/search/gen/repository/search/search"
+	"github.com/the-protobuf-project/store/examples/generated/go/gorm/search/filterx"
+	"github.com/the-protobuf-project/store/examples/generated/go/protobuf/search/searchdemov1"
+	"github.com/the-protobuf-project/store/examples/generated/go/repository/search/repox"
+	"github.com/the-protobuf-project/store/examples/generated/go/repository/search/search/search"
 )
 
 // window is an hour on day d starting at hour h.

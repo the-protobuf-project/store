@@ -14,6 +14,7 @@ import (
 	"github.com/the-protobuf-project/protokit/header"
 	"github.com/the-protobuf-project/protokit/schema"
 	"github.com/the-protobuf-project/store/plugin/factory/provenance"
+	"github.com/the-protobuf-project/store/plugin/factory/target/gopkg"
 )
 
 // fileHeader renders the banner for one generated file of schema s.
@@ -77,7 +78,7 @@ func gormFileView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 			imports["errors"] = "" // the Batch's idempotent purge, PurgeExpired
 		}
 		for _, cp := range r.CrossVOPkgs {
-			imports[dbGormModule(db)+"/"+db.Name+"/"+cp] = ""
+			imports[dbGormModule(db)+"/"+gopkg.Dir(db.Name)+"/"+cp] = ""
 		}
 	}
 	addPBImports(pb, s, imports)
@@ -163,6 +164,6 @@ func gormModelsQual(pb *pbIndex, s *schema.Schema, pkg string) string {
 // no-collision case still emits a bare import.
 func addGormModelsImport(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg string, imports map[string]string) string {
 	qual := gormModelsQual(pb, s, pkg)
-	imports[dbGormModule(db)+"/"+db.Name+"/"+pkg] = qual
+	imports[dbGormModule(db)+"/"+gopkg.Dir(db.Name)+"/"+pkg] = qual
 	return qual
 }

@@ -143,6 +143,16 @@ generates, just with the default column name or without the index. Step 4 of
 
 ---
 
+## Generated Go paths
+
+Generated Go directories and import paths never hold an underscore. A database
+`bookstore_db` now generates into `bookstoredb/` on the gorm, repository and
+opensearch targets, so `<go_module>/bookstore_db/inventory` becomes
+`<go_module>/bookstoredb/inventory`. Update your imports and delete the old
+directory: regenerating writes the new path but does not remove the old one.
+The database itself keeps its name in `(entity.v1.datasource)`, in prisma and sql
+output, and on the server.
+
 ## Verify
 
 Your protos keep generating throughout the migration: a compatibility reader

@@ -17,7 +17,7 @@ import "google/type/date.proto";
 import "google/type/interval.proto";
 import "store/v1/annotations.proto";
 
-option go_package = "github.com/the-protobuf-project/store/examples/search/gen/pb/searchdemov1;searchdemov1";
+option go_package = "github.com/the-protobuf-project/store/examples/generated/go/protobuf/search/searchdemov1;searchdemov1";
 option java_multiple_files = true;
 option java_outer_classname = "SearchProto";
 option java_package = "com.searchdemo.v1";

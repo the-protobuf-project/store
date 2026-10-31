@@ -10,7 +10,7 @@ package search_test
 import (
 	"testing"
 
-	"github.com/the-protobuf-project/store/examples/search/gen/gorm/search"
+	"github.com/the-protobuf-project/store/examples/generated/go/gorm/search/search"
 )
 
 func TestAutoMigrateProjection(t *testing.T) {

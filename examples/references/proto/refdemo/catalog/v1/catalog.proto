@@ -13,7 +13,7 @@ import "google/api/resource.proto";
 import "google/protobuf/timestamp.proto";
 import "store/v1/annotations.proto";
 
-option go_package = "github.com/the-protobuf-project/store/examples/references/gen/pb/catalogv1;catalogv1";
+option go_package = "github.com/the-protobuf-project/store/examples/generated/go/protobuf/references/catalogv1;catalogv1";
 option java_multiple_files = true;
 option java_outer_classname = "CatalogProto";
 option java_package = "com.refdemo.catalog.v1";

@@ -18,7 +18,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/the-protobuf-project/store/examples/references/gen/repository/repox"
+	"github.com/the-protobuf-project/store/examples/generated/go/repository/references/repox"
 	"github.com/the-protobuf-project/store/plugin/pb/storepbv1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"

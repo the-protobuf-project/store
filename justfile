@@ -64,17 +64,27 @@ update-goldens:
     go test ./plugin/factory/wire -run TestGolden -update
     go test ./...
 
-# Regenerate examples/ with the freshly-built ./bin plugin (not a global one).
+# Regenerate every example under examples/generated/, laid out as
+# <language>/<feature>/<example>, with the freshly-built ./bin plugin (not a
+# global one).
 examples: build
     PATH="{{bin}}:$PATH" buf generate --template buf.gen.example.yaml
+    PATH="{{bin}}:$PATH" buf generate --template buf.gen.sensors.yaml
+    PATH="{{bin}}:$PATH" buf generate --template buf.gen.search.yaml
+    PATH="{{bin}}:$PATH" buf generate --template buf.gen.references.yaml
     @echo "examples regenerated with $(./bin/protoc-gen-store --version)"
 
-# Regenerate examples/references (the reference-integrity example) with the
+# Regenerate the sensors example (the Rust InfluxDB 3 / Arrow client) with the
+# freshly-built ./bin plugin.
+sensors: build
+    PATH="{{bin}}:$PATH" buf generate --template buf.gen.sensors.yaml
+
+# Regenerate the references example (reference integrity) with the
 # freshly-built ./bin plugin.
 references: build
     PATH="{{bin}}:$PATH" buf generate --template buf.gen.references.yaml
 
-# Regenerate examples/search (projections searched on Postgres and
+# Regenerate the search example (projections searched on Postgres and
 # OpenSearch) with the freshly-built ./bin plugin.
 search: build
     PATH="{{bin}}:$PATH" buf generate --template buf.gen.search.yaml
@@ -92,6 +102,18 @@ test-references:
 # Build the examples module to confirm the generated GORM structs compile.
 build-examples:
     cd examples && go build ./...
+
+# Run the sensors example: the generated Rust client against Arrow captures,
+# and against InfluxDB 3 too when INFLUX_HOST / INFLUX_TOKEN / INFLUX_DATABASE
+# are set.
+test-sensors:
+    cd examples/sensors && cargo test
+
+# Run every example against the generated code: the Go examples (the search
+# and references tests skip without STORE_TEST_POSTGRES_DSN and
+# STORE_TEST_OPENSEARCH_URL) and the Rust sensors example.
+test-examples: build-examples test-sensors
+    cd examples && go test -count=1 ./...
 
 # Regenerate every committed artifact: stubs, goldens, examples.
 regen: stubs update-goldens examples

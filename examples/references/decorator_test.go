@@ -12,7 +12,7 @@ import (
 
 	"gorm.io/gorm"
 
-	"github.com/the-protobuf-project/store/examples/references/gen/gorm/catalog/catalog"
+	"github.com/the-protobuf-project/store/examples/generated/go/gorm/references/catalog/catalog"
 )
 
 // countingShelves counts the reads by id it serves.

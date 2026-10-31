@@ -19,6 +19,7 @@ import (
 	"github.com/the-protobuf-project/store/plugin/factory/facets"
 	"github.com/the-protobuf-project/store/plugin/factory/provenance"
 	"github.com/the-protobuf-project/store/plugin/factory/target/externalfk"
+	"github.com/the-protobuf-project/store/plugin/factory/target/gopkg"
 	"github.com/the-protobuf-project/store/plugin/factory/target/nooverlap"
 	"github.com/the-protobuf-project/store/plugin/factory/target/searchindex"
 )
@@ -58,7 +59,7 @@ func aggregateView(db *schema.Database, fx facets.Set) map[string]any {
 			// no tables never leaves an unused import in the generated file.
 			if !seen[pkg] {
 				seen[pkg] = true
-				path := dbGoModule(db) + "/" + db.Name + "/" + pkg
+				path := dbGoModule(db) + "/" + gopkg.Dir(db.Name) + "/" + pkg
 				imports = append(imports, importView{
 					Alias: importAlias(pkg, path),
 					Path:  path,

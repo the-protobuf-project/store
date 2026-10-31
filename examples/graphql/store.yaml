@@ -20,4 +20,4 @@ generate:
   - target: graphql
     source: graphql
     package: bookstoreql
-    go_module: github.com/the-protobuf-project/store/examples/generated/graphql/bookstoreql
+    go_module: github.com/the-protobuf-project/store/examples/generated/go/graphql/bookstore/bookstoreql

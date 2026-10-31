@@ -5,7 +5,7 @@ syntax = "proto3";
 //
 // Reading covers every scalar a point can store, with a Timestamp time and two
 // tags; Heartbeat an int64 time and no tags. Device declares no time series, so
-// it appears in the sql output and not the rust output.
+// it appears in the sql output and not the influxdb output.
 package telemetry.v1;
 
 import "entity/v1/annotations.proto";

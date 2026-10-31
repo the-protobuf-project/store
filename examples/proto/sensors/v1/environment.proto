@@ -4,7 +4,7 @@
 syntax = "proto3";
 
 // Package sensors.v1 is a fleet of field sensors reporting time series: the
-// messages the rust target renders as InfluxDB 3 and Arrow capture stores.
+// messages the influxdb target renders as InfluxDB 3 and Arrow capture stores.
 //
 // This file holds the environment schema: what the sensors measure. Its
 // sibling device.proto holds the fleet schema: how the sensors themselves are

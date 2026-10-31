@@ -16,6 +16,7 @@ import (
 
 	"github.com/the-protobuf-project/store/plugin/factory/facets"
 	"github.com/the-protobuf-project/store/plugin/factory/provenance"
+	"github.com/the-protobuf-project/store/plugin/factory/target/gopkg"
 	"github.com/the-protobuf-project/store/plugin/factory/target/searchindex"
 	"github.com/the-protobuf-project/store/plugin/factory/target/types"
 	"github.com/the-protobuf-project/store/telemetry"
@@ -97,7 +98,7 @@ func packageView(db *schema.Database, s *schema.Schema, pkg string, typeOf types
 				typ := loc(col.FKModel)
 				if bt.CrossPkg != "" {
 					typ = bt.CrossPkg + "." + bt.Target.LocalName
-					assocImports[dbGoModule(db)+"/"+db.Name+"/"+bt.CrossPkg] = true
+					assocImports[dbGoModule(db)+"/"+gopkg.Dir(db.Name)+"/"+bt.CrossPkg] = true
 				}
 				jsonName := strings.ToLower(bt.Field)
 				if jsonName == col.Name {

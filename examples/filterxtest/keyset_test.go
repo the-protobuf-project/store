@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/the-protobuf-project/store/examples/generated/gorm/bookstore_db/bookstorev1"
-	"github.com/the-protobuf-project/store/examples/generated/gorm/filterx"
+	"github.com/the-protobuf-project/store/examples/generated/go/gorm/bookstore/bookstore_db/bookstorev1"
+	"github.com/the-protobuf-project/store/examples/generated/go/gorm/bookstore/filterx"
 )
 
 // engine builds a gorm engine over the Book spec, whose sort surface covers a

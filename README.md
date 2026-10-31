@@ -24,7 +24,7 @@
 - [Output layout](#output-layout)
 - [GraphQL client SDK](#graphql-client-sdk)
 - [Projections and search](#projections-and-search)
-- [Time series in Rust (`target=rust`)](#time-series-in-rust-targetrust)
+- [Time series in Rust (`lang=rust target=influxdb`)](#time-series-in-rust-langrust-targetinfluxdb)
 - [Reference integrity](#reference-integrity)
 - [Annotations reference](#annotations-reference)
 - [Configuration — `store.yaml`](#configuration--ormyaml)
@@ -59,7 +59,7 @@ Both run through the same binary on `buf generate`, selected per output by a
 | proto | **prisma** | A complete, runnable Prisma 7 project — multi-file schema, `package.json`, `tsconfig.json`, config, and a `.env.example` to copy to `.env`. |
 | proto | **gorm** | Go structs with GORM tags + a migration registry; optional [CRUD stores + first-party telemetry](#gorm-stores-and-tracing), [AIP-160 filter / AIP-132 order_by list engines for **SQL and Hasura GraphQL**](#aip-160-filters-and-list-engines-sql--hasura), and [proto ↔ model converters](#proto--model-converters). |
 | proto | **sql** | PostgreSQL DDL — per-schema reference files **and** one transactional, **idempotent** `migrate.sql`; FK constraints, indexes, `updated_at` triggers, `COMMENT ON`. |
-| proto | **rust** | A Rust [time-series client](#time-series-in-rust-targetrust) laid out like gorm's output: per database a module that selects the **InfluxDB 3** database or **Arrow IPC** captures, per `time_series` message a model and a typed store (writes, tag filters, windows, latest, aggregates). |
+| proto | **influxdb** (Rust) | A Rust [time-series client](#time-series-in-rust-langrust-targetinfluxdb) laid out like gorm's output: per database a module that selects the **InfluxDB 3** database or **Arrow IPC** captures, per `time_series` message a model and a typed store (writes, tag filters, windows, latest, aggregates). |
 | graphql | **graphql** | A typed Go GraphQL client — row models, a fluent predicate DSL, CRUD/subscription methods (see [GraphQL client SDK](#graphql-client-sdk)). |
 
 Each database target also emits a `README.md` with a Mermaid ER diagram and a
@@ -332,14 +332,14 @@ generated/prisma/bookstore_db/
 ├── bookstore_v1/bookstore.postgres.prisma # models & enums, one file per source proto
 └── inventory/inventory.postgres.prisma    # (a second file, merged datasource)
 
-generated/gorm/bookstore_db/bookstorev1/models.go        # package = folder name
-generated/gorm/bookstore_db/bookstorev1/author_store.go  # typed CRUD store (stores opt)
-generated/gorm/bookstore_db/bookstorev1/filters.go       # AIP-160/132 filter & sort specs (filters opt)
-generated/gorm/bookstore_db/bookstorev1/protobuf.go      # proto ↔ model converters (converters opt)
+generated/go/gorm/bookstore/bookstoredb/bookstorev1/models.go        # package = folder name
+generated/go/gorm/bookstore/bookstoredb/bookstorev1/author_store.go  # typed CRUD store (stores opt)
+generated/go/gorm/bookstore/bookstoredb/bookstorev1/filters.go       # AIP-160/132 filter & sort specs (filters opt)
+generated/go/gorm/bookstore/bookstoredb/bookstorev1/protobuf.go      # proto ↔ model converters (converters opt)
 generated/gorm/gormx/gormx.go                       # shared runtime: ListOptions, Store[M], engine (stores opt)
 generated/gorm/filterx/                             # shared filter/order/list engines: SQL + Hasura (filters opt)
-generated/gorm/bookstore_db/migrate.go              # factory Registry + EnsureSchemas + Instrument (needs go_module)
-generated/gorm/bookstore_db/README.md               # ER diagram + model reference
+generated/go/gorm/bookstore/bookstoredb/migrate.go              # factory Registry + EnsureSchemas + Instrument (needs go_module)
+generated/go/gorm/bookstore/bookstoredb/README.md               # ER diagram + model reference
 generated/sql/bookstore_db/migrate.sql              # whole DB, one transactional file
 generated/sql/bookstore_db/bookstore_v1.postgres.sql
 generated/sql/bookstore_db/README.md
@@ -1114,11 +1114,11 @@ is gone, and drops the old index.
 The example in [`examples/search`](examples/search) runs all of this against
 Postgres and OpenSearch (`just search`, `just test-search`).
 
-## Time series in Rust (`target=rust`)
+## Time series in Rust (`lang=rust target=influxdb`)
 
 A message that declares `(store.v1.table).time_series` is a **measurement**: a
 stream of points identified by their tags and time, not rows identified by a key.
-The `rust` target renders every measurement as a Rust client for
+The `influxdb` target, `lang=rust`, renders every measurement as a Rust client for
 [tpp-database](https://github.com/the-protobuf-project/runtime-rs) (the
 `database` crate of runtime-rs, pulled from its `main` branch), whose backends are
 **InfluxDB 3** and **Arrow IPC captures**. Messages without `time_series` render
@@ -1147,7 +1147,8 @@ message ClimateReading {
   out: gen/rust
   strategy: all
   opt:
-    - target=rust
+    - lang=rust
+    - target=influxdb
     - crate=sensors   # the Cargo package name; default "generated"
 ```
 
@@ -1212,6 +1213,12 @@ let per_minute = climate
 proto enum becomes a Rust `enum` with `TryFrom<i32>`, while the field keeps the
 `i32`, as prost does. `provision_influx` creates the database with a retention.
 
+For sustained ingest, wrap the database in `buffered`: each `create` queues into
+a background batch writer (5,000 points a batch, 8 in flight), about 32,000
+points/s against a local InfluxDB 3 Core where an awaited `create` manages about
+one, since each durable write waits for the WAL. Queued points are in memory until
+flushed, so `db.close().await?` before exit.
+
 | Proto | Rust | `Kind` |
 | --- | --- | --- |
 | `string` | `String` | `String` |
@@ -1232,8 +1239,9 @@ and `oneof` fields, `bytes` and the remaining well-known types, and a field that
 becomes a child table. Mark such a field `(entity.v1.column).skip` to leave it out
 everywhere.
 
-[`examples/generated/rust`](examples/generated/rust) is the client generated from
-[`examples/proto/sensors`](examples/proto/sensors). To build against a local
+[`examples/generated/rust/influxdb/sensors`](examples/generated/rust/influxdb/sensors) is the client generated from
+[`examples/proto/sensors`](examples/proto/sensors), and
+[`examples/sensors`](examples/sensors) runs it (`just test-sensors`). To build against a local
 runtime-rs checkout, redirect the dependency from your workspace rather than
 editing generated output:
 
@@ -1446,7 +1454,7 @@ and queried, which no other plugin needs to agree with.
 | --- | --- |
 | `outbox` | Emit a companion `<table>_outbox` table — id, `aggregate_id`, `event_type`, `payload`, `created_at`, `published_at` — so a change event can be written in the same transaction as the row it describes. The table only: draining it belongs to a streams generator. Off by default. |
 | `no_overlap` | Forbid two rows that share `key` from covering overlapping time, as a PostgreSQL exclusion constraint: `EXCLUDE USING gist (key WITH =, tstzrange(start, end, '[)') WITH &&)`. `start` and `end` name `google.protobuf.Timestamp` fields, and ranges are half-open, so back-to-back rows don't overlap. The SQL target writes the constraint, and the gorm `Registry.Migrate` adds it after AutoMigrate (with `btree_gist` installed by `EnsureSchemas`). A write that would overlap fails with SQLSTATE 23P01, which the repositories report as `repox.ErrConflict`. Beside it, a `BEFORE INSERT OR UPDATE` trigger takes a transaction-scoped advisory lock on the row's key, so concurrent writers of one key take turns instead of deadlocking (exclusion constraints check against uncommitted rows, so two conflicting inserts can each wait on the other). A misspelt field or a non-Timestamp bound fails generation. |
-| `time_series` | Make the message a measurement for the [`rust` target](#time-series-in-rust-targetrust): `time` names the `google.protobuf.Timestamp` (or `int64` epoch-nanosecond) field holding each point's time, `tags` the `string` fields forming its series identity; every other field is a stored value. Only messages declaring it are rendered by `rust`; the other targets ignore it. A misspelt field, a non-string tag, or a field a point cannot hold fails generation. |
+| `time_series` | Make the message a measurement for the [`influxdb` target](#time-series-in-rust-langrust-targetinfluxdb): `time` names the `google.protobuf.Timestamp` (or `int64` epoch-nanosecond) field holding each point's time, `tags` the `string` fields forming its series identity; every other field is a stored value. Only messages declaring it are rendered by `influxdb`; the other targets ignore it. A misspelt field, a non-string tag, or a field a point cannot hold fails generation. |
 
 ### `(store.v1.query)` — field level
 
@@ -1668,7 +1676,7 @@ Passed via `opt:` in `buf.gen.yaml`.
 
 | Option | Description |
 | --- | --- |
-| `target` | What to emit: `prisma` \| `gorm` \| `sql` \| `repository` \| `opensearch` \| `rust` \| `graphql`. Required. (`graphql` reads its endpoint from `store.yaml`'s [`graphql`](#top-level-keys) block — see [GraphQL client SDK](#graphql-client-sdk).) |
+| `target` | What to emit: `prisma` \| `gorm` \| `sql` \| `repository` \| `opensearch` \| `influxdb` \| `graphql`. Required. (`graphql` reads its endpoint from `store.yaml`'s [`graphql`](#top-level-keys) block — see [GraphQL client SDK](#graphql-client-sdk).) |
 | `go_module` | **gorm only.** Go import path of the output directory (e.g. `github.com/me/gen`). Enables the `migrate.go` factory registry, whose package imports each per-schema models package. Omit it and the per-schema model packages still generate, just without the aggregator. |
 | `stores` | **gorm only.** Also emit a typed CRUD store per resource — one `<model>_store.go` file each (see [GORM stores](#gorm-stores-and-tracing)). Off by default; turning it on adds a `gorm.io/gorm` dependency to each models package. |
 | `filters` | **gorm only.** Emit AIP-160 filter / AIP-132 order_by specs per schema (`filters.go`) plus the shared `filterx` engine package serving both **SQL (GORM)** and **Hasura DDN GraphQL** (see [filters and list engines](#aip-160-filters-and-list-engines-sql--hasura)). Off by default; requires `go_module`. The Hasura engine adds a `github.com/the-protobuf-project/runtime-go` dependency. With `telemetry`, also emits a [telemetry](https://github.com/the-protobuf-project/telemetry) `Observer` adapter (`filterx.TelemetryObserver`) for the list engines' spans and debug events. |
@@ -1679,7 +1687,8 @@ Passed via `opt:` in `buf.gen.yaml`.
 | `license_header` | Copyright/licence lines to place above the banner of every generated file — `\n`-separated, e.g. `license_header=Copyright 2026 Me.\nSPDX-License-Identifier: Apache-2.0`. Write them **without** comment markers: each target applies its own (`//` for Go, Prisma and TypeScript, `--` for SQL), so one value covers the whole output tree. Unset (the default) stamps nothing, because generated code belongs to whoever ran the generator, not to this plugin. |
 | `gorm_module` / `graphql_module` | **repository** (and `gorm_module` for **opensearch**): import paths of the generated gorm output and GraphQL client. |
 | `graphql_root_field_prefix` | **repository**: the DDN subgraph's `graphqlRootFieldPrefix` (the graphql target's `root_field_prefix`), carried by the root fields the DDN reference plugin's config names. Default none. |
-| `crate` | **rust only.** The Cargo package name of the output crate (default `generated`). |
+| `lang` | Language to emit, among those the target supports: `influxdb` emits `rust`, the rest `go`. Unset is the target's own; an unsupported pair fails. |
+| `crate` | **influxdb, `lang=rust`.** The Cargo package name of the output crate (default `generated`). |
 | `repository_module` | **opensearch only.** Import path of the generated repository output whose projections the indices copy. |
 | `references` | Comma-separated descriptor images for reference discovery, added to `store.yaml`'s [`references`](#top-level-keys). |
 | `M<proto>=<import>` | Go import-path mapping for a proto file, required when protos omit `option go_package`. |
@@ -1842,22 +1851,26 @@ Nullable columns become pointer (`*T`) / optional (`T?`) types.
 
 ## Examples
 
-The [`examples/`](examples/) directory is a complete, generated demo — a
-`bookstore` domain rendered to store's three database targets:
+All generated output lives under [`examples/generated/`](examples/generated),
+organized as `<language>/<target>/<example>`, so one target's output is one
+folder. See [`examples/README.md`](examples/README.md) for the full index.
 
 ```text
-examples/proto/bookstore/v1/   # annotated source protos
-examples/generated/prisma/     # ─┐
-examples/generated/gorm/       #  ├─ regenerated output, one tree per target
-examples/generated/sql/        # ─┘
-examples/generated/rust/       # the time-series client for examples/proto/sensors
+examples/generated/
+  go/gorm/          bookstore  search  references
+  go/graphql/       bookstore
+  go/repository/    search  references
+  go/opensearch/    search
+  go/protobuf/      search  references
+  rust/influxdb/    sensors     # InfluxDB 3 + Arrow captures
+  sql/              bookstore  search  references
+  typescript/prisma/ bookstore
 ```
 
-Regenerate it with:
-
-```bash
-buf generate --template buf.gen.example.yaml
-```
+Regenerate all of it with `just examples`, and run it with `just test-examples`
+(the Go search and references tests skip without `STORE_TEST_POSTGRES_DSN` and
+`STORE_TEST_OPENSEARCH_URL`). Generated Go paths never hold an underscore: a
+database `bookstore_db` generates into `bookstoredb/`.
 
 ## Building from source
 

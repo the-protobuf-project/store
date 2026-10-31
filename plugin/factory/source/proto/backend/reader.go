@@ -60,7 +60,7 @@ type Reader struct {
 	graphqlRootFieldPrefix string
 	// repositoryModule is the opensearch target's repository_module opt.
 	repositoryModule string
-	// rustCrate is the rust target's crate opt.
+	// rustCrate is the influxdb target's crate opt.
 	rustCrate string
 }
 
@@ -99,7 +99,7 @@ func (r Reader) WithSearchModules(repositoryModule string) Reader {
 	return r
 }
 
-// WithRustCrate returns a copy of r carrying the rust target's crate name (the
+// WithRustCrate returns a copy of r carrying the influxdb target's crate name (the
 // crate plugin opt).
 func (r Reader) WithRustCrate(name string) Reader {
 	r.rustCrate = name

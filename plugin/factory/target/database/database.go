@@ -26,8 +26,14 @@ func Wrap(inner schema.Target) *Target { return &Target{inner: inner} }
 // Name returns the wrapped target's name (e.g. "gorm").
 func (t *Target) Name() string { return t.inner.Name() }
 
-// Languages: the DB targets emit Go (structs/DDL/Prisma project files) today.
-func (t *Target) Languages() []string { return []string{"go"} }
+// Languages are the wrapped target's own when it declares them. The rest emit
+// Go (structs/DDL/Prisma project files).
+func (t *Target) Languages() []string {
+	if l, ok := t.inner.(interface{ Languages() []string }); ok {
+		return l.Languages()
+	}
+	return []string{"go"}
+}
 
 // Generate renders the DB facet through the wrapped protokit target. It needs the
 // protoc plugin context, so it is only usable in plugin mode.

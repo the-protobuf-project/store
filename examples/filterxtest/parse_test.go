@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/the-protobuf-project/store/examples/generated/gorm/bookstore_db/bookstorev1"
-	"github.com/the-protobuf-project/store/examples/generated/gorm/filterx"
+	"github.com/the-protobuf-project/store/examples/generated/go/gorm/bookstore/bookstore_db/bookstorev1"
+	"github.com/the-protobuf-project/store/examples/generated/go/gorm/bookstore/filterx"
 )
 
 // show renders conditions compactly: leaves as field<op>value, composites as

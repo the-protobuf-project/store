@@ -15,7 +15,7 @@ import "google/api/resource.proto";
 import "google/protobuf/timestamp.proto";
 import "store/v1/annotations.proto";
 
-option go_package = "github.com/the-protobuf-project/store/examples/references/gen/pb/lendingv1;lendingv1";
+option go_package = "github.com/the-protobuf-project/store/examples/generated/go/protobuf/references/lendingv1;lendingv1";
 option java_multiple_files = true;
 option java_outer_classname = "LendingProto";
 option java_package = "com.refdemo.lending.v1";

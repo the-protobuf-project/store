@@ -11,6 +11,7 @@ package repository
 
 import (
 	"fmt"
+	"github.com/the-protobuf-project/store/plugin/factory/target/gopkg"
 	"slices"
 	"strings"
 
@@ -122,7 +123,7 @@ func projectionViews(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg str
 		if gormQual == pbName {
 			gormQual = pkg + "gorm"
 		}
-		imports[dbGormModule(db)+"/"+db.Name+"/"+pkg] = gormQual
+		imports[dbGormModule(db)+"/"+gopkg.Dir(db.Name)+"/"+pkg] = gormQual
 		v := projectionView{
 			Header:     fileHeader(db, s, "Projection "+t.LocalName+": the table spec the repox projection runtime maintains and searches."),
 			Package:    pkg,

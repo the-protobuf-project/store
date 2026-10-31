@@ -15,6 +15,10 @@
 package wire
 
 import (
+	"fmt"
+	"slices"
+	"strings"
+
 	"github.com/the-protobuf-project/protokit"
 	"github.com/the-protobuf-project/protokit/factory"
 	"github.com/the-protobuf-project/protokit/schema"
@@ -22,10 +26,10 @@ import (
 	"github.com/the-protobuf-project/store/plugin/factory/source/proto"
 	"github.com/the-protobuf-project/store/plugin/factory/target/database"
 	"github.com/the-protobuf-project/store/plugin/factory/target/gorm"
+	"github.com/the-protobuf-project/store/plugin/factory/target/influxdb"
 	"github.com/the-protobuf-project/store/plugin/factory/target/opensearch"
 	"github.com/the-protobuf-project/store/plugin/factory/target/prisma"
 	"github.com/the-protobuf-project/store/plugin/factory/target/repository"
-	"github.com/the-protobuf-project/store/plugin/factory/target/rust"
 	"github.com/the-protobuf-project/store/plugin/factory/target/sql"
 )
 
@@ -41,8 +45,22 @@ func ProtoTargets() map[string]schema.Target {
 		"prisma":     &prisma.Generator{},
 		"repository": &repository.Generator{},
 		"opensearch": &opensearch.Generator{},
-		"rust":       &rust.Generator{},
+		"influxdb":   &influxdb.Generator{},
 	}
+}
+
+// Language resolves the lang opt against a target: an unset lang is the target's
+// first language, and one the target does not emit is an error rather than a
+// silently different output.
+func Language(t factory.Target[*coreir.Model], lang string) (string, error) {
+	supported := t.Languages()
+	if lang == "" {
+		return supported[0], nil
+	}
+	if !slices.Contains(supported, lang) {
+		return "", fmt.Errorf("target %q does not support lang %q (supports: %s)", t.Name(), lang, strings.Join(supported, ", "))
+	}
+	return lang, nil
 }
 
 // Plugin assembles what this binary contributes to one protokit run: the proto

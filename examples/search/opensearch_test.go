@@ -27,11 +27,11 @@ import (
 
 	"github.com/oh-tarnished/opensearch-go-sdk/opensearch"
 
-	"github.com/the-protobuf-project/store/examples/search/gen/gorm/filterx"
-	"github.com/the-protobuf-project/store/examples/search/gen/opensearch/osx"
-	"github.com/the-protobuf-project/store/examples/search/gen/opensearch/search/search"
-	"github.com/the-protobuf-project/store/examples/search/gen/pb/searchdemov1"
-	"github.com/the-protobuf-project/store/examples/search/gen/repository/repox"
+	"github.com/the-protobuf-project/store/examples/generated/go/gorm/search/filterx"
+	"github.com/the-protobuf-project/store/examples/generated/go/opensearch/search/osx"
+	"github.com/the-protobuf-project/store/examples/generated/go/opensearch/search/search/search"
+	"github.com/the-protobuf-project/store/examples/generated/go/protobuf/search/searchdemov1"
+	"github.com/the-protobuf-project/store/examples/generated/go/repository/search/repox"
 )
 
 // testIndex is RoomDayIndex under an alias of its own, dropped when the test

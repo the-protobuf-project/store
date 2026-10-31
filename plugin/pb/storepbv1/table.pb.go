@@ -71,7 +71,7 @@ type TableOptions struct {
 	NoOverlap []*NoOverlap `protobuf:"bytes,2,rep,name=no_overlap,json=noOverlap,proto3" json:"no_overlap,omitempty"`
 	// time_series makes this message a measurement: a stream of points, each
 	// identified by its tag set and its time, rather than a row identified by a
-	// key. It is what the rust target renders — InfluxDB 3 and Arrow IPC
+	// key. It is what the influxdb target renders — InfluxDB 3 and Arrow IPC
 	// captures through the tpp-database runtime — and only messages declaring it
 	// are rendered there.
 	//

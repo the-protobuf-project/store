@@ -34,6 +34,7 @@ import (
 	"github.com/the-protobuf-project/protokit/templates"
 	"github.com/the-protobuf-project/store/plugin/factory/facets"
 	"github.com/the-protobuf-project/store/plugin/factory/provenance"
+	"github.com/the-protobuf-project/store/plugin/factory/target/gopkg"
 	"github.com/the-protobuf-project/store/plugin/factory/target/repository"
 	"github.com/the-protobuf-project/store/plugin/pb/storepbv1"
 )
@@ -124,7 +125,7 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 			emitted = true
 		}
 		for _, v := range views {
-			name := fmt.Sprintf("%s/%s/%s_index.go", db.Name, v.Package, naming.SnakeCase(v.Model))
+			name := fmt.Sprintf("%s/%s/%s_index.go", gopkg.Dir(db.Name), v.Package, naming.SnakeCase(v.Model))
 			if err := renderGo(p.NewGeneratedFile(name, ""), "index.go.tpl", v); err != nil {
 				return fmt.Errorf("opensearch: %s: %w", name, err)
 			}
@@ -135,7 +136,7 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 
 func viewOf(db *schema.Database, s *schema.Schema, t *schema.Table, proj *facets.Projection, fx facets.Set) (indexView, error) {
 	pkg := naming.GoPackage(s.Name)
-	repoPath := db.Opt("repository_module") + "/" + db.Name + "/" + pkg
+	repoPath := db.Opt("repository_module") + "/" + gopkg.Dir(db.Name) + "/" + pkg
 	alias := proj.Options.GetSearchIndex()
 	if alias == "" {
 		alias = s.Name + "_" + t.Name
