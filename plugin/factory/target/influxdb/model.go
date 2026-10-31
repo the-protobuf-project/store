@@ -117,7 +117,7 @@ func modelOf(t *schema.Table, ts *storepbv1.TimeSeries) (*modelView, error) {
 	if ts.GetTime() == "" || timeCol == nil {
 		return nil, fail("time_series.time %q names no field of the message", ts.GetTime())
 	}
-	if !isTimestamp(timeCol) && !(timeCol.Type == schema.TypeInt64 && timeCol.Source.Kind() != protoreflect.MessageKind) {
+	if !isTimestamp(timeCol) && (timeCol.Type != schema.TypeInt64 || timeCol.Source.Kind() == protoreflect.MessageKind) {
 		return nil, fail("time_series.time %q must be a google.protobuf.Timestamp or an int64 of epoch nanoseconds", ts.GetTime())
 	}
 	tags := map[protoreflect.Name]bool{}

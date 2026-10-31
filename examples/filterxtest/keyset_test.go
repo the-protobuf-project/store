@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/the-protobuf-project/store/examples/generated/go/gorm/bookstore/bookstore_db/bookstorev1"
+	"github.com/the-protobuf-project/store/examples/generated/go/gorm/bookstore/bookstoredb/bookstorev1"
 	"github.com/the-protobuf-project/store/examples/generated/go/gorm/bookstore/filterx"
 )
 
