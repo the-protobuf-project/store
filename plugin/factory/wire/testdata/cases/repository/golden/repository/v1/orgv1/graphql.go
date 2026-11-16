@@ -723,13 +723,25 @@ func (r *GraphQLMemberRepository) Delete(ctx context.Context, name string) error
 	return r.remove(ctx, id)
 }
 
-// remove deletes row id with the value-object rows it owns.
+// remove deletes row id with the value-object rows it owns. The
+// precondition, if any (repox.IfMatch), guards the delete itself: a row with
+// another etag is left as it is, and repox.ErrConflict returned.
 func (r *GraphQLMemberRepository) remove(ctx context.Context, id string) error {
-	resp, err := r.Svc.Mutation.OrgV1.Members.Delete(ctx, id)
-	if err != nil {
+	var req []*membersql.DeleteRequest
+	etag := repox.IfMatchOf(ctx)
+	if etag != "" {
+		req = append(req, membersql.Delete().PreCheck(membersql.Etag.Eq(etag)))
+	}
+	resp, err := r.Svc.Mutation.OrgV1.Members.Delete(ctx, id, req...)
+	if err != nil && !(etag != "" && errors.Is(err, graphql.ErrConflict)) {
 		return mapGraphQLErr(err)
 	}
-	if resp.AffectedRows == 0 {
+	if err != nil || resp.AffectedRows == 0 {
+		if etag != "" {
+			if _, gerr := r.get(ctx, id); gerr == nil {
+				return repox.ErrConflict
+			}
+		}
 		return repox.ErrNotFound
 	}
 	for i := range resp.Returning {
@@ -1312,13 +1324,25 @@ func (r *GraphQLOrganisationRepository) Delete(ctx context.Context, name string)
 	return r.remove(ctx, id)
 }
 
-// remove deletes row id with the value-object rows it owns.
+// remove deletes row id with the value-object rows it owns. The
+// precondition, if any (repox.IfMatch), guards the delete itself: a row with
+// another etag is left as it is, and repox.ErrConflict returned.
 func (r *GraphQLOrganisationRepository) remove(ctx context.Context, id string) error {
-	resp, err := r.Svc.Mutation.OrgV1.Organisations.Delete(ctx, id)
-	if err != nil {
+	var req []*organisationsql.DeleteRequest
+	etag := repox.IfMatchOf(ctx)
+	if etag != "" {
+		req = append(req, organisationsql.Delete().PreCheck(organisationsql.Etag.Eq(etag)))
+	}
+	resp, err := r.Svc.Mutation.OrgV1.Organisations.Delete(ctx, id, req...)
+	if err != nil && !(etag != "" && errors.Is(err, graphql.ErrConflict)) {
 		return mapGraphQLErr(err)
 	}
-	if resp.AffectedRows == 0 {
+	if err != nil || resp.AffectedRows == 0 {
+		if etag != "" {
+			if _, gerr := r.get(ctx, id); gerr == nil {
+				return repox.ErrConflict
+			}
+		}
 		return repox.ErrNotFound
 	}
 	for i := range resp.Returning {
@@ -1728,13 +1752,25 @@ func (r *GraphQLUserRepository) Delete(ctx context.Context, name string) error {
 	return r.remove(ctx, id)
 }
 
-// remove deletes row id with the value-object rows it owns.
+// remove deletes row id with the value-object rows it owns. The
+// precondition, if any (repox.IfMatch), guards the delete itself: a row with
+// another etag is left as it is, and repox.ErrConflict returned.
 func (r *GraphQLUserRepository) remove(ctx context.Context, id string) error {
-	resp, err := r.Svc.Mutation.OrgV1.Users.Delete(ctx, id)
-	if err != nil {
+	var req []*usersql.DeleteRequest
+	etag := repox.IfMatchOf(ctx)
+	if etag != "" {
+		req = append(req, usersql.Delete().PreCheck(usersql.Etag.Eq(etag)))
+	}
+	resp, err := r.Svc.Mutation.OrgV1.Users.Delete(ctx, id, req...)
+	if err != nil && !(etag != "" && errors.Is(err, graphql.ErrConflict)) {
 		return mapGraphQLErr(err)
 	}
-	if resp.AffectedRows == 0 {
+	if err != nil || resp.AffectedRows == 0 {
+		if etag != "" {
+			if _, gerr := r.get(ctx, id); gerr == nil {
+				return repox.ErrConflict
+			}
+		}
 		return repox.ErrNotFound
 	}
 	return nil

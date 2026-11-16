@@ -11,7 +11,7 @@
 //
 // Selects the sensors_db database on InfluxDB 3 or Arrow captures.
 // annotations: entity.v1 dev, store.v1 dev
-// engine:      protokit v1.3.8
+// engine:      protokit v1.4.0
 // runtime:     tpp-database
 //
 // store — https://github.com/the-protobuf-project/store

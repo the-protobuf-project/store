@@ -470,8 +470,19 @@ func (r *GraphQLLoanRepository) Delete(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := r.Svc.Mutation.Lending.Loans.UpdateIfMatch(ctx, id, r.deletePatch(), loansql.DeleteTime.IsNull(true)); err != nil {
+	var match graphql.Predicate = loansql.DeleteTime.IsNull(true)
+	// The precondition, if any (repox.IfMatch), guards the same write.
+	etag := repox.IfMatchOf(ctx)
+	if etag != "" {
+		match = graphql.And(match, loansql.Etag.Eq(etag))
+	}
+	if _, err := r.Svc.Mutation.Lending.Loans.UpdateIfMatch(ctx, id, r.deletePatch(), match); err != nil {
 		if errors.Is(err, graphql.ErrConflict) {
+			if etag != "" {
+				if cur, err := r.get(ctx, id); err == nil && cur.GetDeleteTime() == nil {
+					return repox.ErrConflict
+				}
+			}
 			return repox.ErrNotFound
 		}
 		return mapGraphQLErr(err)
@@ -501,12 +512,21 @@ func (r *GraphQLLoanRepository) Undelete(ctx context.Context, name string) (*ref
 	patch := loansql.UpdateInput{DeleteTime: graphql.Null[string]()}
 	patch.ExpireTime = graphql.Null[string]()
 	patch.Etag = graphql.Value(repox.NewULID())
-	if _, err := r.Svc.Mutation.Lending.Loans.UpdateIfMatch(ctx, id, patch, loansql.DeleteTime.IsNull(false)); err != nil {
+	var match graphql.Predicate = loansql.DeleteTime.IsNull(false)
+	etag := repox.IfMatchOf(ctx)
+	if etag != "" {
+		match = graphql.And(match, loansql.Etag.Eq(etag))
+	}
+	if _, err := r.Svc.Mutation.Lending.Loans.UpdateIfMatch(ctx, id, patch, match); err != nil {
 		if !errors.Is(err, graphql.ErrConflict) {
 			return nil, mapGraphQLErr(err)
 		}
-		if _, err := r.get(ctx, id); err != nil {
+		cur, err := r.get(ctx, id)
+		if err != nil {
 			return nil, err
+		}
+		if etag != "" && cur.GetDeleteTime() != nil {
+			return nil, repox.ErrConflict
 		}
 		return nil, fmt.Errorf("%w: %s is not deleted", repox.ErrAlreadyExists, name)
 	}

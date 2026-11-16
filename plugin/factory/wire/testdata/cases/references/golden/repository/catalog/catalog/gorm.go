@@ -600,11 +600,19 @@ func (r *GormBookRepository) Delete(ctx context.Context, name string) error {
 			return err
 		}
 	}
-	res := r.markDeleted(ctx, r.DB, key)
+	etag := repox.IfMatchOf(ctx)
+	res := r.markDeleted(ctx, r.DB, key, etag)
 	if res.Error != nil {
 		return repox.MapGormErr(res.Error)
 	}
 	if res.RowsAffected == 0 {
+		// The guard matched nothing: a live record left as it is had another
+		// etag (repox.IfMatch).
+		if etag != "" {
+			if cur, err := r.get(ctx, key); err == nil && cur.GetDeleteTime() == nil {
+				return repox.ErrConflict
+			}
+		}
 		return repox.ErrNotFound
 	}
 	return nil
@@ -612,12 +620,16 @@ func (r *GormBookRepository) Delete(ctx context.Context, name string) error {
 
 // markDeleted sets the soft-delete mark on the live row found by key
 // (rowKey) through db: Delete's write, which a Batch runs inside its
-// transaction.
-func (r *GormBookRepository) markDeleted(ctx context.Context, db *gorm.DB, key string) *gorm.DB {
+// transaction. A non-empty etag guards it in the same statement: a row
+// with another etag is left as it is.
+func (r *GormBookRepository) markDeleted(ctx context.Context, db *gorm.DB, key string, etag string) *gorm.DB {
 	now := time.Now()
-	return db.WithContext(ctx).Model(&catalog.Book{}).
-		Where("name = ? AND delete_time IS NULL", key).
-		Updates(map[string]any{"delete_time": now, "etag": repox.NewULID(), "expire_time": repox.ExpireAt(now, r.Retention)})
+	q := db.WithContext(ctx).Model(&catalog.Book{}).
+		Where("name = ? AND delete_time IS NULL", key)
+	if etag != "" {
+		q = q.Where("etag = ?", etag)
+	}
+	return q.Updates(map[string]any{"delete_time": now, "etag": repox.NewULID(), "expire_time": repox.ExpireAt(now, r.Retention)})
 }
 
 // Undelete clears the soft-delete mark and returns the restored record.
@@ -626,15 +638,24 @@ func (r *GormBookRepository) Undelete(ctx context.Context, name string) (*refdem
 	if err != nil {
 		return nil, err
 	}
-	res := r.DB.WithContext(ctx).Model(&catalog.Book{}).
-		Where("name = ? AND delete_time IS NOT NULL", key).
-		Updates(map[string]any{"delete_time": nil, "etag": repox.NewULID(), "expire_time": nil})
+	q := r.DB.WithContext(ctx).Model(&catalog.Book{}).
+		Where("name = ? AND delete_time IS NOT NULL", key)
+	// The precondition, if any (repox.IfMatch), guards the same statement.
+	etag := repox.IfMatchOf(ctx)
+	if etag != "" {
+		q = q.Where("etag = ?", etag)
+	}
+	res := q.Updates(map[string]any{"delete_time": nil, "etag": repox.NewULID(), "expire_time": nil})
 	if res.Error != nil {
 		return nil, repox.MapGormErr(res.Error)
 	}
 	if res.RowsAffected == 0 {
-		if _, err := r.get(ctx, key); err != nil {
+		cur, err := r.get(ctx, key)
+		if err != nil {
 			return nil, err
+		}
+		if etag != "" && cur.GetDeleteTime() != nil {
+			return nil, repox.ErrConflict
 		}
 		return nil, fmt.Errorf("%w: %s is not deleted", repox.ErrAlreadyExists, name)
 	}
@@ -1914,11 +1935,19 @@ func (r *GormShelfRepository) Delete(ctx context.Context, name string) error {
 			return err
 		}
 	}
-	res := r.markDeleted(ctx, r.DB, key)
+	etag := repox.IfMatchOf(ctx)
+	res := r.markDeleted(ctx, r.DB, key, etag)
 	if res.Error != nil {
 		return repox.MapGormErr(res.Error)
 	}
 	if res.RowsAffected == 0 {
+		// The guard matched nothing: a live record left as it is had another
+		// etag (repox.IfMatch).
+		if etag != "" {
+			if cur, err := r.get(ctx, key); err == nil && cur.GetDeleteTime() == nil {
+				return repox.ErrConflict
+			}
+		}
 		return repox.ErrNotFound
 	}
 	return nil
@@ -1926,12 +1955,16 @@ func (r *GormShelfRepository) Delete(ctx context.Context, name string) error {
 
 // markDeleted sets the soft-delete mark on the live row found by key
 // (rowKey) through db: Delete's write, which a Batch runs inside its
-// transaction.
-func (r *GormShelfRepository) markDeleted(ctx context.Context, db *gorm.DB, key string) *gorm.DB {
+// transaction. A non-empty etag guards it in the same statement: a row
+// with another etag is left as it is.
+func (r *GormShelfRepository) markDeleted(ctx context.Context, db *gorm.DB, key string, etag string) *gorm.DB {
 	now := time.Now()
-	return db.WithContext(ctx).Model(&catalog.Shelf{}).
-		Where("id = ? AND delete_time IS NULL", key).
-		Updates(map[string]any{"delete_time": now, "etag": repox.NewULID(), "expire_time": repox.ExpireAt(now, r.Retention)})
+	q := db.WithContext(ctx).Model(&catalog.Shelf{}).
+		Where("id = ? AND delete_time IS NULL", key)
+	if etag != "" {
+		q = q.Where("etag = ?", etag)
+	}
+	return q.Updates(map[string]any{"delete_time": now, "etag": repox.NewULID(), "expire_time": repox.ExpireAt(now, r.Retention)})
 }
 
 // Undelete clears the soft-delete mark and returns the restored record.
@@ -1940,15 +1973,24 @@ func (r *GormShelfRepository) Undelete(ctx context.Context, name string) (*refde
 	if err != nil {
 		return nil, err
 	}
-	res := r.DB.WithContext(ctx).Model(&catalog.Shelf{}).
-		Where("id = ? AND delete_time IS NOT NULL", key).
-		Updates(map[string]any{"delete_time": nil, "etag": repox.NewULID(), "expire_time": nil})
+	q := r.DB.WithContext(ctx).Model(&catalog.Shelf{}).
+		Where("id = ? AND delete_time IS NOT NULL", key)
+	// The precondition, if any (repox.IfMatch), guards the same statement.
+	etag := repox.IfMatchOf(ctx)
+	if etag != "" {
+		q = q.Where("etag = ?", etag)
+	}
+	res := q.Updates(map[string]any{"delete_time": nil, "etag": repox.NewULID(), "expire_time": nil})
 	if res.Error != nil {
 		return nil, repox.MapGormErr(res.Error)
 	}
 	if res.RowsAffected == 0 {
-		if _, err := r.get(ctx, key); err != nil {
+		cur, err := r.get(ctx, key)
+		if err != nil {
 			return nil, err
+		}
+		if etag != "" && cur.GetDeleteTime() != nil {
+			return nil, repox.ErrConflict
 		}
 		return nil, fmt.Errorf("%w: %s is not deleted", repox.ErrAlreadyExists, name)
 	}
@@ -2146,7 +2188,7 @@ func (b *gormBatch) DeleteBook(name string) {
 	}
 	queueBookDelete(b.u, name, false)
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
-		return r.markDeleted(ctx, tx, key).Error
+		return r.markDeleted(ctx, tx, key, "").Error
 	})
 	b.u.Record(repox.Change{Type: "catalog.example.com/Book", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getBook)})
 }
@@ -2356,7 +2398,7 @@ func (b *gormBatch) DeleteShelf(name string) {
 	}
 	queueShelfDelete(b.u, name, false)
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
-		return r.markDeleted(ctx, tx, key).Error
+		return r.markDeleted(ctx, tx, key, "").Error
 	})
 	b.u.Record(repox.Change{Type: "catalog.example.com/Shelf", Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, getShelf)})
 }

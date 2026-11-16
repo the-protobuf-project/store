@@ -741,11 +741,25 @@ func (r *Gorm{{.Model}}Repository) Delete(ctx context.Context, name string) erro
 			return err
 		}
 	}
+	{{- if .HasEtag}}
+	etag := repox.IfMatchOf(ctx)
+	res := r.markDeleted(ctx, r.DB, key, etag)
+	{{- else}}
 	res := r.markDeleted(ctx, r.DB, key)
+	{{- end}}
 	if res.Error != nil {
 		return repox.MapGormErr(res.Error)
 	}
 	if res.RowsAffected == 0 {
+		{{- if .HasEtag}}
+		// The guard matched nothing: a live record left as it is had another
+		// etag (repox.IfMatch).
+		if etag != "" {
+			if cur, err := r.get(ctx, key); err == nil && cur.GetDeleteTime() == nil {
+				return repox.ErrConflict
+			}
+		}
+		{{- end}}
 		return repox.ErrNotFound
 	}
 	return nil
@@ -753,12 +767,18 @@ func (r *Gorm{{.Model}}Repository) Delete(ctx context.Context, name string) erro
 
 // markDeleted sets the soft-delete mark on the live row found by key
 // (rowKey) through db: Delete's write, which a Batch runs inside its
-// transaction.
-func (r *Gorm{{.Model}}Repository) markDeleted(ctx context.Context, db *gorm.DB, key string) *gorm.DB {
+// transaction.{{if .HasEtag}} A non-empty etag guards it in the same statement: a row
+// with another etag is left as it is.{{end}}
+func (r *Gorm{{.Model}}Repository) markDeleted(ctx context.Context, db *gorm.DB, key string{{if .HasEtag}}, etag string{{end}}) *gorm.DB {
 	now := time.Now()
-	return db.WithContext(ctx).Model(&{{$.GormPkg}}.{{.Model}}{}).
-		Where("{{.KeyColumn}} = ? AND delete_time IS NULL", key).
-		Updates(map[string]any{"delete_time": now{{if .UpdateTimeColumn}}, "{{.UpdateTimeColumn}}": now{{end}}{{if .HasEtag}}, "{{.EtagColumn}}": repox.NewULID(){{end}}{{if .Expiring}}, "{{.ExpireTimeColumn}}": repox.ExpireAt(now, r.Retention){{end}}})
+	q := db.WithContext(ctx).Model(&{{$.GormPkg}}.{{.Model}}{}).
+		Where("{{.KeyColumn}} = ? AND delete_time IS NULL", key)
+	{{- if .HasEtag}}
+	if etag != "" {
+		q = q.Where("{{.EtagColumn}} = ?", etag)
+	}
+	{{- end}}
+	return q.Updates(map[string]any{"delete_time": now{{if .UpdateTimeColumn}}, "{{.UpdateTimeColumn}}": now{{end}}{{if .HasEtag}}, "{{.EtagColumn}}": repox.NewULID(){{end}}{{if .Expiring}}, "{{.ExpireTimeColumn}}": repox.ExpireAt(now, r.Retention){{end}}})
 }
 
 // Undelete clears the soft-delete mark and returns the restored record.
@@ -767,16 +787,31 @@ func (r *Gorm{{.Model}}Repository) Undelete(ctx context.Context, name string) (*
 	if err != nil {
 		return nil, err
 	}
-	res := r.DB.WithContext(ctx).Model(&{{$.GormPkg}}.{{.Model}}{}).
-		Where("{{.KeyColumn}} = ? AND delete_time IS NOT NULL", key).
-		Updates(map[string]any{"delete_time": nil{{if .HasEtag}}, "{{.EtagColumn}}": repox.NewULID(){{end}}{{if .Expiring}}, "{{.ExpireTimeColumn}}": nil{{end}}})
+	q := r.DB.WithContext(ctx).Model(&{{$.GormPkg}}.{{.Model}}{}).
+		Where("{{.KeyColumn}} = ? AND delete_time IS NOT NULL", key)
+	{{- if .HasEtag}}
+	// The precondition, if any (repox.IfMatch), guards the same statement.
+	etag := repox.IfMatchOf(ctx)
+	if etag != "" {
+		q = q.Where("{{.EtagColumn}} = ?", etag)
+	}
+	{{- end}}
+	res := q.Updates(map[string]any{"delete_time": nil{{if .HasEtag}}, "{{.EtagColumn}}": repox.NewULID(){{end}}{{if .Expiring}}, "{{.ExpireTimeColumn}}": nil{{end}}})
 	if res.Error != nil {
 		return nil, repox.MapGormErr(res.Error)
 	}
 	if res.RowsAffected == 0 {
-		if _, err := r.get(ctx, key); err != nil {
+		cur, err := r.get(ctx, key)
+		if err != nil {
 			return nil, err
 		}
+		{{- if .HasEtag}}
+		if etag != "" && cur.GetDeleteTime() != nil {
+			return nil, repox.ErrConflict
+		}
+		{{- else}}
+		_ = cur
+		{{- end}}
 		return nil, fmt.Errorf("%w: %s is not deleted", repox.ErrAlreadyExists, name)
 	}
 	return r.get(ctx, key)
@@ -806,8 +841,29 @@ func (r *Gorm{{.Model}}Repository) Delete(ctx context.Context, name string) erro
 	_, err = r.purge(ctx, r.DB, key, name, true)
 	return repox.MapGormErr(err)
 	{{- else if .HasVOs}}
-	return repox.MapGormErr(r.DB.Transaction(func(tx *gorm.DB) error { return r.purgeTx(ctx, tx, key) }))
+	return repox.MapGormErr(r.DB.Transaction(func(tx *gorm.DB) error {
+		{{- if .HasEtag}}
+		if err := r.ifMatch(ctx, tx, key); err != nil {
+			return err
+		}
+		{{- end}}
+		return r.purgeTx(ctx, tx, key)
+	}))
 	{{- else}}
+	{{- if .HasEtag}}
+	if repox.IfMatchOf(ctx) != "" {
+		return repox.MapGormErr(r.DB.Transaction(func(tx *gorm.DB) error {
+			if err := r.ifMatch(ctx, tx, key); err != nil {
+				return err
+			}
+			var existing {{$.GormPkg}}.{{.Model}}
+			if err := tx.WithContext(ctx).First(&existing, "{{.KeyColumn}} = ?", key).Error; err != nil {
+				return err
+			}
+			return r.store(tx).DeleteByID(ctx, existing.{{.PKField}})
+		}))
+	}
+	{{- end}}
 	var existing {{$.GormPkg}}.{{.Model}}
 	if err := r.DB.WithContext(ctx).First(&existing, "{{.KeyColumn}} = ?", key).Error; err != nil {
 		return repox.MapGormErr(err)
@@ -815,6 +871,27 @@ func (r *Gorm{{.Model}}Repository) Delete(ctx context.Context, name string) erro
 	return repox.MapGormErr(r.store(r.DB).DeleteByID(ctx, existing.{{.PKField}}))
 	{{- end}}
 }
+{{- if and .HasEtag (not .SoftDelete)}}
+
+// ifMatch refuses, with repox.ErrConflict, a delete of the row found by key
+// through tx when ctx carries an etag (repox.IfMatch) that is not the row's.
+// The row is read FOR UPDATE, so a concurrent write waits for tx and the
+// delete removes exactly the version checked.
+func (r *Gorm{{.Model}}Repository) ifMatch(ctx context.Context, tx *gorm.DB, key string) error {
+	etag := repox.IfMatchOf(ctx)
+	if etag == "" {
+		return nil
+	}
+	var existing {{$.GormPkg}}.{{.Model}}
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "{{.KeyColumn}} = ?", key).Error; err != nil {
+		return err
+	}
+	if {{if .EtagPtr}}existing.{{.EtagField}} != nil && *existing.{{.EtagField}}{{else}}existing.{{.EtagField}}{{end}} != etag {
+		return repox.ErrConflict
+	}
+	return nil
+}
+{{- end}}
 {{- if .DeleteReferencedSQL}}
 
 // refuseReferenced refuses to delete the row found by key (rowKey), named
@@ -1066,7 +1143,7 @@ func (b *gormBatch) Delete{{.Model}}(name string) {
 	}
 	queue{{.Model}}Delete(b.u, name, false)
 	b.u.QueueGorm(nil, func(ctx context.Context, tx *gorm.DB) error {
-		return r.markDeleted(ctx, tx, key).Error
+		return r.markDeleted(ctx, tx, key{{if .HasEtag}}, ""{{end}}).Error
 	})
 	b.u.Record(repox.Change{Type: {{printf "%q" .Type}}, Name: name, Op: repox.ChangeDelete, LoadPrior: repox.PriorOf(name, get{{.Model}})})
 }

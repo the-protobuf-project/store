@@ -9,7 +9,7 @@
 //
 // Projection RoomDay in OpenSearch: its mapping and index.
 // annotations: entity.v1 dev, store.v1 dev
-// engine:      protokit v1.3.8
+// engine:      protokit v1.4.0
 //
 // store — https://github.com/the-protobuf-project/store
 

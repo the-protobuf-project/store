@@ -638,6 +638,22 @@ GORM and a GraphQL adapter behind one interface. Besides `Create`, `Get`, `List`
   etag take turns and the second gets `repox.ErrConflict`. On GraphQL the
   write itself carries the guard (`UpdateIfMatch`, an etag pre-check), and a
   guard that matches no row is `repox.ErrConflict`.
+- **Deletes take an etag too: `repox.IfMatch(ctx, etag)`.** `Delete` and
+  `Undelete` of a resource with an etag read the precondition off the context
+  and apply it in the statement that writes, so a write between a caller's
+  read and its delete cannot slip past: a soft delete's and an undelete's
+  guarded `UPDATE` (`… AND etag = ?` on GORM, an etag predicate in
+  `UpdateIfMatch` on GraphQL); a hard delete's row read `FOR UPDATE` in its
+  transaction (GORM) or the delete's `preCheck` (GraphQL). A record with
+  another etag is left as it is and the call returns `repox.ErrConflict`; a
+  missing one is still `repox.ErrNotFound`, and an undelete of a live one
+  `repox.ErrAlreadyExists`. Without `IfMatch` (or with an empty etag) nothing
+  changes. `Purge`, a Batch's deletes and resources without an etag do not
+  read it.
+
+  ```go
+  err := repos.Books.Delete(repox.IfMatch(ctx, req.GetEtag()), req.GetName())
+  ```
 - **`UpdateOutputOnly(ctx, m, paths)`.** Writes the server-owned (`OUTPUT_ONLY`)
   fields `paths` names, such as a state, an expiry or a computed list. `Update`
   refuses those fields because a client may not set them; this method is for

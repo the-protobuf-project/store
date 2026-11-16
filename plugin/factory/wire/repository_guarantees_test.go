@@ -5,7 +5,8 @@ package wire_test
 
 // repository_guarantees_test.go checks properties of the generated repository
 // layer that a byte comparison accepts silently when a template change drops
-// them: that every etag guard reads its row FOR UPDATE, that every resource is
+// them: that every etag guard reads its row FOR UPDATE -- repox.IfMatch's on a
+// delete included -- that every resource is
 // batchable, and that a value object a filter can reach has a GraphQL lookup.
 // The goldens pin the bytes; these pin what the bytes must keep doing.
 
@@ -254,5 +255,65 @@ func TestJoinFieldsArePersisted(t *testing.T) {
 		if !strings.Contains(body, c.want) {
 			t.Errorf("%s does not %s", c.sig, c.want)
 		}
+	}
+}
+
+// A delete guarded by repox.IfMatch applies the etag in the write itself, on
+// both backends: a soft delete's and an undelete's guarded statement carries
+// it, a hard delete reads its row FOR UPDATE (GORM) or sends it as the
+// delete's preCheck (GraphQL). Checking first and writing after would let a
+// write between the two slip past.
+func TestIfMatchGuardsTheWrite(t *testing.T) {
+	const dir = "testdata/cases/references/golden/repository/catalog/catalog"
+	gormSrc, gqlSrc := readGolden(t, dir, "gorm.go"), readGolden(t, dir, "graphql.go")
+	for sig, wants := range map[string][]string{
+		"func (r *GormBookRepository) Delete(":      {"etag := repox.IfMatchOf(ctx)", "r.markDeleted(ctx, r.DB, key, etag)"},
+		"func (r *GormBookRepository) markDeleted(": {`q = q.Where("etag = ?", etag)`, "return q.Updates("},
+		"func (r *GormBookRepository) Undelete(":    {"etag := repox.IfMatchOf(ctx)", `q = q.Where("etag = ?", etag)`, "res := q.Updates("},
+	} {
+		body, ok := funcBody(gormSrc, sig)
+		for _, want := range wants {
+			if !ok || !strings.Contains(body, want) {
+				t.Errorf("%s lacks %q", sig, want)
+			}
+		}
+	}
+	for _, sig := range []string{"func (r *GraphQLBookRepository) Delete(", "func (r *GraphQLBookRepository) Undelete("} {
+		body, ok := funcBody(gqlSrc, sig)
+		guard, write := strings.Index(body, "match = graphql.And(match, "), strings.Index(body, "UpdateIfMatch(ctx, id, ")
+		if !ok || guard < 0 || write < 0 || guard > write || !strings.Contains(body[write:], ", match)") {
+			t.Errorf("%s does not send the etag in its guarded write:\n%s", sig, body)
+		}
+	}
+
+	hardGorm, hardGQL := 0, 0
+	for _, d := range repositoryGoldens {
+		src := readGolden(t, d, "gorm.go")
+		for _, m := range regexp.MustCompile(`func \(r \*Gorm(\w+)Repository\) ifMatch\(`).FindAllStringSubmatch(src, -1) {
+			hardGorm++
+			body, _ := funcBody(src, m[0])
+			lock, cmp := strings.Index(body, `clause.Locking{Strength: "UPDATE"}`), strings.Index(body, "!= etag")
+			if lock < 0 || cmp < 0 || lock > cmp {
+				t.Errorf("%s: %s ifMatch compares the etag without locking the row", d, m[1])
+			}
+		}
+		b, err := os.ReadFile(filepath.Join(d, "graphql.go"))
+		if os.IsNotExist(err) {
+			continue // a case generated without a GraphQL backend
+		}
+		gql := string(b)
+		for _, m := range regexp.MustCompile(`func \(r \*GraphQL(\w+)Repository\) remove\(`).FindAllStringSubmatch(gql, -1) {
+			body, _ := funcBody(gql, m[0])
+			if !strings.Contains(body, "repox.IfMatchOf(ctx)") {
+				continue
+			}
+			hardGQL++
+			if !strings.Contains(body, ".Delete().PreCheck(") || !strings.Contains(body, "Delete(ctx, id, req...)") {
+				t.Errorf("%s: %s remove checks the etag outside the delete", d, m[1])
+			}
+		}
+	}
+	if hardGorm == 0 || hardGQL == 0 {
+		t.Fatalf("no hard delete guarded by an etag in the goldens (gorm %d, graphql %d): the check checks nothing", hardGorm, hardGQL)
 	}
 }

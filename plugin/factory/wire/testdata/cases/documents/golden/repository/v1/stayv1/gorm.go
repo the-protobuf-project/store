@@ -380,7 +380,9 @@ func (r *GormBookingRepository) Delete(ctx context.Context, name string) error {
 			return err
 		}
 	}
-	return repox.MapGormErr(r.DB.Transaction(func(tx *gorm.DB) error { return r.purgeTx(ctx, tx, key) }))
+	return repox.MapGormErr(r.DB.Transaction(func(tx *gorm.DB) error {
+		return r.purgeTx(ctx, tx, key)
+	}))
 }
 
 // purgeTx removes the row found by key (rowKey) inside tx, with the

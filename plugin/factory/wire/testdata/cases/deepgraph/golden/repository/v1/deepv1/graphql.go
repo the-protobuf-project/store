@@ -882,8 +882,19 @@ func (r *GraphQLAgendaRepository) Delete(ctx context.Context, name string) error
 	if err != nil {
 		return err
 	}
-	if _, err := r.Svc.Mutation.DeepV1.Agendas.UpdateIfMatch(ctx, id, r.deletePatch(), agendasql.DeleteTime.IsNull(true)); err != nil {
+	var match graphql.Predicate = agendasql.DeleteTime.IsNull(true)
+	// The precondition, if any (repox.IfMatch), guards the same write.
+	etag := repox.IfMatchOf(ctx)
+	if etag != "" {
+		match = graphql.And(match, agendasql.Etag.Eq(etag))
+	}
+	if _, err := r.Svc.Mutation.DeepV1.Agendas.UpdateIfMatch(ctx, id, r.deletePatch(), match); err != nil {
 		if errors.Is(err, graphql.ErrConflict) {
+			if etag != "" {
+				if cur, err := r.get(ctx, id); err == nil && cur.GetDeleteTime() == nil {
+					return repox.ErrConflict
+				}
+			}
 			return repox.ErrNotFound
 		}
 		return mapGraphQLErr(err)
@@ -909,12 +920,21 @@ func (r *GraphQLAgendaRepository) Undelete(ctx context.Context, name string) (*d
 	}
 	patch := agendasql.UpdateInput{DeleteTime: graphql.Null[string]()}
 	patch.Etag = graphql.Value(repox.NewULID())
-	if _, err := r.Svc.Mutation.DeepV1.Agendas.UpdateIfMatch(ctx, id, patch, agendasql.DeleteTime.IsNull(false)); err != nil {
+	var match graphql.Predicate = agendasql.DeleteTime.IsNull(false)
+	etag := repox.IfMatchOf(ctx)
+	if etag != "" {
+		match = graphql.And(match, agendasql.Etag.Eq(etag))
+	}
+	if _, err := r.Svc.Mutation.DeepV1.Agendas.UpdateIfMatch(ctx, id, patch, match); err != nil {
 		if !errors.Is(err, graphql.ErrConflict) {
 			return nil, mapGraphQLErr(err)
 		}
-		if _, err := r.get(ctx, id); err != nil {
+		cur, err := r.get(ctx, id)
+		if err != nil {
 			return nil, err
+		}
+		if etag != "" && cur.GetDeleteTime() != nil {
+			return nil, repox.ErrConflict
 		}
 		return nil, fmt.Errorf("%w: %s is not deleted", repox.ErrAlreadyExists, name)
 	}
@@ -1974,13 +1994,25 @@ func (r *GraphQLMeetingRepository) Delete(ctx context.Context, name string) erro
 	return r.remove(ctx, id)
 }
 
-// remove deletes row id with the value-object rows it owns.
+// remove deletes row id with the value-object rows it owns. The
+// precondition, if any (repox.IfMatch), guards the delete itself: a row with
+// another etag is left as it is, and repox.ErrConflict returned.
 func (r *GraphQLMeetingRepository) remove(ctx context.Context, id string) error {
-	resp, err := r.Svc.Mutation.DeepV1.Meetings.Delete(ctx, id)
-	if err != nil {
+	var req []*meetingsql.DeleteRequest
+	etag := repox.IfMatchOf(ctx)
+	if etag != "" {
+		req = append(req, meetingsql.Delete().PreCheck(meetingsql.Etag.Eq(etag)))
+	}
+	resp, err := r.Svc.Mutation.DeepV1.Meetings.Delete(ctx, id, req...)
+	if err != nil && !(etag != "" && errors.Is(err, graphql.ErrConflict)) {
 		return mapGraphQLErr(err)
 	}
-	if resp.AffectedRows == 0 {
+	if err != nil || resp.AffectedRows == 0 {
+		if etag != "" {
+			if _, gerr := r.get(ctx, id); gerr == nil {
+				return repox.ErrConflict
+			}
+		}
 		return repox.ErrNotFound
 	}
 	for i := range resp.Returning {

@@ -8,7 +8,7 @@
 //
 // Shared runtime for the generated proto-facing repositories.
 // annotations: entity.v1 dev, store.v1 dev
-// engine:      protokit v1.3.8
+// engine:      protokit v1.4.0
 //
 // store — https://github.com/the-protobuf-project/store
 
@@ -84,6 +84,31 @@ type Conn struct {
 	// and Batch commit that changes one of their sources runs them, inside
 	// the write's transaction on GORM. See Projections.
 	Projections *Projections
+}
+
+// ifMatchKey is the context key of IfMatch's etag.
+type ifMatchKey struct{}
+
+// IfMatch returns ctx carrying etag as the precondition of the deletes made
+// with it: Delete and Undelete of a resource with an etag apply it in the
+// same statement that writes -- the guarded UPDATE of a soft delete, the
+// locked row or the preCheck of a hard one -- so a write landing between a
+// caller's read and its delete cannot slip past. A record whose etag is not
+// etag is left as it is and the call returns ErrConflict; one that does not
+// exist still returns ErrNotFound. An empty etag carries no precondition.
+// Purge and a Batch's deletes do not read it, nor does a resource without an
+// etag.
+func IfMatch(ctx context.Context, etag string) context.Context {
+	if etag == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, ifMatchKey{}, etag)
+}
+
+// IfMatchOf is the etag IfMatch put on ctx, "" for none.
+func IfMatchOf(ctx context.Context) string {
+	etag, _ := ctx.Value(ifMatchKey{}).(string)
+	return etag
 }
 
 // ChangeObserver hears that the record named name was written: created,

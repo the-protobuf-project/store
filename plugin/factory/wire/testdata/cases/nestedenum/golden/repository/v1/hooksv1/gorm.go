@@ -454,11 +454,42 @@ func (r *GormDeliveryRepository) Delete(ctx context.Context, name string) error 
 			return err
 		}
 	}
+	if repox.IfMatchOf(ctx) != "" {
+		return repox.MapGormErr(r.DB.Transaction(func(tx *gorm.DB) error {
+			if err := r.ifMatch(ctx, tx, key); err != nil {
+				return err
+			}
+			var existing hooksv1gorm.Delivery
+			if err := tx.WithContext(ctx).First(&existing, "name = ?", key).Error; err != nil {
+				return err
+			}
+			return r.store(tx).DeleteByID(ctx, existing.ID)
+		}))
+	}
 	var existing hooksv1gorm.Delivery
 	if err := r.DB.WithContext(ctx).First(&existing, "name = ?", key).Error; err != nil {
 		return repox.MapGormErr(err)
 	}
 	return repox.MapGormErr(r.store(r.DB).DeleteByID(ctx, existing.ID))
+}
+
+// ifMatch refuses, with repox.ErrConflict, a delete of the row found by key
+// through tx when ctx carries an etag (repox.IfMatch) that is not the row's.
+// The row is read FOR UPDATE, so a concurrent write waits for tx and the
+// delete removes exactly the version checked.
+func (r *GormDeliveryRepository) ifMatch(ctx context.Context, tx *gorm.DB, key string) error {
+	etag := repox.IfMatchOf(ctx)
+	if etag == "" {
+		return nil
+	}
+	var existing hooksv1gorm.Delivery
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "name = ?", key).Error; err != nil {
+		return err
+	}
+	if existing.Etag != nil && *existing.Etag != etag {
+		return repox.ErrConflict
+	}
+	return nil
 }
 
 // ListByKeys reads every record whose filter field field is one of keys; see
@@ -777,11 +808,42 @@ func (r *GormWebhookRepository) Delete(ctx context.Context, name string) error {
 			return err
 		}
 	}
+	if repox.IfMatchOf(ctx) != "" {
+		return repox.MapGormErr(r.DB.Transaction(func(tx *gorm.DB) error {
+			if err := r.ifMatch(ctx, tx, key); err != nil {
+				return err
+			}
+			var existing hooksv1gorm.Webhook
+			if err := tx.WithContext(ctx).First(&existing, "id = ?", key).Error; err != nil {
+				return err
+			}
+			return r.store(tx).DeleteByID(ctx, existing.ID)
+		}))
+	}
 	var existing hooksv1gorm.Webhook
 	if err := r.DB.WithContext(ctx).First(&existing, "id = ?", key).Error; err != nil {
 		return repox.MapGormErr(err)
 	}
 	return repox.MapGormErr(r.store(r.DB).DeleteByID(ctx, existing.ID))
+}
+
+// ifMatch refuses, with repox.ErrConflict, a delete of the row found by key
+// through tx when ctx carries an etag (repox.IfMatch) that is not the row's.
+// The row is read FOR UPDATE, so a concurrent write waits for tx and the
+// delete removes exactly the version checked.
+func (r *GormWebhookRepository) ifMatch(ctx context.Context, tx *gorm.DB, key string) error {
+	etag := repox.IfMatchOf(ctx)
+	if etag == "" {
+		return nil
+	}
+	var existing hooksv1gorm.Webhook
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "id = ?", key).Error; err != nil {
+		return err
+	}
+	if existing.Etag != nil && *existing.Etag != etag {
+		return repox.ErrConflict
+	}
+	return nil
 }
 
 // ListByKeys reads every record whose filter field field is one of keys; see
