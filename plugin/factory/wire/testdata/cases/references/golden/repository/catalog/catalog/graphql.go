@@ -814,8 +814,19 @@ func (r *GraphQLBookRepository) Delete(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := r.Svc.Mutation.Catalog.Books.UpdateIfMatch(ctx, id, r.deletePatch(), booksql.DeleteTime.IsNull(true)); err != nil {
+	var match graphql.Predicate = booksql.DeleteTime.IsNull(true)
+	// The precondition, if any (repox.IfMatch), guards the same write.
+	etag := repox.IfMatchOf(ctx)
+	if etag != "" {
+		match = graphql.And(match, booksql.Etag.Eq(etag))
+	}
+	if _, err := r.Svc.Mutation.Catalog.Books.UpdateIfMatch(ctx, id, r.deletePatch(), match); err != nil {
 		if errors.Is(err, graphql.ErrConflict) {
+			if etag != "" {
+				if cur, err := r.get(ctx, id); err == nil && cur.GetDeleteTime() == nil {
+					return repox.ErrConflict
+				}
+			}
 			return repox.ErrNotFound
 		}
 		return mapGraphQLErr(err)
@@ -845,12 +856,21 @@ func (r *GraphQLBookRepository) Undelete(ctx context.Context, name string) (*ref
 	patch := booksql.UpdateInput{DeleteTime: graphql.Null[string]()}
 	patch.ExpireTime = graphql.Null[string]()
 	patch.Etag = graphql.Value(repox.NewULID())
-	if _, err := r.Svc.Mutation.Catalog.Books.UpdateIfMatch(ctx, id, patch, booksql.DeleteTime.IsNull(false)); err != nil {
+	var match graphql.Predicate = booksql.DeleteTime.IsNull(false)
+	etag := repox.IfMatchOf(ctx)
+	if etag != "" {
+		match = graphql.And(match, booksql.Etag.Eq(etag))
+	}
+	if _, err := r.Svc.Mutation.Catalog.Books.UpdateIfMatch(ctx, id, patch, match); err != nil {
 		if !errors.Is(err, graphql.ErrConflict) {
 			return nil, mapGraphQLErr(err)
 		}
-		if _, err := r.get(ctx, id); err != nil {
+		cur, err := r.get(ctx, id)
+		if err != nil {
 			return nil, err
+		}
+		if etag != "" && cur.GetDeleteTime() != nil {
+			return nil, repox.ErrConflict
 		}
 		return nil, fmt.Errorf("%w: %s is not deleted", repox.ErrAlreadyExists, name)
 	}
@@ -2457,8 +2477,19 @@ func (r *GraphQLShelfRepository) Delete(ctx context.Context, name string) error 
 	if err != nil {
 		return err
 	}
-	if _, err := r.Svc.Mutation.Catalog.Shelves.UpdateIfMatch(ctx, id, r.deletePatch(), shelvesql.DeleteTime.IsNull(true)); err != nil {
+	var match graphql.Predicate = shelvesql.DeleteTime.IsNull(true)
+	// The precondition, if any (repox.IfMatch), guards the same write.
+	etag := repox.IfMatchOf(ctx)
+	if etag != "" {
+		match = graphql.And(match, shelvesql.Etag.Eq(etag))
+	}
+	if _, err := r.Svc.Mutation.Catalog.Shelves.UpdateIfMatch(ctx, id, r.deletePatch(), match); err != nil {
 		if errors.Is(err, graphql.ErrConflict) {
+			if etag != "" {
+				if cur, err := r.get(ctx, id); err == nil && cur.GetDeleteTime() == nil {
+					return repox.ErrConflict
+				}
+			}
 			return repox.ErrNotFound
 		}
 		return mapGraphQLErr(err)
@@ -2488,12 +2519,21 @@ func (r *GraphQLShelfRepository) Undelete(ctx context.Context, name string) (*re
 	patch := shelvesql.UpdateInput{DeleteTime: graphql.Null[string]()}
 	patch.ExpireTime = graphql.Null[string]()
 	patch.Etag = graphql.Value(repox.NewULID())
-	if _, err := r.Svc.Mutation.Catalog.Shelves.UpdateIfMatch(ctx, id, patch, shelvesql.DeleteTime.IsNull(false)); err != nil {
+	var match graphql.Predicate = shelvesql.DeleteTime.IsNull(false)
+	etag := repox.IfMatchOf(ctx)
+	if etag != "" {
+		match = graphql.And(match, shelvesql.Etag.Eq(etag))
+	}
+	if _, err := r.Svc.Mutation.Catalog.Shelves.UpdateIfMatch(ctx, id, patch, match); err != nil {
 		if !errors.Is(err, graphql.ErrConflict) {
 			return nil, mapGraphQLErr(err)
 		}
-		if _, err := r.get(ctx, id); err != nil {
+		cur, err := r.get(ctx, id)
+		if err != nil {
 			return nil, err
+		}
+		if etag != "" && cur.GetDeleteTime() != nil {
+			return nil, repox.ErrConflict
 		}
 		return nil, fmt.Errorf("%w: %s is not deleted", repox.ErrAlreadyExists, name)
 	}

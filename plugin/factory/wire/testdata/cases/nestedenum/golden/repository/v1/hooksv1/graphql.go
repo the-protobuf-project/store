@@ -541,13 +541,25 @@ func (r *GraphQLDeliveryRepository) Delete(ctx context.Context, name string) err
 	return r.remove(ctx, id)
 }
 
-// remove deletes row id with the value-object rows it owns.
+// remove deletes row id with the value-object rows it owns. The
+// precondition, if any (repox.IfMatch), guards the delete itself: a row with
+// another etag is left as it is, and repox.ErrConflict returned.
 func (r *GraphQLDeliveryRepository) remove(ctx context.Context, id string) error {
-	resp, err := r.Svc.Mutation.HooksV1.Deliveries.Delete(ctx, id)
-	if err != nil {
+	var req []*deliveriesql.DeleteRequest
+	etag := repox.IfMatchOf(ctx)
+	if etag != "" {
+		req = append(req, deliveriesql.Delete().PreCheck(deliveriesql.Etag.Eq(etag)))
+	}
+	resp, err := r.Svc.Mutation.HooksV1.Deliveries.Delete(ctx, id, req...)
+	if err != nil && !(etag != "" && errors.Is(err, graphql.ErrConflict)) {
 		return mapGraphQLErr(err)
 	}
-	if resp.AffectedRows == 0 {
+	if err != nil || resp.AffectedRows == 0 {
+		if etag != "" {
+			if _, gerr := r.get(ctx, id); gerr == nil {
+				return repox.ErrConflict
+			}
+		}
 		return repox.ErrNotFound
 	}
 	return nil
@@ -938,13 +950,25 @@ func (r *GraphQLWebhookRepository) Delete(ctx context.Context, name string) erro
 	return r.remove(ctx, id)
 }
 
-// remove deletes row id with the value-object rows it owns.
+// remove deletes row id with the value-object rows it owns. The
+// precondition, if any (repox.IfMatch), guards the delete itself: a row with
+// another etag is left as it is, and repox.ErrConflict returned.
 func (r *GraphQLWebhookRepository) remove(ctx context.Context, id string) error {
-	resp, err := r.Svc.Mutation.HooksV1.Webhooks.Delete(ctx, id)
-	if err != nil {
+	var req []*webhooksql.DeleteRequest
+	etag := repox.IfMatchOf(ctx)
+	if etag != "" {
+		req = append(req, webhooksql.Delete().PreCheck(webhooksql.Etag.Eq(etag)))
+	}
+	resp, err := r.Svc.Mutation.HooksV1.Webhooks.Delete(ctx, id, req...)
+	if err != nil && !(etag != "" && errors.Is(err, graphql.ErrConflict)) {
 		return mapGraphQLErr(err)
 	}
-	if resp.AffectedRows == 0 {
+	if err != nil || resp.AffectedRows == 0 {
+		if etag != "" {
+			if _, gerr := r.get(ctx, id); gerr == nil {
+				return repox.ErrConflict
+			}
+		}
 		return repox.ErrNotFound
 	}
 	return nil

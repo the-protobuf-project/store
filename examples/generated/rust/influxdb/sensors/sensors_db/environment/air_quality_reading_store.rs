@@ -12,7 +12,7 @@
 //
 // Store of the air_quality_readings table.
 // annotations: entity.v1 dev, store.v1 dev
-// engine:      protokit v1.3.8
+// engine:      protokit v1.4.0
 // runtime:     tpp-database
 //
 // store — https://github.com/the-protobuf-project/store

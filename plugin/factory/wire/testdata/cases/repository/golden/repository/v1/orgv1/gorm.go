@@ -504,7 +504,31 @@ func (r *GormMemberRepository) Delete(ctx context.Context, name string) error {
 			return err
 		}
 	}
-	return repox.MapGormErr(r.DB.Transaction(func(tx *gorm.DB) error { return r.purgeTx(ctx, tx, key) }))
+	return repox.MapGormErr(r.DB.Transaction(func(tx *gorm.DB) error {
+		if err := r.ifMatch(ctx, tx, key); err != nil {
+			return err
+		}
+		return r.purgeTx(ctx, tx, key)
+	}))
+}
+
+// ifMatch refuses, with repox.ErrConflict, a delete of the row found by key
+// through tx when ctx carries an etag (repox.IfMatch) that is not the row's.
+// The row is read FOR UPDATE, so a concurrent write waits for tx and the
+// delete removes exactly the version checked.
+func (r *GormMemberRepository) ifMatch(ctx context.Context, tx *gorm.DB, key string) error {
+	etag := repox.IfMatchOf(ctx)
+	if etag == "" {
+		return nil
+	}
+	var existing orgv1gorm.Member
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "name = ?", key).Error; err != nil {
+		return err
+	}
+	if existing.Etag != nil && *existing.Etag != etag {
+		return repox.ErrConflict
+	}
+	return nil
 }
 
 // purgeTx removes the row found by key (rowKey) inside tx, with the
@@ -950,7 +974,31 @@ func (r *GormOrganisationRepository) Delete(ctx context.Context, name string) er
 			return err
 		}
 	}
-	return repox.MapGormErr(r.DB.Transaction(func(tx *gorm.DB) error { return r.purgeTx(ctx, tx, key) }))
+	return repox.MapGormErr(r.DB.Transaction(func(tx *gorm.DB) error {
+		if err := r.ifMatch(ctx, tx, key); err != nil {
+			return err
+		}
+		return r.purgeTx(ctx, tx, key)
+	}))
+}
+
+// ifMatch refuses, with repox.ErrConflict, a delete of the row found by key
+// through tx when ctx carries an etag (repox.IfMatch) that is not the row's.
+// The row is read FOR UPDATE, so a concurrent write waits for tx and the
+// delete removes exactly the version checked.
+func (r *GormOrganisationRepository) ifMatch(ctx context.Context, tx *gorm.DB, key string) error {
+	etag := repox.IfMatchOf(ctx)
+	if etag == "" {
+		return nil
+	}
+	var existing orgv1gorm.Organisation
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "id = ?", key).Error; err != nil {
+		return err
+	}
+	if existing.Etag != nil && *existing.Etag != etag {
+		return repox.ErrConflict
+	}
+	return nil
 }
 
 // purgeTx removes the row found by key (rowKey) inside tx, with the
@@ -1289,11 +1337,42 @@ func (r *GormUserRepository) Delete(ctx context.Context, name string) error {
 	if err := r.refuseReferenced(ctx, r.DB, key, name); err != nil {
 		return err
 	}
+	if repox.IfMatchOf(ctx) != "" {
+		return repox.MapGormErr(r.DB.Transaction(func(tx *gorm.DB) error {
+			if err := r.ifMatch(ctx, tx, key); err != nil {
+				return err
+			}
+			var existing orgv1gorm.User
+			if err := tx.WithContext(ctx).First(&existing, "id = ?", key).Error; err != nil {
+				return err
+			}
+			return r.store(tx).DeleteByID(ctx, existing.ID)
+		}))
+	}
 	var existing orgv1gorm.User
 	if err := r.DB.WithContext(ctx).First(&existing, "id = ?", key).Error; err != nil {
 		return repox.MapGormErr(err)
 	}
 	return repox.MapGormErr(r.store(r.DB).DeleteByID(ctx, existing.ID))
+}
+
+// ifMatch refuses, with repox.ErrConflict, a delete of the row found by key
+// through tx when ctx carries an etag (repox.IfMatch) that is not the row's.
+// The row is read FOR UPDATE, so a concurrent write waits for tx and the
+// delete removes exactly the version checked.
+func (r *GormUserRepository) ifMatch(ctx context.Context, tx *gorm.DB, key string) error {
+	etag := repox.IfMatchOf(ctx)
+	if etag == "" {
+		return nil
+	}
+	var existing orgv1gorm.User
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "id = ?", key).Error; err != nil {
+		return err
+	}
+	if existing.Etag != nil && *existing.Etag != etag {
+		return repox.ErrConflict
+	}
+	return nil
 }
 
 // refuseReferenced refuses to delete the row found by key (rowKey), named

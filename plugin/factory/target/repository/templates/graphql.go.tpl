@@ -1110,8 +1110,23 @@ func (r *GraphQL{{.Model}}Repository) Delete(ctx context.Context, name string) e
 	if err != nil {
 		return err
 	}
-	if _, err := r.Svc.Mutation.{{.Domain}}.{{.Resource}}.UpdateIfMatch(ctx, id, r.deletePatch(), {{.DeleteTimePred}}.IsNull(true)); err != nil {
+	var match graphql.Predicate = {{.DeleteTimePred}}.IsNull(true)
+	{{- if .EtagPred}}
+	// The precondition, if any (repox.IfMatch), guards the same write.
+	etag := repox.IfMatchOf(ctx)
+	if etag != "" {
+		match = graphql.And(match, {{.EtagPred}}.Eq(etag))
+	}
+	{{- end}}
+	if _, err := r.Svc.Mutation.{{.Domain}}.{{.Resource}}.UpdateIfMatch(ctx, id, r.deletePatch(), match); err != nil {
 		if errors.Is(err, graphql.ErrConflict) {
+			{{- if .EtagPred}}
+			if etag != "" {
+				if cur, err := r.get(ctx, id); err == nil && cur.GetDeleteTime() == nil {
+					return repox.ErrConflict
+				}
+			}
+			{{- end}}
 			return repox.ErrNotFound
 		}
 		return mapGraphQLErr(err)
@@ -1155,13 +1170,28 @@ func (r *GraphQL{{.Model}}Repository) Undelete(ctx context.Context, name string)
 	{{- if .EtagInputField}}
 	patch.{{.EtagInputField}} = graphql.Value(repox.NewULID())
 	{{- end}}
-	if _, err := r.Svc.Mutation.{{.Domain}}.{{.Resource}}.UpdateIfMatch(ctx, id, patch, {{.DeleteTimePred}}.IsNull(false)); err != nil {
+	var match graphql.Predicate = {{.DeleteTimePred}}.IsNull(false)
+	{{- if .EtagPred}}
+	etag := repox.IfMatchOf(ctx)
+	if etag != "" {
+		match = graphql.And(match, {{.EtagPred}}.Eq(etag))
+	}
+	{{- end}}
+	if _, err := r.Svc.Mutation.{{.Domain}}.{{.Resource}}.UpdateIfMatch(ctx, id, patch, match); err != nil {
 		if !errors.Is(err, graphql.ErrConflict) {
 			return nil, mapGraphQLErr(err)
 		}
-		if _, err := r.get(ctx, id); err != nil {
+		cur, err := r.get(ctx, id)
+		if err != nil {
 			return nil, err
 		}
+		{{- if .EtagPred}}
+		if etag != "" && cur.GetDeleteTime() != nil {
+			return nil, repox.ErrConflict
+		}
+		{{- else}}
+		_ = cur
+		{{- end}}
 		return nil, fmt.Errorf("%w: %s is not deleted", repox.ErrAlreadyExists, name)
 	}
 	return r.get(ctx, id)
@@ -1281,8 +1311,29 @@ func (r *GraphQL{{.Model}}Repository) PurgeExpired(ctx context.Context, now time
 }
 	{{- end}}
 
-// remove deletes row id with the value-object rows it owns.
+// remove deletes row id with the value-object rows it owns.{{if and .EtagPred (not .SoftDelete)}} The
+// precondition, if any (repox.IfMatch), guards the delete itself: a row with
+// another etag is left as it is, and repox.ErrConflict returned.{{end}}
 func (r *GraphQL{{.Model}}Repository) remove(ctx context.Context, id string) error {
+	{{- if and .EtagPred (not .SoftDelete)}}
+	var req []*{{.ResPkg}}.DeleteRequest
+	etag := repox.IfMatchOf(ctx)
+	if etag != "" {
+		req = append(req, {{.ResPkg}}.Delete().PreCheck({{.EtagPred}}.Eq(etag)))
+	}
+	resp, err := r.Svc.Mutation.{{.Domain}}.{{.Resource}}.Delete(ctx, id, req...)
+	if err != nil && !(etag != "" && errors.Is(err, graphql.ErrConflict)) {
+		return mapGraphQLErr(err)
+	}
+	if err != nil || resp.AffectedRows == 0 {
+		if etag != "" {
+			if _, gerr := r.get(ctx, id); gerr == nil {
+				return repox.ErrConflict
+			}
+		}
+		return repox.ErrNotFound
+	}
+	{{- else}}
 	resp, err := r.Svc.Mutation.{{.Domain}}.{{.Resource}}.Delete(ctx, id)
 	if err != nil {
 		return mapGraphQLErr(err)
@@ -1290,6 +1341,7 @@ func (r *GraphQL{{.Model}}Repository) remove(ctx context.Context, id string) err
 	if resp.AffectedRows == 0 {
 		return repox.ErrNotFound
 	}
+	{{- end}}
 	{{- range .GQLVODeleteCleanups}}
 	{{.}}
 	{{- end}}
