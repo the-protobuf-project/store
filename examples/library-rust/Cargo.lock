@@ -1878,7 +1878,7 @@ dependencies = [
 [[package]]
 name = "tpp-database"
 version = "0.1.0"
-source = "git+https://github.com/the-protobuf-project/runtime-rs?rev=53f2ffbfefc2caa2c02ba4d62637ede614103b17#53f2ffbfefc2caa2c02ba4d62637ede614103b17"
+source = "git+https://github.com/the-protobuf-project/runtime-rs?branch=main#53f2ffbfefc2caa2c02ba4d62637ede614103b17"
 dependencies = [
  "arrow-array",
  "arrow-ipc",
@@ -1905,7 +1905,7 @@ dependencies = [
 [[package]]
 name = "tpp-telemetry"
 version = "0.1.0"
-source = "git+https://github.com/the-protobuf-project/runtime-rs?rev=53f2ffbfefc2caa2c02ba4d62637ede614103b17#53f2ffbfefc2caa2c02ba4d62637ede614103b17"
+source = "git+https://github.com/the-protobuf-project/runtime-rs?branch=main#53f2ffbfefc2caa2c02ba4d62637ede614103b17"
 dependencies = [
  "opentelemetry",
  "tracing",
