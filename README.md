@@ -25,6 +25,7 @@
 - [GraphQL client SDK](#graphql-client-sdk)
 - [Projections and search](#projections-and-search)
 - [Time series in Rust (`lang=rust target=influxdb`)](#time-series-in-rust-langrust-targetinfluxdb)
+- [Repositories in Rust (`lang=rust target=repository`)](#repositories-in-rust-langrust-targetrepository)
 - [Reference integrity](#reference-integrity)
 - [Annotations reference](#annotations-reference)
 - [Configuration — `store.yaml`](#configuration--ormyaml)
@@ -1266,6 +1267,113 @@ editing generated output:
 tpp-database = { path = "../runtime-rs/database" }
 ```
 
+## Repositories in Rust (`lang=rust target=repository`)
+
+The `repository` target, `lang=rust`, renders the same repositories the Go
+target does, for the same messages: every `google.api.resource` table with a
+generated key (`(entity.v1.table) = {id: ID_STRATEGY_ULID}`). Go composes the
+gorm output; Rust binds the typed repository contract of
+[tpp-database](https://github.com/the-protobuf-project/runtime-rs)
+(`database::repository::RecordsRepository`), which runs over any records
+provider: Postgres, MySQL, SQLite, MongoDB, Redis or a Tauri store.
+
+Each resource is described to the runtime with a `database::records::Resource`
+built from the IR the sql and gorm targets render, so the table, column names,
+SQL types, keys, `UNIQUE` / `NOT NULL` and foreign keys are theirs, and a Go
+service and a Rust service share one database.
+
+```yaml
+- local: protoc-gen-store
+  out: gen/rust/repository
+  opt:
+    - lang=rust
+    - target=repository
+    - crate=library                 # the Cargo package name; default "generated"
+    - rust_proto_module=crate::pb   # where the prost messages live; the default
+```
+
+### Output layout
+
+| File | Holds |
+| --- | --- |
+| `Cargo.toml`, `lib.rs` | one crate, as influxdb's; `lib.rs` declares a module per proto package |
+| `<package path>/mod.rs` | one proto package's repositories: `library.v1` → `library/v1/mod.rs` |
+
+The code names the prost messages through `rust_proto_module` (default
+`crate::pb`, as protoc-gen-service's Rust target names them), so the tree is
+usually mounted into the crate that holds them, beside the generated services:
+
+```rust
+pub mod pb { /* prost + prost-reflect messages, e.g. pb::library::v1::Book */ }
+
+#[path = "../gen/rust/repository/lib.rs"]
+pub mod repository;
+```
+
+The messages must derive `prost_reflect::ReflectMessage` (prost-reflect-build).
+
+### Generated API
+
+Per proto package, for each resource (`<resource>` is the message name in
+snake_case, `<plural>` the `google.api.resource` plural in snake_case):
+
+```rust
+/// The storage descriptor: table, schema, key (the resource name), columns, foreign keys.
+pub fn <resource>_resource(message: prost_reflect::MessageDescriptor) -> database::records::Resource;
+/// Etag, soft delete (OUTPUT_ONLY delete_time / expire_time) and output-only fields.
+/// Retention is zero; the caller sets it.
+pub fn <resource>_rules() -> database::repository::Rules;
+
+pub struct Repositories {
+    pub <plural>: std::sync::Arc<dyn database::repository::Repository<pb::<Message>>>,
+    // ... one per resource
+}
+/// Looks each message up in `pool` and binds a RecordsRepository per resource.
+pub fn repositories(db: &database::records::DB, pool: &prost_reflect::DescriptorPool)
+    -> database::Result<Repositories>;
+```
+
+```rust
+use repository::library::v1 as library;
+
+let db = OrmProvider::new(pool).set_database("").await?;
+let books = DESCRIPTOR_POOL.get_message_by_name("library.v1.Book").unwrap();
+db.schema.ensure_schema(&library::book_resource(books)).await?;
+let repos = library::repositories(&db, &DESCRIPTOR_POOL)?;
+let book = repos.books.get("publishers/acme/books/dune").await?;
+```
+
+### How fields become columns
+
+| IR | `Column` |
+| --- | --- |
+| column name, proto field | `name`, `field` (empty for a column no field carries) |
+| `string`, `int32/64`, `uint32/64`, `float`/`double`, `bool`, `bytes`, enum, `google.protobuf.Timestamp` | `Kind::String`, `Int`, `Uint`, `Float`, `Bool`, `Bytes`, `Enum`, `Timestamp` |
+| the sql target's type (`VARCHAR(255)`, `(store.v1.column)` overrides, …) | `sql_type`; an enum's is empty (the DDL's is a Postgres enum type) |
+| `REQUIRED` / `IDENTIFIER` | `not_null` |
+| `(store.v1.column).unique`, a single-column unique index | `unique` |
+| the synthesized `id` | `primary_key`, `generated: Some(Generated::Ulid)` (or `Uuid`), no field |
+| `create_time` / `update_time` (`OUTPUT_ONLY` Timestamp), synthesized `created_at` / `updated_at` | `auto_create` / `auto_update` |
+| a parent's `<parent>_id` | a field-less `NOT NULL` column and a foreign key |
+| `google.api.resource_reference` | a foreign key to the referenced resource's column |
+
+The resource's key (`pk_column`) is its `name` column: records are addressed by
+resource name, while `id` stays the SQL primary key.
+
+### Not yet
+
+Generation fails, naming the field, for a resource the records runtime cannot
+store in one row: a value object or deeper graph in a child table, a repeated
+reference in a join table, a repeated field, a message column other than
+`google.protobuf.Timestamp` (wrappers, `Duration`, `google.type.*`, documents)
+and a oneof's case column. Facets, `ListByKeys`, read masks, batches and units,
+and the GraphQL adapter are Go-only for now.
+
+The example [`examples/library-rust`](examples/library-rust) mounts the
+generated crate beside its prost messages and checks, on SQLite, that every
+descriptor matches the sql target's DDL, that `repositories()` binds, and that
+records round-trip (`just test-library`).
+
 ## Reference integrity
 
 A `google.api.resource_reference` is enforced where it can be, and checked
@@ -1703,8 +1811,9 @@ Passed via `opt:` in `buf.gen.yaml`.
 | `license_header` | Copyright/licence lines to place above the banner of every generated file — `\n`-separated, e.g. `license_header=Copyright 2026 Me.\nSPDX-License-Identifier: Apache-2.0`. Write them **without** comment markers: each target applies its own (`//` for Go, Prisma and TypeScript, `--` for SQL), so one value covers the whole output tree. Unset (the default) stamps nothing, because generated code belongs to whoever ran the generator, not to this plugin. |
 | `gorm_module` / `graphql_module` | **repository** (and `gorm_module` for **opensearch**): import paths of the generated gorm output and GraphQL client. |
 | `graphql_root_field_prefix` | **repository**: the DDN subgraph's `graphqlRootFieldPrefix` (the graphql target's `root_field_prefix`), carried by the root fields the DDN reference plugin's config names. Default none. |
-| `lang` | Language to emit, among those the target supports: `influxdb` emits `rust`, the rest `go`. Unset is the target's own; an unsupported pair fails. |
-| `crate` | **influxdb, `lang=rust`.** The Cargo package name of the output crate (default `generated`). |
+| `lang` | Language to emit, among those the target supports: `influxdb` emits `rust`, `repository` `go` (default) or `rust`, the rest `go`. Unset is the target's own; an unsupported pair fails. |
+| `crate` | **`lang=rust`** (influxdb, repository). The Cargo package name of the output crate (default `generated`). |
+| `rust_proto_module` | **repository, `lang=rust`.** The Rust module holding the prost messages, as protoc-gen-service's Rust target names it (default `crate::pb`). |
 | `repository_module` | **opensearch only.** Import path of the generated repository output whose projections the indices copy. |
 | `references` | Comma-separated descriptor images for reference discovery, added to `store.yaml`'s [`references`](#top-level-keys). |
 | `M<proto>=<import>` | Go import-path mapping for a proto file, required when protos omit `option go_package`. |
@@ -1879,7 +1988,8 @@ examples/generated/
   go/opensearch/    search
   go/protobuf/      search  references
   rust/influxdb/    sensors     # InfluxDB 3 + Arrow captures
-  sql/              bookstore  search  references
+  rust/repository/  library     # tpp-database repositories (examples/library-rust)
+  sql/              bookstore  search  references  library
   typescript/prisma/ bookstore
 ```
 
