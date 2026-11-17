@@ -149,8 +149,11 @@ func main() {
 		"opensearch target only: Go import path of the generated repository output whose "+
 			"projections (store.v1.projection) the OpenSearch indices copy")
 	rustCrate := flags.String("crate", "",
-		"influxdb target, lang=rust: the Cargo package name of the output tree, which is one crate "+
+		"lang=rust (influxdb, repository targets): the Cargo package name of the output tree, which is one crate "+
 			"as gorm's go_module is one Go module (default \"generated\")")
+	rustProtoModule := flags.String("rust_proto_module", "",
+		"repository target, lang=rust: the Rust module holding the prost messages, as "+
+			"protoc-gen-service's Rust target names it (default \"crate::pb\")")
 	references := flags.String("references", "",
 		"comma-separated descriptor images (binary FileDescriptorSets, e.g. from "+
 			"`buf build <module> -o x.binpb`) read only to discover the targets of "+
@@ -202,7 +205,8 @@ func main() {
 			WithRepositoryModules(*gormModule, *graphqlModule).
 			WithGraphQLRootFieldPrefix(*graphqlRootFieldPrefix).
 			WithSearchModules(*repositoryModule).
-			WithRustCrate(*rustCrate)
+			WithRustCrate(*rustCrate).
+			WithRustProtoModule(*rustProtoModule)
 		reg := wire.Registry(
 			protokit.Options{Target: *target, Strict: *strict, Version: v, References: referenceImages(cfg, *references)},
 			backend.Readers(reader),

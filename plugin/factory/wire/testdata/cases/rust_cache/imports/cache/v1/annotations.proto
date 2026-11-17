@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+package cache.v1;
+
+import "cache/v1/cache.proto";
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/the-protobuf-project/cache/plugin/pb/cachepbv1;cachepbv1";
+option java_multiple_files = true;
+option java_outer_classname = "AnnotationsProto";
+option java_package = "com.cache.v1";
+
+// annotations.proto is the single import a schema author needs for cache.v1:
+//
+//	import "cache/v1/annotations.proto";
+//
+// cache.v1 says which resources are cached and how. It says nothing about what
+// they are *named* — that is entity.v1, the neutral vocabulary every protokit
+// plugin reads through one shared reader — and nothing about how they are
+// *stored*, which is store.v1.
+//
+// The division is not tidiness. protoc-gen-cache generates a decorator that
+// addresses rows protoc-gen-store persisted; if the two derived table or column
+// names independently they would agree until the first edge case, and the
+// decorator would silently cache the wrong thing. So this vocabulary is
+// deliberately incapable of moving a name: its reader contributes facets and
+// implements no StructureReader at all.
+//
+// # Extension numbers
+//
+// 52000-52003, clear of entity.v1 (51000-51002) and store.v1 (50010-50012).
+//
+// Note the field block takes two numbers rather than one. cache_index and
+// cache_scope answer unrelated questions — "how is this found?" and "who is this
+// isolated from?" — and only one of them carries a security guarantee. Folding
+// them into a single extension message would make `(cache.v1.field) = {scope:
+// {}}` the spelling of a tenancy boundary, which is a thing worth being able to
+// grep for by its own name.
+
+extend google.protobuf.FileOptions {
+  // cache_defaults supplies the per-file defaults every cached resource in the
+  // file inherits unless it overrides them.
+  CacheDefaults cache_defaults = 52000;
+}
+
+extend google.protobuf.MessageOptions {
+  // cache marks a resource as cached and configures how.
+  //
+  //	option (cache.v1.cache) = {
+  //	  enabled: true
+  //	  strategy: STRATEGY_ASIDE
+  //	  ttl: {seconds: 300}
+  //	};
+  CacheOptions cache = 52001;
+}
+
+extend google.protobuf.FieldOptions {
+  // cache_index files this field as a secondary index. The resource must be
+  // STRATEGY_INDEXED; the generator refuses otherwise rather than emitting an
+  // accessor that would report ErrUnsupported on every backend.
+  //
+  //	string isbn = 4 [(cache.v1.cache_index) = {}];
+  IndexOptions cache_index = 52002;
+
+  // cache_scope binds this field into the resource's cache namespace, so every
+  // key is parameterized by its value.
+  //
+  //	string author_id = 3 [(cache.v1.cache_scope) = {}];
+  //
+  // A resource whose AIP pattern has a parent segment must bind it, here or in
+  // (cache.v1.cache).namespace. The generator hard-errors otherwise: a cache
+  // answers before the store is consulted, so an unbound parent segment means
+  // the store's row-level scoping never runs.
+  ScopeOptions cache_scope = 52003;
+}

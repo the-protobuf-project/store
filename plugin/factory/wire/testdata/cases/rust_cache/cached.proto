@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package shop.v1;
+
+import "cache/v1/annotations.proto";
+import "entity/v1/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+
+option go_package = "example.com/test/gen;shopv1";
+
+// A cached resource: its package's module mounts protoc-gen-cache's cache.rs.
+message Product {
+  option (google.api.resource) = {
+    type: "shop.v1/Product"
+    pattern: "products/{product}"
+    singular: "product"
+    plural: "products"
+  };
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
+  option (cache.v1.cache) = {enabled: true};
+
+  // The resource name.
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  // Shown to shoppers.
+  string title = 2 [(google.api.field_behavior) = REQUIRED];
+}
+
+// An uncached resource of the same package.
+message Order {
+  option (google.api.resource) = {
+    type: "shop.v1/Order"
+    pattern: "orders/{order}"
+    singular: "order"
+    plural: "orders"
+  };
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
+
+  // The resource name.
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+}

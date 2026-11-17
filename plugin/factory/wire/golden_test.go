@@ -22,6 +22,7 @@ import (
 	"github.com/the-protobuf-project/protokit"
 	"github.com/the-protobuf-project/protokit/golden"
 	"github.com/the-protobuf-project/protokit/header"
+	"github.com/the-protobuf-project/protokit/schema"
 	"github.com/the-protobuf-project/store/plugin/factory/provenance"
 	"github.com/the-protobuf-project/store/plugin/factory/source/proto/backend"
 	"github.com/the-protobuf-project/store/plugin/factory/wire"
@@ -73,8 +74,20 @@ func ormCasePlugin(dir string) protokit.Plugin {
 		WithRepositoryModules(optFile(dir, "gorm_module"), optFile(dir, "graphql_module")).
 		WithGraphQLRootFieldPrefix(optFile(dir, "graphql_root_field_prefix")).
 		WithSearchModules(optFile(dir, "repository_module")).
-		WithRustCrate(optFile(dir, "crate"))
-	return wire.Plugin(backend.Readers(reader), backend.NewLayout(cfg))
+		WithRustCrate(optFile(dir, "crate")).
+		WithRustProtoModule(optFile(dir, "rust_proto_module"))
+	pl := wire.Plugin(backend.Readers(reader), backend.NewLayout(cfg))
+	// A "lang" marker binds each target that emits more than one language to
+	// the one named, as the binary's lang opt does: the case's goldens under
+	// golden/<target>/ are that language's output.
+	if lang := optFile(dir, "lang"); lang != "" {
+		for name, tgt := range pl.Registry {
+			if l, ok := tgt.(interface{ ForLanguage(string) schema.Target }); ok {
+				pl.Registry[name] = l.ForLanguage(lang)
+			}
+		}
+	}
+	return pl
 }
 
 // optFile reads a valued marker file (e.g. gorm_module holding a module path),

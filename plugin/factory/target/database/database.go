@@ -42,15 +42,20 @@ func (t *Target) Languages() []string {
 // facets this plugin's readers attached; one implementing only schema.Target gets
 // the databases alone. protokit's own dispatch makes the same choice, and mirroring
 // it here is what lets a target be migrated one at a time.
-func (t *Target) Generate(ctx factory.Ctx, m *coreir.Model, _ string) error {
+func (t *Target) Generate(ctx factory.Ctx, m *coreir.Model, lang string) error {
 	if ctx.Plugin == nil {
 		return fmt.Errorf("target %q requires a protoc plugin context (proto sources run under buf/protoc, not the CLI)", t.inner.Name())
 	}
 	if m == nil || m.DB == nil {
 		return fmt.Errorf("target %q: model has no proto/DB schema (wrong source?)", t.inner.Name())
 	}
-	if irt, ok := t.inner.(schema.IRTarget); ok {
+	inner := t.inner
+	// A target emitting more than one language binds the resolved one.
+	if l, ok := inner.(interface{ ForLanguage(string) schema.Target }); ok && lang != "" {
+		inner = l.ForLanguage(lang)
+	}
+	if irt, ok := inner.(schema.IRTarget); ok {
 		return irt.GenerateIR(ctx.Plugin, m.DB)
 	}
-	return t.inner.Generate(ctx.Plugin, m.DB.Databases)
+	return inner.Generate(ctx.Plugin, m.DB.Databases)
 }

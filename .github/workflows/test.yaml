@@ -59,6 +59,37 @@ jobs:
         working-directory: store
         run: go test -race ./...
 
+  # The Rust repositories lang=rust target=repository generates, compiled and
+  # run against the runtime-rs commit the example pins: descriptors checked
+  # against the sql target's DDL, and round trips through RecordsRepository on
+  # SQLite. Its generated sources are committed, and the Go goldens hold them to
+  # the generator.
+  rust-library:
+    name: Rust repositories (library example)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: examples/library-rust
+
+      - name: Format
+        working-directory: examples/library-rust
+        run: cargo fmt --check
+
+      - name: Lint
+        working-directory: examples/library-rust
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Test
+        working-directory: examples/library-rust
+        run: cargo test --locked
+
   build:
     name: Build (${{ matrix.goos }}/${{ matrix.goarch }})
     runs-on: ubuntu-latest
