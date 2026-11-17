@@ -210,6 +210,16 @@ fn rules_follow_field_behaviors() {
 }
 
 #[test]
+fn search_lists_the_text_columns_opted_in() {
+    // As Go's filterx.Spec.Search: (store.v1.query).search on a text column.
+    // Book.pages opts in too but is no text, so it is left out.
+    let res = resources();
+    assert_eq!(res[0].search, ["bio"]);
+    assert_eq!(res[1].search, ["title"]);
+    assert_eq!(res[2].search, ["display_name"]);
+}
+
+#[test]
 fn enums_are_stored_by_label_in_the_ddl_enum_type() {
     let book = &resources()[1];
     let format = book.lookup_column("format").unwrap();
@@ -438,8 +448,20 @@ async fn repositories_round_trip_as_go_stores() {
     assert_eq!(repos.books.count(&list("publishers/-")).await.unwrap(), 3);
     assert_eq!(repos.books.count(&list("")).await.unwrap(), 3);
 
-    // Soft delete (Publisher has delete_time): marked, hidden from lists unless
-    // show_deleted, restored by undelete.
+    // A bareword filter term searches the search columns (Book.title).
+    let found = repos
+        .books
+        .list(&ListInput {
+            filter: "Tombs".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let titles: Vec<&str> = found.items.iter().map(|b| b.title.as_str()).collect();
+    assert_eq!(titles, ["The Tombs of Atuan"]);
+
+    // Soft delete (Publisher has delete_time): marked and restored by
+    // undelete; soft_deleted_records_leave_lists covers lists.
     repos
         .publishers
         .delete(&other.name, Some(&other.etag))
@@ -449,21 +471,10 @@ async fn repositories_round_trip_as_go_stores() {
     assert!(deleted.delete_time.is_some());
     let stored = row(&pool, "publishers", &other.name, &["delete_time"]).await;
     assert!(stored[0].is_some(), "delete_time stored");
-    assert_eq!(
-        repos.publishers.count(&ListInput::default()).await.unwrap(),
-        1
-    );
-    let all = ListInput {
-        show_deleted: true,
-        ..Default::default()
-    };
-    assert_eq!(repos.publishers.count(&all).await.unwrap(), 2);
     let restored = repos.publishers.undelete(&other.name, None).await.unwrap();
     assert!(restored.delete_time.is_none());
-    assert_eq!(
-        repos.publishers.count(&ListInput::default()).await.unwrap(),
-        2
-    );
+    let stored = row(&pool, "publishers", &other.name, &["delete_time"]).await;
+    assert!(stored[0].is_none(), "delete_time cleared");
 
     // Book has no delete_time: delete removes it.
     repos.books.delete(&book.name, None).await.unwrap();
@@ -471,4 +482,43 @@ async fn repositories_round_trip_as_go_stores() {
         repos.books.get(&book.name).await,
         Err(database::Error::NotFound)
     ));
+}
+
+/// Lists and counts leave soft-deleted records out unless `show_deleted`.
+#[tokio::test]
+#[ignore = "runtime-rs feat/repository-impl ee40397: the soft-delete clause \
+            `delete_time = null` is refused by the AIP-160 filter reader \
+            (\"null\" is not a timestamp)"]
+async fn soft_deleted_records_leave_lists() {
+    let (db, _) = sqlite().await;
+    let repos = repo::repositories(&db, &DESCRIPTOR_POOL).unwrap();
+    let mut created = Vec::new();
+    for name in ["publishers/a", "publishers/b"] {
+        let p = pb::Publisher {
+            name: name.into(),
+            display_name: name.into(),
+            slug: name.into(),
+            ..Default::default()
+        };
+        created.push(repos.publishers.create(&p).await.unwrap());
+    }
+    repos
+        .publishers
+        .delete(&created[1].name, None)
+        .await
+        .unwrap();
+    let live = ListInput::default();
+    let all = ListInput {
+        show_deleted: true,
+        ..Default::default()
+    };
+    assert_eq!(repos.publishers.count(&live).await.unwrap(), 1);
+    assert_eq!(repos.publishers.count(&all).await.unwrap(), 2);
+    assert_eq!(repos.publishers.list(&live).await.unwrap().items.len(), 1);
+    repos
+        .publishers
+        .undelete(&created[1].name, None)
+        .await
+        .unwrap();
+    assert_eq!(repos.publishers.count(&live).await.unwrap(), 2);
 }

@@ -1357,6 +1357,7 @@ let book = repos.books.get("publishers/acme/books/dune").await?;
 | `create_time` / `update_time` (`OUTPUT_ONLY` Timestamp), synthesized `created_at` / `updated_at` | `auto_create` / `auto_update` |
 | a parent's `<parent>_id` | a field-less `NOT NULL` column, a foreign key, and `Rules.parent_column` |
 | `google.api.resource_reference` | a foreign key to the referenced resource's column; to a top-level resource, also a `Rules.references` entry, so the bare id is stored as Go stores it |
+| `(store.v1.query) = {search: true}` on a filterable text column | listed in `Resource.search` (sorted column names), the columns a bareword filter term searches: exactly the gorm filter spec's `Search`, from the same function |
 
 The resource's key (`pk_column`) is its `name` column: records are addressed by
 resource name, while `id` stays the SQL primary key.

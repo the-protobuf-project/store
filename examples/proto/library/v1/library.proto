@@ -49,8 +49,11 @@ message Publisher {
   // The resource name, unique; the generated id is the primary key.
   string name = 1 [(google.api.field_behavior) = IDENTIFIER];
 
-  // Shown to readers.
-  string display_name = 2 [(google.api.field_behavior) = REQUIRED];
+  // Shown to readers; matched by a free-text filter term.
+  string display_name = 2 [
+    (google.api.field_behavior) = REQUIRED,
+    (store.v1.query) = {search: true}
+  ];
 
   // A URL slug, unique across publishers.
   string slug = 3 [
@@ -94,10 +97,11 @@ message Author {
   // Shown to readers.
   string display_name = 2 [(google.api.field_behavior) = REQUIRED];
 
-  // Free text, unbounded.
+  // Free text, unbounded; matched by a free-text filter term.
   string bio = 3 [
     (google.api.field_behavior) = OPTIONAL,
-    (store.v1.column) = {type: "TEXT"}
+    (store.v1.column) = {type: "TEXT"},
+    (store.v1.query) = {search: true}
   ];
 }
 
@@ -115,10 +119,11 @@ message Book {
   // The resource name.
   string name = 1 [(google.api.field_behavior) = IDENTIFIER];
 
-  // The title, at most 500 characters.
+  // The title, at most 500 characters; matched by a free-text filter term.
   string title = 2 [
     (google.api.field_behavior) = REQUIRED,
-    (store.v1.column) = {max_length: 500}
+    (store.v1.column) = {max_length: 500},
+    (store.v1.query) = {search: true}
   ];
 
   // Who wrote it.
@@ -130,8 +135,11 @@ message Book {
   // How it is published.
   Format format = 4 [(google.api.field_behavior) = REQUIRED];
 
-  // Page count.
-  int32 pages = 5 [(google.api.field_behavior) = OPTIONAL];
+  // Page count. Opted into search, but not text: no search column.
+  int32 pages = 5 [
+    (google.api.field_behavior) = OPTIONAL,
+    (store.v1.query) = {search: true}
+  ];
 
   // Copies sold.
   uint64 copies_sold = 6 [(google.api.field_behavior) = OPTIONAL];
