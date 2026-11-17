@@ -9,11 +9,13 @@
 //! round-trip records on SQLite.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use database::orm::OrmProvider;
+use database::orm::sqlx::Row;
+use database::orm::sqlx::sqlite::SqlitePool;
 use database::orm::sqlx::sqlite::SqlitePoolOptions;
-use database::records::{DB, Generated, Provider, Resource, Typed};
+use database::records::{DB, Generated, Kind, Provider, Resource};
+use database::repository::{ListInput, Reference};
 use library_example::DESCRIPTOR_POOL;
 use library_example::pb::library::v1 as pb;
 use library_example::repository::library::v1 as repo;
@@ -131,13 +133,7 @@ fn descriptors_match_the_sql_ddl() {
             .collect();
         assert_eq!(got.len(), ddl.columns.len(), "{}: column count", res.table);
         for (g, d) in got.iter().zip(&ddl.columns) {
-            let mut want = d.clone();
-            // An enum is a Postgres enum type in the DDL; the IR has no
-            // portable SQL type for it, so the descriptor leaves the dialect's.
-            if want.sql_type.starts_with('"') {
-                want.sql_type = String::new();
-            }
-            assert_eq!(g, &want, "{}.{}", res.table, d.name);
+            assert_eq!(g, d, "{}.{}", res.table, d.name);
         }
         let fks: Vec<(String, String, String)> = res
             .fks
@@ -198,12 +194,52 @@ fn rules_follow_field_behaviors() {
     assert_eq!(rules.etag.as_deref(), Some("etag"));
     assert_eq!(rules.delete_time, None);
     assert_eq!(rules.output_only, ["etag", "create_time"]);
-    assert_eq!(repo::author_rules(), Default::default());
+    assert_eq!(rules.pattern, "publishers/{publisher}/books/{book}");
+    assert_eq!(rules.parent_column.as_deref(), Some("publisher_id"));
+    assert_eq!(
+        rules.references,
+        [Reference {
+            field: "author".into(),
+            pattern: "authors/{author}".into()
+        }]
+    );
+    let rules = repo::author_rules();
+    assert_eq!(rules.pattern, "authors/{author}");
+    assert_eq!(rules.parent_column, None);
+    assert!(rules.references.is_empty() && rules.etag.is_none());
+}
+
+#[test]
+fn enums_are_stored_by_label_in_the_ddl_enum_type() {
+    let book = &resources()[1];
+    let format = book.lookup_column("format").unwrap();
+    assert_eq!(format.kind, Kind::String);
+    assert_eq!(format.sql_type, r#""library_v1"."format""#);
+    // The labels the DDL's CREATE TYPE lists, in number order.
+    let create_type = DDL
+        .lines()
+        .find(|l| l.starts_with(r#"CREATE TYPE "library_v1"."format""#))
+        .unwrap();
+    let labels: Vec<String> = format
+        .labels
+        .iter()
+        .map(|(_, l)| format!("'{l}'"))
+        .collect();
+    assert!(create_type.ends_with(&format!("({});", labels.join(", "))));
+    assert_eq!(
+        format.labels,
+        [
+            (pb::Format::Hardcover as i32, "HARDCOVER".to_owned()),
+            (pb::Format::Paperback as i32, "PAPERBACK".to_owned()),
+            (pb::Format::Ebook as i32, "EBOOK".to_owned()),
+        ]
+    );
 }
 
 /// An in-memory SQLite database with the `library_v1` schema attached, as the
-/// descriptors qualify their tables with it.
-async fn sqlite() -> DB {
+/// descriptors qualify their tables with it, and every table created. The pool
+/// is returned too, to read rows as stored.
+async fn sqlite() -> (DB, SqlitePool) {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .idle_timeout(None)
@@ -215,63 +251,224 @@ async fn sqlite() -> DB {
         .execute(&pool)
         .await
         .unwrap();
-    OrmProvider::new(pool).set_database("").await.unwrap()
-}
-
-#[tokio::test]
-async fn repositories_bind_every_resource() {
-    let db = sqlite().await;
-    let repos = repo::repositories(&db, &DESCRIPTOR_POOL).unwrap();
-    // Each is a dyn Repository of its prost message; binding validated the
-    // descriptor and the rules against the message.
-    let _: &Arc<dyn database::repository::Repository<pb::Publisher>> = &repos.publishers;
-    let _: &Arc<dyn database::repository::Repository<pb::Author>> = &repos.authors;
-    let _: &Arc<dyn database::repository::Repository<pb::Book>> = &repos.books;
-}
-
-#[tokio::test]
-async fn descriptors_create_tables_and_round_trip() {
-    let db = sqlite().await;
-    for res in resources() {
+    let db = OrmProvider::new(pool.clone())
+        .set_database("")
+        .await
+        .unwrap();
+    for mut res in resources() {
+        // An enum's sql_type names its Postgres type, which SQLite's CREATE
+        // TABLE cannot parse: the table is created with the dialect's type.
+        // The repositories below use the generated descriptors unchanged.
+        for c in &mut res.columns {
+            if !c.labels.is_empty() {
+                c.sql_type.clear();
+            }
+        }
         db.schema.ensure_schema(&res).await.unwrap();
     }
-    let res = resources();
+    (db, pool)
+}
 
-    let publishers = Typed::<pb::Publisher>::new(&db, Arc::new(res[2].clone())).unwrap();
-    let publisher = pb::Publisher {
-        name: "publishers/acme".into(),
-        display_name: "Acme".into(),
-        slug: "acme".into(),
-        etag: "e1".into(),
+/// One stored row's text columns, as Go's GORM would read them.
+async fn row(pool: &SqlitePool, table: &str, name: &str, cols: &[&str]) -> Vec<Option<String>> {
+    let sql = format!(
+        "SELECT {} FROM library_v1.{table} WHERE name = ?",
+        cols.join(", ")
+    );
+    let r = database::orm::sqlx::query(database::orm::sqlx::AssertSqlSafe(sql))
+        .bind(name)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    cols.iter().map(|c| r.try_get(*c).unwrap()).collect()
+}
+
+fn last_segment(name: &str) -> &str {
+    name.rsplit('/').next().unwrap()
+}
+
+#[tokio::test]
+async fn repositories_round_trip_as_go_stores() {
+    let (db, pool) = sqlite().await;
+    let repos = repo::repositories(&db, &DESCRIPTOR_POOL).unwrap();
+
+    // A root resource created without a name gets publishers/<ULID>, and its
+    // row's id is that id, as Go's Create sets it.
+    let acme = repos
+        .publishers
+        .create(&pb::Publisher {
+            display_name: "Acme".into(),
+            slug: "acme".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(acme.name.starts_with("publishers/"));
+    assert_eq!(last_segment(&acme.name).len(), 26, "a ULID id");
+    assert!(!acme.etag.is_empty() && acme.create_time.is_some());
+    let stored = row(&pool, "publishers", &acme.name, &["id", "etag"]).await;
+    assert_eq!(stored[0].as_deref(), Some(last_segment(&acme.name)));
+    assert_eq!(stored[1].as_deref(), Some(acme.etag.as_str()));
+    let other = repos
+        .publishers
+        .create(&pb::Publisher {
+            name: "publishers/other".into(),
+            display_name: "Other".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(other.name, "publishers/other");
+
+    let author = repos
+        .authors
+        .create(&pb::Author {
+            name: "authors/le-guin".into(),
+            display_name: "Ursula K. Le Guin".into(),
+            bio: "Earthsea".into(),
+        })
+        .await
+        .unwrap();
+
+    // A nested resource named <parent>/books/ gets a minted id.
+    let draft = pb::Book {
+        name: format!("{}/books/", acme.name),
+        title: "A Wizard of Earthsea".into(),
+        author: author.name.clone(),
+        format: pb::Format::Ebook as i32,
+        pages: 183,
+        copies_sold: 1_000_000,
+        price: 9.99,
+        in_print: true,
+        cover_digest: vec![1, 2, 3],
+        publish_time: Some(prost_types::Timestamp {
+            seconds: -63_158_400,
+            nanos: 0,
+        }),
         ..Default::default()
     };
-    let stored = publishers.create(&publisher).await.unwrap();
-    let back = publishers.get("publishers/acme").await.unwrap();
-    assert_eq!(back.display_name, "Acme");
-    assert_eq!(back.slug, "acme");
-    assert_eq!(back.etag, "e1");
-    assert!(
-        back.create_time.is_some() && back.update_time.is_some(),
-        "audit times filled"
+    let book = repos.books.create(&draft).await.unwrap();
+    assert!(book.name.starts_with(&format!("{}/books/", acme.name)));
+    assert_eq!(last_segment(&book.name).len(), 26);
+    assert_eq!(book.author, "authors/le-guin", "read back as the name");
+    assert_eq!(book.format, pb::Format::Ebook as i32);
+    assert_eq!(
+        (book.pages, book.copies_sold, book.in_print),
+        (183, 1_000_000, true)
     );
-    assert!(back.delete_time.is_none());
-    assert!(stored.message.get_field_by_name("name").is_some());
-    // The unique slug refuses a second publisher with it.
-    let dup = pb::Publisher {
-        name: "publishers/other".into(),
-        ..publisher.clone()
-    };
-    assert!(matches!(
-        publishers.create(&dup).await,
-        Err(database::Error::AlreadyExists)
-    ));
+    assert_eq!(book.cover_digest, [1, 2, 3]);
+    assert_eq!(book.publish_time, draft.publish_time);
+    assert!(!book.etag.is_empty() && book.create_time.is_some());
+    assert_eq!(repos.books.get(&book.name).await.unwrap(), book);
 
-    let authors = Typed::<pb::Author>::new(&db, Arc::new(res[0].clone())).unwrap();
-    let author = pb::Author {
-        name: "authors/le-guin".into(),
-        display_name: "Ursula K. Le Guin".into(),
-        bio: "Earthsea".into(),
+    // The row as Go writes it: a fresh surrogate id (a nested id is unique only
+    // under its parent), the full name, the parent's id, the reference as the
+    // author's bare id, and the enum as its label.
+    let stored = row(
+        &pool,
+        "books",
+        &book.name,
+        &["id", "name", "publisher_id", "author", "format", "etag"],
+    )
+    .await;
+    let id = stored[0].clone().unwrap();
+    assert_eq!(id.len(), 26);
+    assert_ne!(
+        id,
+        last_segment(&book.name),
+        "a nested row keys by a surrogate"
+    );
+    assert_eq!(stored[1].as_deref(), Some(book.name.as_str()));
+    assert_eq!(stored[2].as_deref(), Some(last_segment(&acme.name)));
+    assert_eq!(stored[3].as_deref(), Some("le-guin"));
+    assert_eq!(stored[4].as_deref(), Some("EBOOK"));
+    assert_eq!(stored[5].as_deref(), Some(book.etag.as_str()));
+
+    // Update with the etag: the masked field changes and a new etag is minted;
+    // the stale etag then conflicts.
+    let edit = pb::Book {
+        title: "A Wizard of Earthsea (50th anniversary)".into(),
+        ..book.clone()
     };
-    authors.create(&author).await.unwrap();
-    assert_eq!(authors.get("authors/le-guin").await.unwrap(), author);
+    let updated = repos.books.update(&edit, &["title".into()]).await.unwrap();
+    assert_eq!(updated.title, edit.title);
+    assert_ne!(updated.etag, book.etag);
+    assert_eq!(updated.format, book.format);
+    let stale = repos.books.update(&edit, &["title".into()]).await;
+    assert!(matches!(stale, Err(database::Error::Conflict)), "{stale:?}");
+
+    // Parent-scoped lists: two books under acme, one under other.
+    for (parent, title) in [
+        (&acme.name, "The Tombs of Atuan"),
+        (&other.name, "Other Book"),
+    ] {
+        repos
+            .books
+            .create(&pb::Book {
+                name: format!("{parent}/books/"),
+                title: title.into(),
+                format: pb::Format::Paperback as i32,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+    }
+    let list = |parent: &str| ListInput {
+        parent: parent.into(),
+        ..Default::default()
+    };
+    let acme_books = repos.books.list(&list(&acme.name)).await.unwrap();
+    assert_eq!(acme_books.items.len(), 2);
+    assert!(
+        acme_books
+            .items
+            .iter()
+            .all(|b| b.name.starts_with(&acme.name))
+    );
+    assert_eq!(
+        repos
+            .books
+            .list(&list(&other.name))
+            .await
+            .unwrap()
+            .items
+            .len(),
+        1
+    );
+    assert_eq!(repos.books.count(&list("publishers/-")).await.unwrap(), 3);
+    assert_eq!(repos.books.count(&list("")).await.unwrap(), 3);
+
+    // Soft delete (Publisher has delete_time): marked, hidden from lists unless
+    // show_deleted, restored by undelete.
+    repos
+        .publishers
+        .delete(&other.name, Some(&other.etag))
+        .await
+        .unwrap();
+    let deleted = repos.publishers.get(&other.name).await.unwrap();
+    assert!(deleted.delete_time.is_some());
+    let stored = row(&pool, "publishers", &other.name, &["delete_time"]).await;
+    assert!(stored[0].is_some(), "delete_time stored");
+    assert_eq!(
+        repos.publishers.count(&ListInput::default()).await.unwrap(),
+        1
+    );
+    let all = ListInput {
+        show_deleted: true,
+        ..Default::default()
+    };
+    assert_eq!(repos.publishers.count(&all).await.unwrap(), 2);
+    let restored = repos.publishers.undelete(&other.name, None).await.unwrap();
+    assert!(restored.delete_time.is_none());
+    assert_eq!(
+        repos.publishers.count(&ListInput::default()).await.unwrap(),
+        2
+    );
+
+    // Book has no delete_time: delete removes it.
+    repos.books.delete(&book.name, None).await.unwrap();
+    assert!(matches!(
+        repos.books.get(&book.name).await,
+        Err(database::Error::NotFound)
+    ));
 }

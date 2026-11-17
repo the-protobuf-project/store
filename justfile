@@ -119,7 +119,7 @@ test-sensors:
 
 # Run the library example: the generated Rust repositories' descriptors
 # against the sql target's DDL, and round trips on SQLite. Needs a runtime-rs
-# checkout at ../runtime/runtime-rs (see examples/library-rust/Cargo.toml).
+# checkout at ../runtime/runtime-rs-repository (see examples/library-rust/Cargo.toml).
 test-library:
     cd examples/library-rust && cargo test
 

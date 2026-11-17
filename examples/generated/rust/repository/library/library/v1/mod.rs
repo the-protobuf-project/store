@@ -32,7 +32,7 @@
 
 use crate::pb::library::v1 as pb;
 use database::records::{Column, DB, ForeignKey, Generated, Kind, Resource};
-use database::repository::{RecordsRepository, Repository, Rules};
+use database::repository::{RecordsRepository, Reference, Repository, Rules};
 use prost::Message;
 use prost_reflect::{DescriptorPool, MessageDescriptor, ReflectMessage};
 use std::sync::Arc;
@@ -115,6 +115,8 @@ pub fn author_rules() -> Rules {
         etag: None,
         delete_time: None,
         expire_time: None,
+        pattern: "authors/{author}".into(),
+        parent_column: None,
         ..Rules::default()
     }
 }
@@ -143,7 +145,17 @@ pub fn book_resource(message: MessageDescriptor) -> Resource {
             column("author", "author", Kind::String, "CHAR(26)"),
             Column {
                 not_null: true,
-                ..column("format", "format", Kind::Enum, "")
+                labels: vec![
+                    (1, "HARDCOVER".into()),
+                    (2, "PAPERBACK".into()),
+                    (3, "EBOOK".into()),
+                ],
+                ..column(
+                    "format",
+                    "format",
+                    Kind::String,
+                    "\"library_v1\".\"format\"",
+                )
             },
             column("pages", "pages", Kind::Int, "INTEGER"),
             column("copies_sold", "copies_sold", Kind::Uint, "NUMERIC(20,0)"),
@@ -183,6 +195,9 @@ pub fn book_rules() -> Rules {
         delete_time: None,
         expire_time: None,
         output_only: vec!["etag".into(), "create_time".into()],
+        pattern: "publishers/{publisher}/books/{book}".into(),
+        parent_column: Some("publisher_id".into()),
+        references: vec![reference("author", "authors/{author}")],
         ..Rules::default()
     }
 }
@@ -244,6 +259,8 @@ pub fn publisher_rules() -> Rules {
             "delete_time".into(),
             "expire_time".into(),
         ],
+        pattern: "publishers/{publisher}".into(),
+        parent_column: None,
         ..Rules::default()
     }
 }
@@ -266,6 +283,14 @@ fn foreign_key(column: &str, referenced_name: &str, referenced_field: &str) -> F
         column: column.into(),
         referenced_name: referenced_name.into(),
         referenced_field: referenced_field.into(),
+    }
+}
+
+/// A reference field stored as the bare id of a resource of `pattern`.
+fn reference(field: &str, pattern: &str) -> Reference {
+    Reference {
+        field: field.into(),
+        pattern: pattern.into(),
     }
 }
 

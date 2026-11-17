@@ -1348,17 +1348,38 @@ let book = repos.books.get("publishers/acme/books/dune").await?;
 | IR | `Column` |
 | --- | --- |
 | column name, proto field | `name`, `field` (empty for a column no field carries) |
-| `string`, `int32/64`, `uint32/64`, `float`/`double`, `bool`, `bytes`, enum, `google.protobuf.Timestamp` | `Kind::String`, `Int`, `Uint`, `Float`, `Bool`, `Bytes`, `Enum`, `Timestamp` |
-| the sql target's type (`VARCHAR(255)`, `(store.v1.column)` overrides, …) | `sql_type`; an enum's is empty (the DDL's is a Postgres enum type) |
+| `string`, `int32/64`, `uint32/64`, `float`/`double`, `bool`, `bytes`, `google.protobuf.Timestamp` | `Kind::String`, `Int`, `Uint`, `Float`, `Bool`, `Bytes`, `Timestamp` |
+| an enum | `Kind::String` with `labels` (number → label, spelled as gorm stores it: `FORMAT_EBOOK` is `EBOOK`), so the label is stored, not the number |
+| the sql target's type (`VARCHAR(255)`, `(store.v1.column)` overrides, …) | `sql_type`; an enum's is the Postgres enum type the DDL declares (`"library_v1"."format"`) |
 | `REQUIRED` / `IDENTIFIER` | `not_null` |
 | `(store.v1.column).unique`, a single-column unique index | `unique` |
 | the synthesized `id` | `primary_key`, `generated: Some(Generated::Ulid)` (or `Uuid`), no field |
 | `create_time` / `update_time` (`OUTPUT_ONLY` Timestamp), synthesized `created_at` / `updated_at` | `auto_create` / `auto_update` |
-| a parent's `<parent>_id` | a field-less `NOT NULL` column and a foreign key |
-| `google.api.resource_reference` | a foreign key to the referenced resource's column |
+| a parent's `<parent>_id` | a field-less `NOT NULL` column, a foreign key, and `Rules.parent_column` |
+| `google.api.resource_reference` | a foreign key to the referenced resource's column; to a top-level resource, also a `Rules.references` entry, so the bare id is stored as Go stores it |
 
 The resource's key (`pk_column`) is its `name` column: records are addressed by
 resource name, while `id` stays the SQL primary key.
+
+`<resource>_rules()` also carries the `google.api.resource` `pattern`, from which
+the repository checks names, mints them (`publishers/<ULID>`, or a ULID id under
+a parent given as `publishers/p/books/`) and sets a root resource's `id` to its
+name's id, as Go's `Create` does. `parent_column` is set only under a
+two-collection pattern; a deeper resource gets `None` (its parent is keyed by a
+surrogate Go looks up), so the runtime cannot fill its `<parent>_id` yet.
+
+On Postgres the runtime casts enum values to the `sql_type` enum type and
+`ensure_schema` creates it. SQLite and MySQL cannot parse that type name in
+`CREATE TABLE`, so create their tables from a copy whose enum `sql_type` is
+cleared (as `examples/library-rust` does) until the runtime falls back itself.
+
+### Caches
+
+When a package has a resource with `(cache.v1.cache)` record or list caching
+enabled (read by extension number 52001, so no dependency on protoc-gen-cache),
+its `mod.rs` also declares `pub mod cache;`: protoc-gen-cache (`lang=rust`) writes
+`<package path>/cache.rs` beside it, decorating these repositories. Run both
+plugins into the same `out:`.
 
 ### Not yet
 
@@ -1371,8 +1392,10 @@ and the GraphQL adapter are Go-only for now.
 
 The example [`examples/library-rust`](examples/library-rust) mounts the
 generated crate beside its prost messages and checks, on SQLite, that every
-descriptor matches the sql target's DDL, that `repositories()` binds, and that
-records round-trip (`just test-library`).
+descriptor matches the sql target's DDL and round-trips Book, Publisher and
+Author through `repositories()`, reading the stored rows back to check they are
+what Go writes: minted names and ids, the parent's id, references as bare ids,
+enums as labels, etags, soft delete and parent-scoped lists (`just test-library`).
 
 ## Reference integrity
 
