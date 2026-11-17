@@ -10,12 +10,10 @@ edition = "2024"
 publish = false
 
 [dependencies]
-# Local verification against a runtime-rs checkout beside this repository.
-# It needs RecordsRepository implemented with Rules.pattern / parent_column /
-# references and Column.labels (runtime-rs branch feat/repository-impl). CI pins
-# the git dependency instead, once that is on main:
-#   tpp-database = { git = "https://github.com/the-protobuf-project/runtime-rs", branch = "main", features = ["orm-sqlite"] }
-tpp-database = { path = "../../../runtime/runtime-rs/database", default-features = false, features = ["orm-sqlite"] }
+# The runtime the generated repositories are written against: RecordsRepository,
+# Rules (pattern, parent_column, references) and Column.labels landed in
+# runtime-rs#49. Pinned to that merge, as protoc-gen-service pins runtime-rs.
+tpp-database = { git = "https://github.com/the-protobuf-project/runtime-rs", rev = "53f2ffbfefc2caa2c02ba4d62637ede614103b17", default-features = false, features = ["orm-sqlite"] }
 prost = "0.14"
 prost-types = "0.14"
 prost-reflect = { version = "0.16", features = ["derive"] }

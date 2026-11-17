@@ -118,15 +118,15 @@ test-sensors:
     cd examples/sensors && cargo test
 
 # Run the library example: the generated Rust repositories' descriptors
-# against the sql target's DDL, and round trips on SQLite. Needs a runtime-rs
-# checkout at ../runtime/runtime-rs-repository (see examples/library-rust/Cargo.toml).
+# against the sql target's DDL, and round trips on SQLite, over the runtime-rs
+# commit examples/library-rust/Cargo.toml pins.
 test-library:
     cd examples/library-rust && cargo test
 
 # Run every example against the generated code: the Go examples (the search
 # and references tests skip without STORE_TEST_POSTGRES_DSN and
-# STORE_TEST_OPENSEARCH_URL) and the Rust sensors example.
-test-examples: build-examples test-sensors
+# STORE_TEST_OPENSEARCH_URL) and the Rust sensors and library examples.
+test-examples: build-examples test-sensors test-library
     cd examples && go test -count=1 ./...
 
 # Regenerate every committed artifact: stubs, goldens, examples.
