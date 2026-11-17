@@ -1,0 +1,36 @@
+# Generates the Rust repositories of the library example protos, and the SQL
+# DDL the example checks their descriptors against.
+# Run: just library   (or: buf generate --template buf.gen.library.yaml)
+#
+# Out: examples/generated/rust/repository/library — one crate (crate=library):
+#   Cargo.toml + lib.rs, library/v1/mod.rs with library_v1's repositories.
+#   examples/library-rust mounts it beside its prost messages (crate::pb).
+# Out: examples/generated/sql/library — the sql target's DDL of the same protos.
+version: v2
+
+inputs:
+  - directory: examples/proto
+    paths:
+      - examples/proto/library
+
+plugins:
+  - local: protoc-gen-store
+    out: examples/generated/rust/repository/library
+    opt:
+      - lang=rust
+      - target=repository
+      - crate=library
+      - rust_proto_module=crate::pb
+      - 'license_header=Copyright 2026 The Protobuf Project authors.\nSPDX-License-Identifier: Apache-2.0'
+      # protogen asks every plugin for a Go import path, though neither target
+      # here writes Go.
+      - Mlibrary/v1/library.proto=github.com/the-protobuf-project/store/examples/gen/library/v1
+
+  - local: protoc-gen-store
+    out: examples/generated/sql/library
+    opt:
+      - target=sql
+      - 'license_header=Copyright 2026 The Protobuf Project authors.\nSPDX-License-Identifier: Apache-2.0'
+      # protogen asks every plugin for a Go import path, though neither target
+      # here writes Go.
+      - Mlibrary/v1/library.proto=github.com/the-protobuf-project/store/examples/gen/library/v1

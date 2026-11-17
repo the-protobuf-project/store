@@ -72,12 +72,20 @@ examples: build
     PATH="{{bin}}:$PATH" buf generate --template buf.gen.sensors.yaml
     PATH="{{bin}}:$PATH" buf generate --template buf.gen.search.yaml
     PATH="{{bin}}:$PATH" buf generate --template buf.gen.references.yaml
+    PATH="{{bin}}:$PATH" buf generate --template buf.gen.library.yaml
     @echo "examples regenerated with $(./bin/protoc-gen-store --version)"
 
 # Regenerate the sensors example (the Rust InfluxDB 3 / Arrow client) with the
 # freshly-built ./bin plugin.
 sensors: build
     PATH="{{bin}}:$PATH" buf generate --template buf.gen.sensors.yaml
+
+# Regenerate the library example (Rust repositories, lang=rust
+# target=repository, and the DDL they are checked against) and its descriptor
+# set with the freshly-built ./bin plugin.
+library: build
+    PATH="{{bin}}:$PATH" buf generate --template buf.gen.library.yaml
+    buf build --path examples/proto/library/v1/library.proto --exclude-source-info -o examples/library-rust/library.binpb
 
 # Regenerate the references example (reference integrity) with the
 # freshly-built ./bin plugin.
@@ -108,6 +116,12 @@ build-examples:
 # are set.
 test-sensors:
     cd examples/sensors && cargo test
+
+# Run the library example: the generated Rust repositories' descriptors
+# against the sql target's DDL, and round trips on SQLite. Needs a runtime-rs
+# checkout at ../runtime/runtime-rs (see examples/library-rust/Cargo.toml).
+test-library:
+    cd examples/library-rust && cargo test
 
 # Run every example against the generated code: the Go examples (the search
 # and references tests skip without STORE_TEST_POSTGRES_DSN and

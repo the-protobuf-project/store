@@ -13,6 +13,7 @@ examples are hand-written and live beside it. Regenerate everything with
 | Go | [opensearch](generated/go/opensearch) | search | [`search/proto`](search/proto) | `just test-search` |
 | Go | [protobuf](generated/go/protobuf) | search, references | as above | stubs the above import |
 | Rust | [influxdb](generated/rust/influxdb) | sensors (InfluxDB 3, Arrow) | [`proto/sensors`](proto/sensors) | `just test-sensors` |
+| Rust | [repository](generated/rust/repository) | library (tpp-database repositories, checked on SQLite in [`library-rust`](library-rust)) | [`proto/library`](proto/library) | `just test-library` |
 | SQL | [sql](generated/sql) | bookstore, search, references | as above | `psql -f <db>/migrate.sql` |
 | TypeScript | [prisma](generated/typescript/prisma) | bookstore | [`proto/bookstore`](proto/bookstore) | `npx prisma validate` |
 
