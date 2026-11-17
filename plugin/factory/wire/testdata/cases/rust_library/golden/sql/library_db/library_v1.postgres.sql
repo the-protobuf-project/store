@@ -12,6 +12,11 @@
 --
 -- store — https://github.com/the-protobuf-project/store
 
+-- Extensions (operator classes the indexes and constraints below are built with).
+-- Database-wide, not schema-scoped: creating one twice is a no-op.
+CREATE EXTENSION IF NOT EXISTS "pg_trgm";
+
+
 CREATE SCHEMA IF NOT EXISTS "library_v1";
 
 -- Format is how a book is published, stored as an enum column.
@@ -23,7 +28,7 @@ CREATE TABLE "library_v1"."publishers" (
     "id"  CHAR(26)  NOT NULL  PRIMARY KEY,
     -- The resource name, unique; the generated id is the primary key.
     "name"  VARCHAR(255)  NOT NULL  UNIQUE,
-    -- Shown to readers.
+    -- Shown to readers; matched by a free-text filter term.
     "display_name"  VARCHAR(255)  NOT NULL,
     -- A URL slug, unique across publishers.
     "slug"  VARCHAR(255)  UNIQUE,
@@ -40,6 +45,8 @@ CREATE TABLE "library_v1"."publishers" (
 );
 CREATE INDEX "idx_publishers_update_time" ON "library_v1"."publishers" ("update_time");
 CREATE INDEX "idx_publishers_delete_time" ON "library_v1"."publishers" ("delete_time");
+-- case-insensitive contains (ILIKE '%…%') cannot use a B-tree
+CREATE INDEX IF NOT EXISTS "idx_publishers_display_name_trgm" ON "library_v1"."publishers" USING gin ("display_name" gin_trgm_ops);
 
 -- Author is a root resource whose audit times the table synthesizes (timestamps: true adds created_at and updated_at, which no field carries).
 CREATE TABLE "library_v1"."authors" (
@@ -49,13 +56,15 @@ CREATE TABLE "library_v1"."authors" (
     "name"  VARCHAR(255)  NOT NULL  UNIQUE,
     -- Shown to readers.
     "display_name"  VARCHAR(255)  NOT NULL,
-    -- Free text, unbounded.
+    -- Free text, unbounded; matched by a free-text filter term.
     "bio"  TEXT,
     -- Timestamp when the record was created.
     "created_at"  TIMESTAMPTZ  NOT NULL  DEFAULT now(),
     -- Timestamp when the record was last updated.
     "updated_at"  TIMESTAMPTZ  NOT NULL  DEFAULT now()
 );
+-- case-insensitive contains (ILIKE '%…%') cannot use a B-tree
+CREATE INDEX IF NOT EXISTS "idx_authors_bio_trgm" ON "library_v1"."authors" USING gin ("bio" gin_trgm_ops);
 
 -- Book is nested under a publisher and references its author: a parent foreign key, a reference foreign key, and a column of every scalar kind.
 CREATE TABLE "library_v1"."books" (
@@ -63,13 +72,13 @@ CREATE TABLE "library_v1"."books" (
     "id"  CHAR(26)  NOT NULL  PRIMARY KEY,
     -- The resource name.
     "name"  VARCHAR(255)  NOT NULL  UNIQUE,
-    -- The title, at most 500 characters.
+    -- The title, at most 500 characters; matched by a free-text filter term.
     "title"  VARCHAR(500)  NOT NULL,
     -- Who wrote it.
     "author"  CHAR(26),
     -- How it is published.
     "format"  "library_v1"."format"  NOT NULL  DEFAULT 'HARDCOVER',
-    -- Page count.
+    -- Page count. Opted into search, but not text: no search column.
     "pages"  INTEGER,
     -- Copies sold.
     "copies_sold"  NUMERIC(20,0),
@@ -92,13 +101,15 @@ CREATE TABLE "library_v1"."books" (
 );
 CREATE INDEX "idx_books_publisher_id_id" ON "library_v1"."books" ("publisher_id", "id");
 CREATE INDEX "idx_books_author" ON "library_v1"."books" ("author");
+-- case-insensitive contains (ILIKE '%…%') cannot use a B-tree
+CREATE INDEX IF NOT EXISTS "idx_books_title_trgm" ON "library_v1"."books" USING gin ("title" gin_trgm_ops);
 
 
 -- Column and table documentation, persisted to the catalog.
 COMMENT ON TABLE "library_v1"."publishers" IS 'Publisher is a root resource with every AIP rule the runtime applies: an etag, soft delete (delete_time, expire_time) and audit times.';
 COMMENT ON COLUMN "library_v1"."publishers"."id" IS 'Unique identifier for the record.';
 COMMENT ON COLUMN "library_v1"."publishers"."name" IS 'The resource name, unique; the generated id is the primary key.';
-COMMENT ON COLUMN "library_v1"."publishers"."display_name" IS 'Shown to readers.';
+COMMENT ON COLUMN "library_v1"."publishers"."display_name" IS 'Shown to readers; matched by a free-text filter term.';
 COMMENT ON COLUMN "library_v1"."publishers"."slug" IS 'A URL slug, unique across publishers.';
 COMMENT ON COLUMN "library_v1"."publishers"."etag" IS 'Optimistic-concurrency token.';
 COMMENT ON COLUMN "library_v1"."publishers"."create_time" IS 'When the publisher was created.';
@@ -109,16 +120,16 @@ COMMENT ON TABLE "library_v1"."authors" IS 'Author is a root resource whose audi
 COMMENT ON COLUMN "library_v1"."authors"."id" IS 'Unique identifier for the record.';
 COMMENT ON COLUMN "library_v1"."authors"."name" IS 'The resource name.';
 COMMENT ON COLUMN "library_v1"."authors"."display_name" IS 'Shown to readers.';
-COMMENT ON COLUMN "library_v1"."authors"."bio" IS 'Free text, unbounded.';
+COMMENT ON COLUMN "library_v1"."authors"."bio" IS 'Free text, unbounded; matched by a free-text filter term.';
 COMMENT ON COLUMN "library_v1"."authors"."created_at" IS 'Timestamp when the record was created.';
 COMMENT ON COLUMN "library_v1"."authors"."updated_at" IS 'Timestamp when the record was last updated.';
 COMMENT ON TABLE "library_v1"."books" IS 'Book is nested under a publisher and references its author: a parent foreign key, a reference foreign key, and a column of every scalar kind.';
 COMMENT ON COLUMN "library_v1"."books"."id" IS 'Unique identifier for the record.';
 COMMENT ON COLUMN "library_v1"."books"."name" IS 'The resource name.';
-COMMENT ON COLUMN "library_v1"."books"."title" IS 'The title, at most 500 characters.';
+COMMENT ON COLUMN "library_v1"."books"."title" IS 'The title, at most 500 characters; matched by a free-text filter term.';
 COMMENT ON COLUMN "library_v1"."books"."author" IS 'Who wrote it.';
 COMMENT ON COLUMN "library_v1"."books"."format" IS 'How it is published.';
-COMMENT ON COLUMN "library_v1"."books"."pages" IS 'Page count.';
+COMMENT ON COLUMN "library_v1"."books"."pages" IS 'Page count. Opted into search, but not text: no search column.';
 COMMENT ON COLUMN "library_v1"."books"."copies_sold" IS 'Copies sold.';
 COMMENT ON COLUMN "library_v1"."books"."price" IS 'List price.';
 COMMENT ON COLUMN "library_v1"."books"."in_print" IS 'Whether it is in print.';

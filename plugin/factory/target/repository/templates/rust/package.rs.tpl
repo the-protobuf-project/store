@@ -54,6 +54,9 @@ pub fn {{.Snake}}_resource(message: MessageDescriptor) -> Resource {
 {{- if .FKs}}
 {{.FKs}}
 {{- end}}
+{{- if .Search}}
+{{.Search}}
+{{- end}}
 {{.Base}}
     }
 }

@@ -43,6 +43,7 @@ import (
 	"github.com/the-protobuf-project/protokit/templates"
 	"github.com/the-protobuf-project/store/plugin/factory/facets"
 	"github.com/the-protobuf-project/store/plugin/factory/provenance"
+	"github.com/the-protobuf-project/store/plugin/factory/target/gorm"
 	"github.com/the-protobuf-project/store/plugin/factory/target/types"
 )
 
@@ -121,6 +122,7 @@ type rustResourceView struct {
 	PK       string
 	Columns  []string // rendered column expressions, each ending in ","
 	FKs      string   // rendered fks vec!, "" without foreign keys
+	Search   string   // rendered search vec!, "" without search columns
 	Base     string   // the rendered ..Resource::new(...) line
 	Rules    []string // rendered Rules fields
 	HasRefs  bool
@@ -184,6 +186,7 @@ func (g *Generator) generateRust(p *protogen.Plugin, ir *protokit.IR) error {
 	byPkg := map[string][]*resource{}
 	sources := map[string][]string{}
 	databases := map[string][]string{}
+	search := map[*schema.Table][]string{}
 	for _, db := range dbs {
 		resources, err := planResources(pb, db)
 		if err != nil {
@@ -196,6 +199,7 @@ func (g *Generator) generateRust(p *protogen.Plugin, ir *protokit.IR) error {
 					return fmt.Errorf("repository: lang=rust: %s needs a proto package, which names its Rust module", r.Table.ProtoMessage)
 				}
 				byPkg[pkg] = append(byPkg[pkg], r)
+				search[r.Table] = gorm.SearchColumns(db, s, r.Table, fx)
 				if !contains(databases[pkg], db.Name) {
 					databases[pkg] = append(databases[pkg], db.Name)
 				}
@@ -216,7 +220,7 @@ func (g *Generator) generateRust(p *protogen.Plugin, ir *protokit.IR) error {
 	}
 	sort.Strings(pkgNames)
 	for _, pkg := range pkgNames {
-		view, err := rustPackageOf(pkg, protoModule, byPkg[pkg], fx, tables)
+		view, err := rustPackageOf(pkg, protoModule, byPkg[pkg], fx, tables, search)
 		if err != nil {
 			return err
 		}
@@ -293,7 +297,7 @@ func (g *Generator) generateRust(p *protogen.Plugin, ir *protokit.IR) error {
 
 // rustPackageOf builds one proto package's view, refusing a resource whose
 // storage the records runtime cannot write yet.
-func rustPackageOf(pkg, protoModule string, resources []*resource, fx facets.Set, tables map[string]*schema.Table) (*rustPackageView, error) {
+func rustPackageOf(pkg, protoModule string, resources []*resource, fx facets.Set, tables map[string]*schema.Table, search map[*schema.Table][]string) (*rustPackageView, error) {
 	pv := &rustPackageView{Package: pkg, ProtoPath: protoModule}
 	for _, part := range strings.Split(pkg, ".") {
 		pv.ProtoPath += "::" + rustIdent(naming.SnakeCase(part))
@@ -304,7 +308,7 @@ func rustPackageOf(pkg, protoModule string, resources []*resource, fx facets.Set
 	usesGenerated, usesFK := false, false
 	fields := map[string]string{}
 	for _, r := range resources {
-		rv, gen, err := rustResourceOf(r, fx, tables)
+		rv, gen, err := rustResourceOf(r, fx, tables, search[r.Table])
 		if err != nil {
 			return nil, err
 		}
@@ -347,7 +351,7 @@ func rustPackageOf(pkg, protoModule string, resources []*resource, fx facets.Set
 
 // rustResourceOf renders one resource's descriptor and rules, and reports
 // whether a column is generated.
-func rustResourceOf(r *resource, fx facets.Set, tables map[string]*schema.Table) (*rustResourceView, bool, error) {
+func rustResourceOf(r *resource, fx facets.Set, tables map[string]*schema.Table, search []string) (*rustResourceView, bool, error) {
 	t := r.Table
 	msg := t.Source
 	rv := &rustResourceView{
@@ -466,6 +470,15 @@ func rustResourceOf(r *resource, fx facets.Set, tables map[string]*schema.Table)
 	}
 	if len(fks) > 0 {
 		rv.FKs = rustList(8, "fks: ", fks, ",")
+	}
+	// The columns a free-text filter term searches: the gorm filter spec's
+	// Search, from the one derivation both share.
+	if len(search) > 0 {
+		var cols []string
+		for _, c := range search {
+			cols = append(cols, quoteRust(c)+".into()")
+		}
+		rv.Search = rustList(8, "search: ", cols, ",")
 	}
 	rv.Base = rustCall(8, "..", "Resource::new", []string{"message", quoteRust(rv.Table), quoteRust(rv.PK), "Vec::new()"}, "")
 

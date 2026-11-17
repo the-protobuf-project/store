@@ -81,6 +81,15 @@ type filterTableView struct {
 	PK      []filterPKView // primary-key columns, appended as the order_by tiebreaker
 }
 
+// SearchColumns is the Search of t's filter spec: the physical columns a
+// bareword free-text term matches, sorted. It is the one derivation, shared
+// with the repository target's lang=rust descriptors (Resource.search), so the
+// Go and Rust filters cannot drift.
+func SearchColumns(db *schema.Database, s *schema.Schema, t *schema.Table, fx facets.Set) []string {
+	v, _ := buildFilterTable(db, s, t, fx, nestedRefs(db))
+	return v.Search
+}
+
 // buildFilterTable plans one table's spec. Returns ok=false when nothing on the
 // table is filterable or sortable (the spec would be empty).
 func buildFilterTable(db *schema.Database, s *schema.Schema, t *schema.Table, fx facets.Set, nested map[*schema.Column]bool) (filterTableView, bool) {

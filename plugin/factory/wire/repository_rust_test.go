@@ -91,3 +91,64 @@ func TestRustRepositoryGoldensAreRustfmtClean(t *testing.T) {
 		}
 	}
 }
+
+// TestRustRepositorySearchMatchesGoFilterSpec requires each Rust descriptor's
+// `search` to list exactly the columns the Go filter spec's Search does, for
+// the same table, in the rust_library case's goldens (which render both).
+func TestRustRepositorySearchMatchesGoFilterSpec(t *testing.T) {
+	golden := filepath.Join("testdata", "cases", "rust_library", "golden")
+	specs, err := filepath.Glob(filepath.Join(golden, "gorm", "*", "*", "filters.go"))
+	if err != nil || len(specs) != 1 {
+		t.Fatalf("want one Go filters.go golden, got %v (%v)", specs, err)
+	}
+	goSearch := map[string]string{} // table -> rendered column list
+	table := ""
+	for _, line := range strings.Split(readFile(t, specs[0]), "\n") {
+		line = strings.TrimSpace(line)
+		if v, ok := strings.CutPrefix(line, "Table: `"); ok {
+			table = strings.TrimSuffix(v, "`,")
+		}
+		if v, ok := strings.CutPrefix(line, "Search: []string{"); ok {
+			goSearch[table] = strings.TrimSuffix(v, "},")
+		}
+	}
+	rustSearch := map[string]string{}
+	schema := ""
+	for _, line := range strings.Split(readFile(t, filepath.Join(golden, "repository", "library", "v1", "mod.rs")), "\n") {
+		line = strings.TrimSpace(line)
+		if v, ok := strings.CutPrefix(line, "schema: "); ok {
+			schema = strings.TrimSuffix(v, ".into(),")
+		}
+		if v, ok := strings.CutPrefix(line, "search: vec!["); ok {
+			table = strings.TrimSuffix(v, "],")
+			rustSearch["pending"] = strings.ReplaceAll(table, ".into()", "")
+		}
+		if v, ok := strings.CutPrefix(line, "..Resource::new(message, "); ok {
+			name := strings.SplitN(v, ",", 2)[0]
+			if cols, ok := rustSearch["pending"]; ok {
+				rustSearch[schema+"."+name] = cols
+				delete(rustSearch, "pending")
+			}
+		}
+	}
+	if len(goSearch) == 0 {
+		t.Fatal("the Go golden declares no Search; the comparison would pass vacuously")
+	}
+	for tbl, cols := range goSearch {
+		if got := rustSearch[tbl]; got != cols {
+			t.Errorf("%s: Rust search [%s], Go Search {%s}", tbl, got, cols)
+		}
+	}
+	if len(rustSearch) != len(goSearch) {
+		t.Errorf("Rust search on %v, Go Search on %v", rustSearch, goSearch)
+	}
+}
+
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}

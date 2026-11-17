@@ -101,6 +101,7 @@ pub fn author_resource(message: MessageDescriptor) -> Resource {
                 ..column("updated_at", "", Kind::Timestamp, "TIMESTAMPTZ")
             },
         ],
+        search: vec!["bio".into()],
         ..Resource::new(message, "authors", "name", Vec::new())
     }
 }
@@ -180,6 +181,7 @@ pub fn book_resource(message: MessageDescriptor) -> Resource {
             foreign_key("author", "Author", "id"),
             foreign_key("publisher_id", "Publisher", "id"),
         ],
+        search: vec!["title".into()],
         ..Resource::new(message, "books", "name", Vec::new())
     }
 }
@@ -238,6 +240,7 @@ pub fn publisher_resource(message: MessageDescriptor) -> Resource {
             column("delete_time", "delete_time", Kind::Timestamp, "TIMESTAMPTZ"),
             column("expire_time", "expire_time", Kind::Timestamp, "TIMESTAMPTZ"),
         ],
+        search: vec!["display_name".into()],
         ..Resource::new(message, "publishers", "name", Vec::new())
     }
 }
