@@ -486,9 +486,6 @@ async fn repositories_round_trip_as_go_stores() {
 
 /// Lists and counts leave soft-deleted records out unless `show_deleted`.
 #[tokio::test]
-#[ignore = "runtime-rs feat/repository-impl ee40397: the soft-delete clause \
-            `delete_time = null` is refused by the AIP-160 filter reader \
-            (\"null\" is not a timestamp)"]
 async fn soft_deleted_records_leave_lists() {
     let (db, _) = sqlite().await;
     let repos = repo::repositories(&db, &DESCRIPTOR_POOL).unwrap();
