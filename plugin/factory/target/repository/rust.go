@@ -32,6 +32,7 @@ import (
 
 	"google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/protobuf/compiler/protogen"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
@@ -103,6 +104,10 @@ type rustPackageView struct {
 	Resources []*rustResourceView
 	Bind      []string // repositories()'s struct fields, rendered
 	HasFKs    bool
+	HasRefs   bool
+	// Cache is set when a resource carries (cache.v1.cache): protoc-gen-cache
+	// writes the package's cache.rs beside its mod.rs.
+	Cache bool
 }
 
 // rustResourceView is one resource: its descriptor and rules functions.
@@ -118,6 +123,7 @@ type rustResourceView struct {
 	FKs      string   // rendered fks vec!, "" without foreign keys
 	Base     string   // the rendered ..Resource::new(...) line
 	Rules    []string // rendered Rules fields
+	HasRefs  bool
 }
 
 // rustNode is one module of the package tree.
@@ -254,6 +260,14 @@ func (g *Generator) generateRust(p *protogen.Plugin, ir *protokit.IR) error {
 			c := n.children[name]
 			sub := append(append([]string(nil), path...), name)
 			mv := rustModView{Mods: c.mods(), Pkg: c.pkg}
+			if c.pkg != nil && c.pkg.Cache {
+				if c.children["cache"] != nil {
+					return fmt.Errorf("repository: lang=rust: %s's cache module (protoc-gen-cache's cache.rs) conflicts with its proto package %s.cache",
+						c.pkg.Package, c.pkg.Package)
+				}
+				mv.Mods = append(mv.Mods, "cache")
+				sort.Strings(mv.Mods)
+			}
 			var dir []string
 			for _, s := range sub {
 				dir = append(dir, strings.TrimPrefix(s, "r#"))
@@ -301,6 +315,8 @@ func rustPackageOf(pkg, protoModule string, resources []*resource, fx facets.Set
 		fields[rv.Field] = rv.FullName
 		usesGenerated = usesGenerated || gen
 		usesFK = usesFK || rv.FKs != ""
+		pv.HasRefs = pv.HasRefs || rv.HasRefs
+		pv.Cache = pv.Cache || cached(r.Table.Source)
 		pv.Resources = append(pv.Resources, rv)
 		args := []string{"db", "pool", quoteRust(rv.FullName), rv.Snake + "_resource", rv.Snake + "_rules()"}
 		pv.Bind = append(pv.Bind, rustCall(8, rv.Field+": ", "bind", args, "?,"))
@@ -314,10 +330,14 @@ func rustPackageOf(pkg, protoModule string, resources []*resource, fx facets.Set
 	}
 	records = append(records, "Kind", "Resource")
 	pv.HasFKs = usesFK
+	repoImports := "RecordsRepository, Repository, Rules"
+	if pv.HasRefs {
+		repoImports = "RecordsRepository, Reference, Repository, Rules"
+	}
 	pv.Imports = []string{
 		"use " + pv.ProtoPath + " as pb;",
 		"use database::records::{" + strings.Join(records, ", ") + "};",
-		"use database::repository::{RecordsRepository, Repository, Rules};",
+		"use database::repository::{" + repoImports + "};",
 		"use prost::Message;",
 		"use prost_reflect::{DescriptorPool, MessageDescriptor, ReflectMessage};",
 		"use std::sync::Arc;",
@@ -374,11 +394,17 @@ func rustResourceOf(r *resource, fx facets.Set, tables map[string]*schema.Table)
 		if c.Source != nil {
 			field = string(c.Source.Name())
 		}
-		sqlType := ""
-		if c.Enum == nil {
-			sqlType = types.SQLForColumn(c, fx.Column(c))
-		}
 		var flags []string
+		sqlType := types.SQLForColumn(c, fx.Column(c))
+		if c.Enum != nil {
+			// Stored by label, as gorm stores it, in the Postgres enum type
+			// the sql target's DDL declares.
+			sqlType = `"` + r.Schema.Name + `"."` + c.Enum.LocalSQLName + `"`
+			labels := rustEnumLabels(c)
+			if len(labels) > 0 {
+				flags = append(flags, strings.TrimLeft(rustList(16, "labels: ", labels, ","), " "))
+			}
+		}
 		if c.PrimaryKey {
 			flags = append(flags, "primary_key: true,")
 		}
@@ -410,6 +436,10 @@ func rustResourceOf(r *resource, fx facets.Set, tables map[string]*schema.Table)
 		}
 		if autoUpdate {
 			flags = append(flags, "auto_update: true,")
+		}
+		// labels, when any, come first in flags; rustfmt keeps field order.
+		if c.Enum != nil && len(flags) > 0 && strings.Contains(flags[0], "labels: ") {
+			flags = append(flags[1:], flags[0])
 		}
 		args := []string{quoteRust(c.Name), quoteRust(field), "Kind::" + kind, quoteRust(sqlType)}
 		if len(flags) == 0 {
@@ -459,7 +489,68 @@ func rustResourceOf(r *resource, fx facets.Set, tables map[string]*schema.Table)
 	if len(outs) > 0 {
 		rv.Rules = append(rv.Rules, rustList(8, "output_only: ", outs, ","))
 	}
+	rv.Rules = append(rv.Rules, "        pattern: "+quoteRust(r.Pattern)+".into(),")
+	// The repository fills the parent's id only under a two-collection
+	// pattern; a deeper parent is keyed by a surrogate Go looks up.
+	parent := "None"
+	if len(r.Segments) == 2 && r.ParentFK != "" {
+		parent = "Some(" + quoteRust(r.ParentFK) + ".into())"
+	}
+	rv.Rules = append(rv.Rules, "        parent_column: "+parent+",")
+	var refs []string
+	for _, c := range r.Cols.Refs {
+		if c.Source == nil || c.List {
+			continue
+		}
+		if p := topLevelTarget(t, c, tables); p != "" {
+			refs = append(refs, rustCall(0, "", "reference", []string{quoteRust(string(c.Source.Name())), quoteRust(p)}, ""))
+		}
+	}
+	if len(refs) > 0 {
+		rv.HasRefs = true
+		rv.Rules = append(rv.Rules, rustList(8, "references: ", refs, ","))
+	}
 	return rv, generated, nil
+}
+
+// topLevelTarget is the pattern of the resource reference c names when Go
+// stores it as the target's bare id: a relation to a top-level resource's
+// primary key. "" for anything stored whole.
+func topLevelTarget(t *schema.Table, c *schema.Column, tables map[string]*schema.Table) string {
+	for _, fk := range t.ForeignKeys {
+		if fk.Column != c.Name {
+			continue
+		}
+		target := tables[fk.ReferencedSchema+"."+fk.ReferencedTable]
+		if target == nil || target.Source == nil || fk.ReferencedColumn != target.PKColumn {
+			return ""
+		}
+		pattern := resourcePattern(target.Source)
+		if segs, err := parsePattern(pattern); err != nil || len(segs) != 1 {
+			return ""
+		}
+		return pattern
+	}
+	return ""
+}
+
+// rustEnumLabels pairs each stored enum value's number with its label, spelled
+// as gorm stores it (naming.EnumLabel), rendered as (n, "LABEL".into()).
+func rustEnumLabels(c *schema.Column) []string {
+	stored := map[string]bool{}
+	for _, v := range c.Enum.Values {
+		stored[v.MapName] = true
+	}
+	ed := c.Source.Enum()
+	var out []string
+	for i := 0; i < ed.Values().Len(); i++ {
+		v := ed.Values().Get(i)
+		label := naming.EnumLabel(string(ed.Name()), string(v.Name()))
+		if stored[label] {
+			out = append(out, fmt.Sprintf("(%d, %s.into())", v.Number(), quoteRust(label)))
+		}
+	}
+	return out
 }
 
 // rustKind is the runtime Kind of c: what the records bridge moves between
@@ -514,7 +605,7 @@ func rustKind(r *resource, c *schema.Column, parentFKs map[string]bool) (string,
 	case schema.TypeBytes:
 		return "Bytes", nil
 	case schema.TypeEnum:
-		return "Enum", nil
+		return "String", nil // stored by label (Column.labels)
 	}
 	return "", fmt.Errorf("repository: lang=rust: %s: column %q has no tpp-database kind", field, c.Name)
 }
@@ -554,6 +645,91 @@ func refuseChildStorage(r *resource) error {
 		}
 	}
 	return nil
+}
+
+// The (cache.v1.cache) extension and the fields read here, by number, as
+// protoc-gen-service reads them: no dependency on protoc-gen-cache's types.
+const (
+	cacheExtension   = 52001 // (cache.v1.cache) on MessageOptions
+	cacheEnabled     = 1     // CacheOptions.enabled
+	cacheListField   = 7     // CacheOptions.list
+	cacheListEnabled = 1     // ListCacheOptions.enabled
+)
+
+// cached reports whether m caches its records or its lists, which is when
+// protoc-gen-cache writes a cache.rs for its package.
+func cached(m protoreflect.MessageDescriptor) bool {
+	opts := m.Options()
+	if opts == nil {
+		return false
+	}
+	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(opts)
+	if err != nil {
+		return false
+	}
+	for _, ext := range wireBytes(raw, cacheExtension) {
+		if wireBool(ext, cacheEnabled) {
+			return true
+		}
+		for _, list := range wireBytes(ext, cacheListField) {
+			if wireBool(list, cacheListEnabled) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// wireBytes returns every length-delimited value of field num in b.
+func wireBytes(b []byte, num protowire.Number) [][]byte {
+	var out [][]byte
+	for len(b) > 0 {
+		n, typ, l := protowire.ConsumeTag(b)
+		if l < 0 {
+			return out
+		}
+		b = b[l:]
+		if n == num && typ == protowire.BytesType {
+			v, l := protowire.ConsumeBytes(b)
+			if l < 0 {
+				return out
+			}
+			out = append(out, v)
+			b = b[l:]
+			continue
+		}
+		if l = protowire.ConsumeFieldValue(n, typ, b); l < 0 {
+			return out
+		}
+		b = b[l:]
+	}
+	return out
+}
+
+// wireBool reports the last value of bool field num in b.
+func wireBool(b []byte, num protowire.Number) bool {
+	v := false
+	for len(b) > 0 {
+		n, typ, l := protowire.ConsumeTag(b)
+		if l < 0 {
+			return v
+		}
+		b = b[l:]
+		if n == num && typ == protowire.VarintType {
+			x, l := protowire.ConsumeVarint(b)
+			if l < 0 {
+				return v
+			}
+			v = x != 0
+			b = b[l:]
+			continue
+		}
+		if l = protowire.ConsumeFieldValue(n, typ, b); l < 0 {
+			return v
+		}
+		b = b[l:]
+	}
+	return v
 }
 
 // tableIndex maps "schema.table" to its table across every database.

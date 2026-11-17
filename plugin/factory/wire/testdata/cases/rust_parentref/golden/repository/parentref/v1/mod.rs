@@ -90,6 +90,8 @@ pub fn note_rules() -> Rules {
         etag: None,
         delete_time: None,
         expire_time: None,
+        pattern: "users/{user}/notes/{note}".into(),
+        parent_column: Some("user_id".into()),
         ..Rules::default()
     }
 }
@@ -127,6 +129,8 @@ pub fn user_rules() -> Rules {
         etag: None,
         delete_time: None,
         expire_time: None,
+        pattern: "users/{user}".into(),
+        parent_column: None,
         ..Rules::default()
     }
 }

@@ -8,6 +8,7 @@ package wire_test
 // rustfmt would write.
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -68,8 +69,23 @@ func TestRustRepositoryGoldensAreRustfmtClean(t *testing.T) {
 		t.Fatalf("no Rust repository goldens found (%v)", err)
 	}
 	for _, lib := range libs {
-		// rustfmt follows lib.rs's `pub mod` declarations into every module.
-		out, err := exec.Command(rustfmt, "--check", "--edition", "2024", lib).CombinedOutput()
+		// rustfmt follows lib.rs's `pub mod` declarations into every module,
+		// so it runs over a copy holding an empty cache.rs wherever a package
+		// mounts protoc-gen-cache's, which this plugin does not write.
+		dir := t.TempDir()
+		if err := os.CopyFS(dir, os.DirFS(filepath.Dir(lib))); err != nil {
+			t.Fatal(err)
+		}
+		mods, _ := filepath.Glob(filepath.Join(dir, "*", "*", "mod.rs"))
+		for _, mod := range mods {
+			b, _ := os.ReadFile(mod)
+			if strings.Contains(string(b), "\npub mod cache;\n") {
+				if err := os.WriteFile(filepath.Join(filepath.Dir(mod), "cache.rs"), []byte("//! protoc-gen-cache's.\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		out, err := exec.Command(rustfmt, "--check", "--edition", "2024", filepath.Join(dir, "lib.rs")).CombinedOutput()
 		if err != nil {
 			t.Errorf("%s is not rustfmt-clean:\n%s", filepath.Dir(lib), out)
 		}

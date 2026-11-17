@@ -1,0 +1,212 @@
+syntax = "proto3";
+
+package cache.v1;
+
+import "google/protobuf/duration.proto";
+
+option go_package = "github.com/the-protobuf-project/cache/plugin/pb/cachepbv1;cachepbv1";
+option java_multiple_files = true;
+option java_outer_classname = "CacheProto";
+option java_package = "com.cache.v1";
+
+// CacheOptions is the message-level (cache.v1.cache) annotation: whether a
+// resource is cached, how, and for how long.
+message CacheOptions {
+  // enabled turns caching on for this resource. It is explicit rather than
+  // implied by the presence of the annotation, so a resource can be annotated
+  // with a considered configuration and switched off without deleting it — and
+  // so that "is this cached?" has one answer to read rather than an absence to
+  // interpret.
+  bool enabled = 1;
+
+  // strategy selects the runtime shape. Unset takes the file default, then ASIDE.
+  Strategy strategy = 2;
+
+  // ttl is how long an entry stays fresh. Unset takes the file default.
+  //
+  // A cache with no lease anywhere is a store that only grows, and for ASIDE it
+  // is a store that only grows by every id anyone ever asked for. The runtime
+  // can be configured to refuse a write that resolved to no expiry
+  // ([cache.Config.RequireTTL]); this annotation is where a resource says what
+  // its expiry should be.
+  google.protobuf.Duration ttl = 3;
+
+  // stale is how much longer past ttl an expired entry may be served while it is
+  // refreshed behind the reader.
+  //
+  // Zero keeps reads blocking on expiry, which is the safe default: serving
+  // slightly old data is a policy, not an optimization to switch on quietly.
+  // Non-zero needs a backend that can report a remaining lease (core.Leases) —
+  // memcached stores an expiry and honors it but will never say what is left of
+  // it. The generated constructor asserts that at construction.
+  google.protobuf.Duration stale = 4;
+
+  // negative_ttl is how long the absence of a resource is remembered, so a
+  // stream of requests for something that does not exist stops reaching the
+  // store. Unset takes the runtime's own default.
+  google.protobuf.Duration negative_ttl = 5;
+
+  // namespace overrides the namespace derived from the AIP resource type.
+  //
+  // It must bind every parent segment of the resource's pattern, written as
+  // "{segment}" — a pattern of "users/{user}/documents/{document}" requires
+  // "{user}" to appear here, or on a field marked (cache.v1.cache_scope). This
+  // is the one thing the generator refuses to emit without: a cache answers
+  // before the store is consulted, so an unbound parent segment means the
+  // store's row-level scoping never runs and one tenant reads another's rows.
+  //
+  // It may not contain ':' — that character joins the prefix to the namespace in
+  // the runtime's keyspace, so allowing one would let two configurations that
+  // were never meant to meet address the same keys.
+  string namespace = 6;
+
+  // list caches this resource's List pages. It is independent of enabled:
+  // enabled caches records read one at a time, this caches the pages a List
+  // returns, and a resource may want either, both or neither.
+  ListCacheOptions list = 7;
+}
+
+// ListCacheOptions configures the cache of a resource's List pages.
+//
+// A page is a different thing to cache than a record. It is keyed by
+// everything the List was asked -- the parent, the filter, the order, the page
+// size and token -- and any write under the parent can change it: a new record
+// appears on some page, an update moves one across a filter or an order, a
+// delete shifts every page after it. Working out which pages one write reached
+// is not possible in general, so nothing tries. Each parent instead carries a
+// version, every page is cached under its parent's version, and a write to a
+// record replaces its parent's version with a new one. Pages filed under the
+// old version are never read again and expire on their own.
+//
+// A write is seen through the generated repositories (repox.Conn.Changes), so
+// a write that bypasses them -- SQL by hand, another service writing the same
+// table, a GraphQL mutation sent straight to the engine -- is seen by nothing,
+// and the pages it made stale are served until ttl ends. ttl is that bound.
+message ListCacheOptions {
+  // enabled turns list caching on for this resource.
+  bool enabled = 1;
+
+  // ttl is how long a page may be served. Required, here or as the file's
+  // default ttl: it is the only bound on a page made stale by a write the
+  // repositories never saw.
+  google.protobuf.Duration ttl = 2;
+}
+
+// CacheDefaults is the file-level (cache.v1.cache_defaults) annotation: the
+// settings every cached resource in the file inherits unless it says otherwise.
+//
+// It exists because ttl is the option most likely to be identical across a
+// package and most costly to get wrong by omission. A per-message value always
+// wins; this only fills what a message left unset.
+message CacheDefaults {
+  // strategy applied to resources that name none.
+  Strategy strategy = 1;
+
+  // ttl applied to resources that name none.
+  google.protobuf.Duration ttl = 2;
+
+  // stale applied to resources that name none.
+  google.protobuf.Duration stale = 3;
+
+  // negative_ttl applied to resources that name none.
+  google.protobuf.Duration negative_ttl = 4;
+
+  // 5 was `prefix`, and removing it is worth explaining rather than just
+  // reserving.
+  //
+  // It namespaced every namespace derived in this file — and the cache runtime
+  // already has exactly that, as cache.Config.Prefix, set where the client is
+  // built. Two prefixes meant two answers to one question, and the first time a
+  // real program set both they simply concatenated:
+  //
+  //	bookstore:bookstore.bookstore.v1.book.author.author-ursula:cache:...
+  //	^Config.Prefix
+  //	          ^this field
+  //
+  // The deeper problem is ownership rather than the stutter. A prefix separates
+  // one program's caches from another's in a shared server — a fact about a
+  // deployment, not about a schema. Two deployments of the same protos should be
+  // able to differ in it, and an annotation that travels with the proto cannot
+  // express that. cache.Config.Prefix can, so it owns this outright.
+  reserved 5;
+  reserved "prefix";
+}
+
+// IndexOptions is the field-level (cache.v1.cache_index) annotation: file this
+// field as a secondary index on an INDEXED resource.
+//
+// Every indexed field is another set, another single key, and another node that
+// every write to that field must reach. An index on something low-cardinality —
+// a tenant, a status, a version — puts every entry sharing that value into one
+// key, which is where this stops scaling first and does it quietly. The
+// generator warns when it can tell (a column store.v1 did not mark unique).
+//
+// AIP-123 wants a google.api.resource on any message carrying a `name` field,
+// because in a resource-oriented API that field is the resource name. This is an
+// annotation payload, not a resource: it is never stored, never addressed, and
+// never returned by an RPC, and `name` here is the index's name in the runtime's
+// keyspace. Annotating it as a resource would be describing something that does
+// not exist, so the rule is turned off for this message and nowhere else.
+//
+// (-- api-linter: core::0123::resource-annotation=disabled
+//     aip.dev/not-precedent: This is an option message, not an API resource. --)
+message IndexOptions {
+  // name overrides the index field name used in the runtime's keyspace.
+  // Defaults to the column name, which is what keeps a generated index
+  // addressable by anything else reading the same schema.
+  string name = 1;
+}
+
+// ScopeOptions is the field-level (cache.v1.cache_scope) annotation: bind this
+// field into the resource's cache namespace.
+//
+// This is the security-relevant annotation in cache.v1. Marking a field scope
+// means the namespace — and therefore every key under it — is parameterized by
+// that field's value, so entries for one parent are unreachable from a decorator
+// constructed for another.
+message ScopeOptions {
+  // segment names the parent segment of the resource pattern this field binds,
+  // written without braces ("user" for "users/{user}/documents/{document}").
+  //
+  // Unset infers it: a field named "<segment>_id" or "<segment>", or one whose
+  // (google.api.resource_reference) names the parent resource type. Set it when
+  // the field's name does not follow from the pattern, and the generator will
+  // hold you to it rather than guessing.
+  string segment = 1;
+}
+
+// Strategy selects which of the cache runtime's four shapes a resource is served
+// through. There are exactly four because runtime-go/cache implements exactly
+// four, and a vocabulary that can express a fifth is a vocabulary that can
+// express something nothing will honor.
+//
+// Two names that belong to other caching literatures are deliberately absent:
+//
+//   - WRITE_BEHIND. The runtime has no such path. Every write in a generated
+//     decorator reaches the store first and the cache second, and an annotation
+//     promising otherwise would describe a durability model that does not exist.
+//   - REFRESH_AHEAD. This is [CacheOptions.stale], which is the same idea named
+//     for what it actually does: past its lease an entry is served as-is and
+//     refreshed behind the reader.
+enum Strategy {
+  // Unset; the file's default applies, and ASIDE if it names none.
+  STRATEGY_UNSPECIFIED = 0;
+
+  // Read-through over a loader bound to the store. Single-flighted, with
+  // negative caching and an optional stale window. The default, and the right
+  // answer for a resource read by id.
+  STRATEGY_ASIDE = 1;
+
+  // Read-through plus secondary indexes, so a resource can be found by a field
+  // other than its id. Requires a backend with server-side sets; memcached has
+  // none. See [CacheOptions.strategy] on what that costs at construction.
+  STRATEGY_INDEXED = 2;
+
+  // Whole encoded values, enumerable. One index key holds every id, so this
+  // does not shard and does not scale past low millions of entries.
+  STRATEGY_DOCUMENT = 3;
+
+  // TTL-first storage with no index and nothing to sweep. Scales furthest;
+  // gives up enumeration entirely.
+  STRATEGY_VOLATILE = 4;
+}

@@ -6,6 +6,12 @@
 //!
 //! The descriptors name the tables and columns the sql and gorm targets
 //! render, so a Go and a Rust service share one database.
+{{- if .Cache}}
+//!
+//! Some of these resources carry `(cache.v1.cache)`: protoc-gen-cache
+//! (`lang=rust`) writes their caches into `cache.rs` beside this file, the
+//! `cache` module below.
+{{- end}}
 //!
 //! | Resource | Table | Key | Repository |
 //! | --- | --- | --- | --- |
@@ -82,6 +88,16 @@ fn foreign_key(column: &str, referenced_name: &str, referenced_field: &str) -> F
         column: column.into(),
         referenced_name: referenced_name.into(),
         referenced_field: referenced_field.into(),
+    }
+}
+{{- end}}
+{{- if .HasRefs}}
+
+/// A reference field stored as the bare id of a resource of `pattern`.
+fn reference(field: &str, pattern: &str) -> Reference {
+    Reference {
+        field: field.into(),
+        pattern: pattern.into(),
     }
 }
 {{- end}}

@@ -108,6 +108,8 @@ pub fn document_rules() -> Rules {
             "update_time".into(),
             "delete_time".into(),
         ],
+        pattern: "documents/{document}".into(),
+        parent_column: None,
         ..Rules::default()
     }
 }

@@ -81,8 +81,28 @@ pub fn delivery_resource(message: MessageDescriptor) -> Resource {
                 unique: true,
                 ..column("name", "name", Kind::String, "VARCHAR(255)")
             },
-            column("state", "state", Kind::Enum, ""),
-            column("webhook_state", "webhook_state", Kind::Enum, ""),
+            Column {
+                labels: vec![
+                    (1, "PENDING".into()),
+                    (2, "SUCCEEDED".into()),
+                    (3, "FAILED".into()),
+                ],
+                ..column(
+                    "state",
+                    "state",
+                    Kind::String,
+                    "\"hooks_v1\".\"delivery_state\"",
+                )
+            },
+            Column {
+                labels: vec![(1, "ACTIVE".into()), (2, "PAUSED".into())],
+                ..column(
+                    "webhook_state",
+                    "webhook_state",
+                    Kind::String,
+                    "\"hooks_v1\".\"webhook_state\"",
+                )
+            },
             column("etag", "etag", Kind::String, "VARCHAR(255)"),
             Column {
                 not_null: true,
@@ -107,6 +127,8 @@ pub fn delivery_rules() -> Rules {
         delete_time: None,
         expire_time: None,
         output_only: vec!["state".into(), "etag".into(), "create_time".into()],
+        pattern: "webhooks/{webhook}/deliveries/{delivery}".into(),
+        parent_column: Some("webhook_id".into()),
         ..Rules::default()
     }
 }
@@ -134,7 +156,13 @@ pub fn webhook_resource(message: MessageDescriptor) -> Resource {
             },
             Column {
                 not_null: true,
-                ..column("state", "state", Kind::Enum, "")
+                labels: vec![(1, "ACTIVE".into()), (2, "PAUSED".into())],
+                ..column(
+                    "state",
+                    "state",
+                    Kind::String,
+                    "\"hooks_v1\".\"webhook_state\"",
+                )
             },
             column("etag", "etag", Kind::String, "VARCHAR(255)"),
             Column {
@@ -155,6 +183,8 @@ pub fn webhook_rules() -> Rules {
         delete_time: None,
         expire_time: None,
         output_only: vec!["etag".into(), "create_time".into()],
+        pattern: "webhooks/{webhook}".into(),
+        parent_column: None,
         ..Rules::default()
     }
 }
