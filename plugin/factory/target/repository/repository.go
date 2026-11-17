@@ -22,6 +22,7 @@ import (
 	"google.golang.org/protobuf/compiler/protogen"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
+	"github.com/the-protobuf-project/protokit"
 	"github.com/the-protobuf-project/protokit/header"
 	"github.com/the-protobuf-project/protokit/naming"
 	"github.com/the-protobuf-project/protokit/schema"
@@ -39,11 +40,31 @@ var tmpl = templates.MustParse(templateFS, "templates/*.tpl")
 // repoxPkg is the shared runtime package name and directory.
 const repoxPkg = "repox"
 
-// Generator implements schema.Target for the repository layer.
-type Generator struct{}
+// Generator implements schema.Target for the repository layer. Lang selects
+// the language: "" or "go" composes the gorm output (Generate), "rust" binds
+// tpp-database's typed repository (see rust.go).
+type Generator struct {
+	Lang string
+}
 
 // Name returns the target identifier used in buf.gen.yaml opt: [target=repository].
 func (g *Generator) Name() string { return "repository" }
+
+// Languages lists the languages this target emits; the first is the default.
+func (g *Generator) Languages() []string { return []string{"go", "rust"} }
+
+// ForLanguage returns the generator bound to lang, as the lang opt selects it.
+func (g *Generator) ForLanguage(lang string) schema.Target { return &Generator{Lang: lang} }
+
+// GenerateIR renders lang=rust from the whole IR, which it needs for the
+// store.v1 column facets (SQL type overrides); Go renders from the databases
+// alone, as it always has.
+func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
+	if g.Lang == "rust" {
+		return g.generateRust(p, ir)
+	}
+	return g.Generate(p, ir.Databases)
+}
 
 // opts accessors (stamped by the store backend; see backend.WithRepositoryModules).
 func dbGoModule(db *schema.Database) string      { return db.Opt("go_module") }
@@ -53,6 +74,9 @@ func dbGraphQLModule(db *schema.Database) string { return db.Opt("graphql_module
 // Generate writes the shared repox runtime once, then one package per schema
 // holding the repository interfaces and their adapters.
 func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
+	if g.Lang == "rust" {
+		return g.generateRust(p, &protokit.IR{Databases: dbs})
+	}
 	repoxEmitted := false
 	pb := newPbIndex(p)
 	rev := referrerIndex(dbs)

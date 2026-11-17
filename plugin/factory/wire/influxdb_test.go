@@ -94,6 +94,8 @@ func TestLanguage(t *testing.T) {
 		{"influxdb", "rust", "rust"},
 		{"gorm", "", "go"},
 		{"gorm", "go", "go"},
+		{"repository", "", "go"},
+		{"repository", "rust", "rust"},
 	} {
 		got, err := wire.Language(reg.Targets[c.target], c.lang)
 		if err != nil || got != c.want {

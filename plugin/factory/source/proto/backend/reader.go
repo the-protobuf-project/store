@@ -60,8 +60,11 @@ type Reader struct {
 	graphqlRootFieldPrefix string
 	// repositoryModule is the opensearch target's repository_module opt.
 	repositoryModule string
-	// rustCrate is the influxdb target's crate opt.
+	// rustCrate is the crate opt of the Rust targets (influxdb, repository).
 	rustCrate string
+	// rustProtoModule is the repository target's rust_proto_module opt: the
+	// Rust module holding the prost messages.
+	rustProtoModule string
 }
 
 // Compile-time proof that Reader satisfies all three halves of the seam.
@@ -103,6 +106,14 @@ func (r Reader) WithSearchModules(repositoryModule string) Reader {
 // crate plugin opt).
 func (r Reader) WithRustCrate(name string) Reader {
 	r.rustCrate = name
+	return r
+}
+
+// WithRustProtoModule returns a copy of r carrying the Rust module path of the
+// prost messages (the rust_proto_module plugin opt) the lang=rust repository
+// target names.
+func (r Reader) WithRustProtoModule(path string) Reader {
+	r.rustProtoModule = path
 	return r
 }
 
@@ -259,6 +270,9 @@ func (r Reader) Enrich(ir *protokit.IR) error {
 		db.Opts["repository_module"] = r.repositoryModule
 		if r.rustCrate != "" {
 			db.Opts["rust_crate"] = r.rustCrate
+		}
+		if r.rustProtoModule != "" {
+			db.Opts["rust_proto_module"] = r.rustProtoModule
 		}
 		if r.cfg != nil && len(r.cfg.ReferenceServices) > 0 {
 			b, err := json.Marshal(r.cfg.ReferenceServices)

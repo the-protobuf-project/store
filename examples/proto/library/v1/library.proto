@@ -1,0 +1,156 @@
+// Copyright 2026 The Protobuf Project authors.
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+// Package library.v1 is the sample proto of the Rust repositories
+// (lang=rust target=repository): every shape the first version stores, so the
+// example under examples/library-rust checks each descriptor against the DDL
+// the sql target renders from the same protos.
+package library.v1;
+
+import "entity/v1/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "google/protobuf/timestamp.proto";
+import "store/v1/annotations.proto";
+
+option java_multiple_files = true;
+option java_outer_classname = "LibraryProto";
+option java_package = "com.library.v1";
+option (entity.v1.datasource) = {
+  database: "library_db"
+  provider: "postgres"
+};
+
+// Format is how a book is published, stored as an enum column.
+enum Format {
+  // Not set.
+  FORMAT_UNSPECIFIED = 0;
+  // Printed and bound.
+  FORMAT_HARDCOVER = 1;
+  // Printed, soft cover.
+  FORMAT_PAPERBACK = 2;
+  // Electronic.
+  FORMAT_EBOOK = 3;
+}
+
+// Publisher is a root resource with every AIP rule the runtime applies: an
+// etag, soft delete (delete_time, expire_time) and audit times.
+message Publisher {
+  option (google.api.resource) = {
+    type: "library.v1/Publisher"
+    pattern: "publishers/{publisher}"
+    singular: "publisher"
+    plural: "publishers"
+  };
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
+
+  // The resource name, unique; the generated id is the primary key.
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  // Shown to readers.
+  string display_name = 2 [(google.api.field_behavior) = REQUIRED];
+
+  // A URL slug, unique across publishers.
+  string slug = 3 [
+    (google.api.field_behavior) = OPTIONAL,
+    (store.v1.column) = {unique: true}
+  ];
+
+  // Optimistic-concurrency token.
+  string etag = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // When the publisher was created.
+  google.protobuf.Timestamp create_time = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // When the publisher last changed.
+  google.protobuf.Timestamp update_time = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // When the publisher was soft-deleted.
+  google.protobuf.Timestamp delete_time = 7 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // When the soft-deleted publisher goes for good.
+  google.protobuf.Timestamp expire_time = 8 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// Author is a root resource whose audit times the table synthesizes
+// (timestamps: true adds created_at and updated_at, which no field carries).
+message Author {
+  option (google.api.resource) = {
+    type: "library.v1/Author"
+    pattern: "authors/{author}"
+    singular: "author"
+    plural: "authors"
+  };
+  option (entity.v1.table) = {
+    id: ID_STRATEGY_ULID
+    timestamps: true
+  };
+
+  // The resource name.
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  // Shown to readers.
+  string display_name = 2 [(google.api.field_behavior) = REQUIRED];
+
+  // Free text, unbounded.
+  string bio = 3 [
+    (google.api.field_behavior) = OPTIONAL,
+    (store.v1.column) = {type: "TEXT"}
+  ];
+}
+
+// Book is nested under a publisher and references its author: a parent
+// foreign key, a reference foreign key, and a column of every scalar kind.
+message Book {
+  option (google.api.resource) = {
+    type: "library.v1/Book"
+    pattern: "publishers/{publisher}/books/{book}"
+    singular: "book"
+    plural: "books"
+  };
+  option (entity.v1.table) = {id: ID_STRATEGY_ULID};
+
+  // The resource name.
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  // The title, at most 500 characters.
+  string title = 2 [
+    (google.api.field_behavior) = REQUIRED,
+    (store.v1.column) = {max_length: 500}
+  ];
+
+  // Who wrote it.
+  string author = 3 [
+    (google.api.field_behavior) = OPTIONAL,
+    (google.api.resource_reference) = {type: "library.v1/Author"}
+  ];
+
+  // How it is published.
+  Format format = 4 [(google.api.field_behavior) = REQUIRED];
+
+  // Page count.
+  int32 pages = 5 [(google.api.field_behavior) = OPTIONAL];
+
+  // Copies sold.
+  uint64 copies_sold = 6 [(google.api.field_behavior) = OPTIONAL];
+
+  // List price.
+  double price = 7 [(google.api.field_behavior) = OPTIONAL];
+
+  // Whether it is in print.
+  bool in_print = 8 [(google.api.field_behavior) = OPTIONAL];
+
+  // A digest of the cover image.
+  bytes cover_digest = 9 [(google.api.field_behavior) = OPTIONAL];
+
+  // When it was first published.
+  google.protobuf.Timestamp publish_time = 10 [(google.api.field_behavior) = OPTIONAL];
+
+  // Optimistic-concurrency token.
+  string etag = 11 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // When the book was created.
+  google.protobuf.Timestamp create_time = 12 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
