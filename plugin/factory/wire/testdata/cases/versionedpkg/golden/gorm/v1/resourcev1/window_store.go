@@ -18,7 +18,7 @@ package resourcev1
 import (
 	"context"
 
-	"example.com/test/gen/gormx"
+	"github.com/the-protobuf-project/runtime-go/database/storex"
 	"gorm.io/gorm"
 )
 
@@ -42,8 +42,8 @@ import (
 // a decorator is added later.
 type WindowStoreIface interface {
 	Create(ctx context.Context, m *Window) error
-	List(ctx context.Context, opts gormx.ListOptions) ([]Window, error)
-	Count(ctx context.Context, opts gormx.ListOptions) (int64, error)
+	List(ctx context.Context, opts storex.ListOptions) ([]Window, error)
+	Count(ctx context.Context, opts storex.ListOptions) (int64, error)
 	Update(ctx context.Context, m *Window) error
 	GetByID(ctx context.Context, id string) (*Window, error)
 	DeleteByID(ctx context.Context, id string) error
@@ -55,7 +55,7 @@ type WindowStore struct {
 	DB *gorm.DB
 	// Telemetry observes every operation; nil is a no-op. Wire the generated
 	// adapter: NewWindowStore(db).WithTelemetry(telemetry.New(o)).
-	Telemetry gormx.Telemetry
+	Telemetry storex.Telemetry
 }
 
 // Compile-time proof that WindowStore implements its own interface. Without it a
@@ -63,15 +63,15 @@ type WindowStore struct {
 // package decorates it.
 var _ WindowStoreIface = (*WindowStore)(nil)
 
-// Compile-time proof that WindowStore satisfies the generic gormx.Store, so the
+// Compile-time proof that WindowStore satisfies the generic storex.Store, so the
 // generic engine can drive it alongside the typed finders below.
-var _ gormx.Store[Window] = (*WindowStore)(nil)
+var _ storex.Store[Window] = (*WindowStore)(nil)
 
 // NewWindowStore returns a WindowStore backed by db.
 func NewWindowStore(db *gorm.DB) *WindowStore { return &WindowStore{DB: db} }
 
 // WithTelemetry sets the store's Telemetry and returns the store for chaining.
-func (s *WindowStore) WithTelemetry(t gormx.Telemetry) *WindowStore {
+func (s *WindowStore) WithTelemetry(t storex.Telemetry) *WindowStore {
 	s.Telemetry = t
 	return s
 }
@@ -82,7 +82,7 @@ func (s *WindowStore) Create(ctx context.Context, m *Window) error {
 }
 
 // List returns the Window records matching opts.
-func (s *WindowStore) List(ctx context.Context, opts gormx.ListOptions) ([]Window, error) {
+func (s *WindowStore) List(ctx context.Context, opts storex.ListOptions) ([]Window, error) {
 	var out []Window
 	if err := opts.Apply(s.DB.WithContext(ctx)).Find(&out).Error; err != nil {
 		return nil, err
@@ -92,7 +92,7 @@ func (s *WindowStore) List(ctx context.Context, opts gormx.ListOptions) ([]Windo
 
 // Count returns the number of Window records matching opts.Where
 // (pagination and ordering are ignored).
-func (s *WindowStore) Count(ctx context.Context, opts gormx.ListOptions) (int64, error) {
+func (s *WindowStore) Count(ctx context.Context, opts storex.ListOptions) (int64, error) {
 	var n int64
 	db := s.DB.WithContext(ctx).Model(&Window{})
 	if opts.Where != nil {

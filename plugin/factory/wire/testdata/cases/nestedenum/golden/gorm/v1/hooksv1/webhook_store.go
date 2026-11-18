@@ -18,7 +18,7 @@ package hooksv1
 import (
 	"context"
 
-	"example.com/test/gen/gormx"
+	"github.com/the-protobuf-project/runtime-go/database/storex"
 	"gorm.io/gorm"
 )
 
@@ -42,8 +42,8 @@ import (
 // a decorator is added later.
 type WebhookStoreIface interface {
 	Create(ctx context.Context, m *Webhook) error
-	List(ctx context.Context, opts gormx.ListOptions) ([]Webhook, error)
-	Count(ctx context.Context, opts gormx.ListOptions) (int64, error)
+	List(ctx context.Context, opts storex.ListOptions) ([]Webhook, error)
+	Count(ctx context.Context, opts storex.ListOptions) (int64, error)
 	Update(ctx context.Context, m *Webhook) error
 	GetByID(ctx context.Context, id string) (*Webhook, error)
 	DeleteByID(ctx context.Context, id string) error
@@ -56,7 +56,7 @@ type WebhookStore struct {
 	DB *gorm.DB
 	// Telemetry observes every operation; nil is a no-op. Wire the generated
 	// adapter: NewWebhookStore(db).WithTelemetry(telemetry.New(o)).
-	Telemetry gormx.Telemetry
+	Telemetry storex.Telemetry
 }
 
 // Compile-time proof that WebhookStore implements its own interface. Without it a
@@ -64,15 +64,15 @@ type WebhookStore struct {
 // package decorates it.
 var _ WebhookStoreIface = (*WebhookStore)(nil)
 
-// Compile-time proof that WebhookStore satisfies the generic gormx.Store, so the
+// Compile-time proof that WebhookStore satisfies the generic storex.Store, so the
 // generic engine can drive it alongside the typed finders below.
-var _ gormx.Store[Webhook] = (*WebhookStore)(nil)
+var _ storex.Store[Webhook] = (*WebhookStore)(nil)
 
 // NewWebhookStore returns a WebhookStore backed by db.
 func NewWebhookStore(db *gorm.DB) *WebhookStore { return &WebhookStore{DB: db} }
 
 // WithTelemetry sets the store's Telemetry and returns the store for chaining.
-func (s *WebhookStore) WithTelemetry(t gormx.Telemetry) *WebhookStore {
+func (s *WebhookStore) WithTelemetry(t storex.Telemetry) *WebhookStore {
 	s.Telemetry = t
 	return s
 }
@@ -83,7 +83,7 @@ func (s *WebhookStore) Create(ctx context.Context, m *Webhook) error {
 }
 
 // List returns the Webhook records matching opts.
-func (s *WebhookStore) List(ctx context.Context, opts gormx.ListOptions) ([]Webhook, error) {
+func (s *WebhookStore) List(ctx context.Context, opts storex.ListOptions) ([]Webhook, error) {
 	var out []Webhook
 	if err := opts.Apply(s.DB.WithContext(ctx)).Find(&out).Error; err != nil {
 		return nil, err
@@ -93,7 +93,7 @@ func (s *WebhookStore) List(ctx context.Context, opts gormx.ListOptions) ([]Webh
 
 // Count returns the number of Webhook records matching opts.Where
 // (pagination and ordering are ignored).
-func (s *WebhookStore) Count(ctx context.Context, opts gormx.ListOptions) (int64, error) {
+func (s *WebhookStore) Count(ctx context.Context, opts storex.ListOptions) (int64, error) {
 	var n int64
 	db := s.DB.WithContext(ctx).Model(&Webhook{})
 	if opts.Where != nil {

@@ -18,7 +18,7 @@ package promo
 import (
 	"context"
 
-	"example.com/test/gen/gormx"
+	"github.com/the-protobuf-project/runtime-go/database/storex"
 	"gorm.io/gorm"
 )
 
@@ -42,8 +42,8 @@ import (
 // a decorator is added later.
 type PromoCodeStoreIface interface {
 	Create(ctx context.Context, m *PromoCode) error
-	List(ctx context.Context, opts gormx.ListOptions) ([]PromoCode, error)
-	Count(ctx context.Context, opts gormx.ListOptions) (int64, error)
+	List(ctx context.Context, opts storex.ListOptions) ([]PromoCode, error)
+	Count(ctx context.Context, opts storex.ListOptions) (int64, error)
 	Update(ctx context.Context, m *PromoCode) error
 	GetByID(ctx context.Context, id string) (*PromoCode, error)
 	DeleteByID(ctx context.Context, id string) error
@@ -57,7 +57,7 @@ type PromoCodeStore struct {
 	DB *gorm.DB
 	// Telemetry observes every operation; nil is a no-op. Wire the generated
 	// adapter: NewPromoCodeStore(db).WithTelemetry(telemetry.New(o)).
-	Telemetry gormx.Telemetry
+	Telemetry storex.Telemetry
 }
 
 // Compile-time proof that PromoCodeStore implements its own interface. Without it a
@@ -65,15 +65,15 @@ type PromoCodeStore struct {
 // package decorates it.
 var _ PromoCodeStoreIface = (*PromoCodeStore)(nil)
 
-// Compile-time proof that PromoCodeStore satisfies the generic gormx.Store, so the
+// Compile-time proof that PromoCodeStore satisfies the generic storex.Store, so the
 // generic engine can drive it alongside the typed finders below.
-var _ gormx.Store[PromoCode] = (*PromoCodeStore)(nil)
+var _ storex.Store[PromoCode] = (*PromoCodeStore)(nil)
 
 // NewPromoCodeStore returns a PromoCodeStore backed by db.
 func NewPromoCodeStore(db *gorm.DB) *PromoCodeStore { return &PromoCodeStore{DB: db} }
 
 // WithTelemetry sets the store's Telemetry and returns the store for chaining.
-func (s *PromoCodeStore) WithTelemetry(t gormx.Telemetry) *PromoCodeStore {
+func (s *PromoCodeStore) WithTelemetry(t storex.Telemetry) *PromoCodeStore {
 	s.Telemetry = t
 	return s
 }
@@ -84,7 +84,7 @@ func (s *PromoCodeStore) Create(ctx context.Context, m *PromoCode) error {
 }
 
 // List returns the PromoCode records matching opts.
-func (s *PromoCodeStore) List(ctx context.Context, opts gormx.ListOptions) ([]PromoCode, error) {
+func (s *PromoCodeStore) List(ctx context.Context, opts storex.ListOptions) ([]PromoCode, error) {
 	var out []PromoCode
 	if err := opts.Apply(s.DB.WithContext(ctx)).Find(&out).Error; err != nil {
 		return nil, err
@@ -94,7 +94,7 @@ func (s *PromoCodeStore) List(ctx context.Context, opts gormx.ListOptions) ([]Pr
 
 // Count returns the number of PromoCode records matching opts.Where
 // (pagination and ordering are ignored).
-func (s *PromoCodeStore) Count(ctx context.Context, opts gormx.ListOptions) (int64, error) {
+func (s *PromoCodeStore) Count(ctx context.Context, opts storex.ListOptions) (int64, error) {
 	var n int64
 	db := s.DB.WithContext(ctx).Model(&PromoCode{})
 	if opts.Where != nil {

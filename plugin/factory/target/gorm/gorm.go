@@ -38,10 +38,6 @@ var _ schema.IRTarget = (*Generator)(nil)
 // Name returns the target identifier used in buf.gen.yaml opt: [target=gorm].
 func (g *Generator) Name() string { return "gorm" }
 
-// gormxPkg is the package name and output directory of the shared runtime the
-// generated stores import; it lives at <go_module>/gormx.
-const gormxPkg = "gormx"
-
 // Generate renders from the databases alone, for callers that have no IR. Column
 // types then fall back to the neutral FieldType and every field's query surface to
 // its type-derived default, since the store.v1 overrides live in the facets this
@@ -61,20 +57,12 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 			return err
 		}
 	}
-	gormxEmitted := false     // the shared runtime is emitted once for the whole tree
 	filterxEmitted := false   // likewise the shared filter engine packages
 	telemetryEmitted := false // likewise the SDK adapter package
 	var pbIdx *pbIndex        // built lazily: only the converters emitter needs it
 	for _, db := range dbs {
 		if types.Provider(db.Provider) != types.Postgres {
 			return fmt.Errorf("gorm: database %q uses provider %q — the gorm target only supports postgres", db.Name, db.Provider)
-		}
-		// The stores share one gormx runtime package, imported by its full path, so
-		// store generation now needs the go_module opt just like the aggregator.
-		if dbStores(db) && dbGoModule(db) == "" {
-			return fmt.Errorf("gorm: database %q has the stores opt set but no go_module opt; "+
-				"the generated stores import the shared %q runtime package by its import path, "+
-				"so set go_module to the import path of the gorm output directory", db.Name, gormxPkg)
 		}
 		if dbFilters(db) && dbGoModule(db) == "" {
 			return fmt.Errorf("gorm: database %q has the filters opt set but no go_module opt; "+
@@ -146,13 +134,6 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 			// the models package. Skip empty schemas so the shared runtime is only
 			// emitted once a store actually uses it.
 			if dbStores(db) && len(s.Tables) > 0 {
-				if !gormxEmitted {
-					gf := p.NewGeneratedFile(fmt.Sprintf("%s/%s.go", gormxPkg, gormxPkg), "")
-					if err := renderGo(gf, "gormx.go.tpl", gormxView(db)); err != nil {
-						return fmt.Errorf("gorm: %s/%s.go: %w", gormxPkg, gormxPkg, err)
-					}
-					gormxEmitted = true
-				}
 				for _, t := range s.Tables {
 					sf := p.NewGeneratedFile(fmt.Sprintf("%s/%s/%s", gopkg.Dir(db.Name), pkg, storeFileName(t)), "")
 					if err := renderGo(sf, "store_model.go.tpl", storeModelView(db, s, pkg, t, typeOf, tel, fx)); err != nil {
@@ -161,7 +142,7 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 				}
 			}
 		}
-		// The SDK adapter package, once per tree: the stores' gormx.Telemetry
+		// The SDK adapter package, once per tree: the stores' storex.Telemetry
 		// implementation and the SQL-level gorm plugin Registry.Instrument
 		// installs. The only generated code importing the telemetry SDK.
 		if dbTelemetry(db) && !telemetryEmitted {
@@ -174,7 +155,7 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 				Schema:        telemetry.Package,
 				Notes:         []string{telemetry.AdapterNote},
 			}, telemetry.Module)
-			if err := telemetry.WriteAdapter(tf, db, hdr, dbGoModule(db), gormxPkg, dbStores(db)); err != nil {
+			if err := telemetry.WriteAdapter(tf, db, hdr, storexImport, dbStores(db)); err != nil {
 				return fmt.Errorf("gorm: %s: %w", telemetry.AdapterPath, err)
 			}
 			telemetryEmitted = true
@@ -207,13 +188,12 @@ func writeReadme(p *protogen.Plugin, db *schema.Database, typeOf types.TypeOf) e
 	}
 	if dbStores(db) {
 		outputs = append(outputs,
-			"`<schema>/<model>_store.go` — a typed CRUD store per resource (Create, GetByID, List, Count, Update, DeleteByID, plus GetBy/ListBy finders for unique and foreign-key columns); emitted when the `stores` opt is set (which also requires `go_module`). Requires `gorm.io/gorm`.",
-			"`gormx/gormx.go` — the shared runtime every store imports: `ListOptions`, the generic `Store[M]` interface every store satisfies, a `GenericStore[M]` engine that runs CRUD for any model with no per-entity code, and `EnsureSchemas`. Lets one generic engine drive every entity.",
+			"`<schema>/<model>_store.go` — a typed CRUD store per resource (Create, GetByID, List, Count, Update, DeleteByID, plus GetBy/ListBy finders for unique and foreign-key columns); emitted when the `stores` opt is set. Requires `gorm.io/gorm` and `github.com/the-protobuf-project/runtime-go/database`, whose `storex` package is the shared runtime every store imports: `ListOptions`, the generic `Store[M]` interface every store satisfies, a `GenericStore[M]` engine, `LockKey`/`LockKeys` and `EnsureSchemas`.",
 		)
 	}
 	if dbTelemetry(db) {
 		outputs = append(outputs,
-			"`telemetry/telemetry.go` — the first-party telemetry adapter: `New(o)` wraps an SDK handle as the `gormx.Telemetry` the stores observe through (`WithTelemetry(telemetry.New(o))`), and `Plugin(o)` is the SQL-level gorm plugin. Emitted with the `telemetry` opt; requires `github.com/the-protobuf-project/telemetry/telemetry-go`.",
+			"`telemetry/telemetry.go` — the first-party telemetry adapter: `New(o)` wraps an SDK handle as the `storex.Telemetry` the stores observe through (`WithTelemetry(telemetry.New(o))`), and `Plugin(o)` is the SQL-level gorm plugin. Emitted with the `telemetry` opt; requires `github.com/the-protobuf-project/telemetry/telemetry-go`.",
 			"`Registry.Instrument(db, o)` in `migrate.go` — installs the generated telemetry gorm plugin so every query emits a span (and metric) through the SDK handle.",
 		)
 	}

@@ -18,7 +18,7 @@ package club
 import (
 	"context"
 
-	"example.com/test/gen/gormx"
+	"github.com/the-protobuf-project/runtime-go/database/storex"
 	"gorm.io/gorm"
 )
 
@@ -42,8 +42,8 @@ import (
 // a decorator is added later.
 type ClosureStoreIface interface {
 	Create(ctx context.Context, m *Closure) error
-	List(ctx context.Context, opts gormx.ListOptions) ([]Closure, error)
-	Count(ctx context.Context, opts gormx.ListOptions) (int64, error)
+	List(ctx context.Context, opts storex.ListOptions) ([]Closure, error)
+	Count(ctx context.Context, opts storex.ListOptions) (int64, error)
 	Update(ctx context.Context, m *Closure) error
 	GetByID(ctx context.Context, id string) (*Closure, error)
 	DeleteByID(ctx context.Context, id string) error
@@ -56,7 +56,7 @@ type ClosureStore struct {
 	DB *gorm.DB
 	// Telemetry observes every operation; nil is a no-op. Wire the generated
 	// adapter: NewClosureStore(db).WithTelemetry(telemetry.New(o)).
-	Telemetry gormx.Telemetry
+	Telemetry storex.Telemetry
 }
 
 // Compile-time proof that ClosureStore implements its own interface. Without it a
@@ -64,15 +64,15 @@ type ClosureStore struct {
 // package decorates it.
 var _ ClosureStoreIface = (*ClosureStore)(nil)
 
-// Compile-time proof that ClosureStore satisfies the generic gormx.Store, so the
+// Compile-time proof that ClosureStore satisfies the generic storex.Store, so the
 // generic engine can drive it alongside the typed finders below.
-var _ gormx.Store[Closure] = (*ClosureStore)(nil)
+var _ storex.Store[Closure] = (*ClosureStore)(nil)
 
 // NewClosureStore returns a ClosureStore backed by db.
 func NewClosureStore(db *gorm.DB) *ClosureStore { return &ClosureStore{DB: db} }
 
 // WithTelemetry sets the store's Telemetry and returns the store for chaining.
-func (s *ClosureStore) WithTelemetry(t gormx.Telemetry) *ClosureStore {
+func (s *ClosureStore) WithTelemetry(t storex.Telemetry) *ClosureStore {
 	s.Telemetry = t
 	return s
 }
@@ -84,16 +84,16 @@ func (s *ClosureStore) Create(ctx context.Context, m *Closure) error {
 
 // NoOverlapKeys are the advisory-lock keys of m's no_overlap rules, the ones
 // the table's lock trigger takes on insert. A repository Batch takes them all
-// up front, in order (gormx.LockKeys), so two batches inserting rows for the
+// up front, in order (storex.LockKeys), so two batches inserting rows for the
 // same keys in different orders take turns instead of deadlocking.
 func (m *Closure) NoOverlapKeys() []string {
 	return []string{
-		gormx.LockKey("one_closure_at_a_time"),
+		storex.LockKey("one_closure_at_a_time"),
 	}
 }
 
 // List returns the Closure records matching opts.
-func (s *ClosureStore) List(ctx context.Context, opts gormx.ListOptions) ([]Closure, error) {
+func (s *ClosureStore) List(ctx context.Context, opts storex.ListOptions) ([]Closure, error) {
 	var out []Closure
 	if err := opts.Apply(s.DB.WithContext(ctx)).Find(&out).Error; err != nil {
 		return nil, err
@@ -103,7 +103,7 @@ func (s *ClosureStore) List(ctx context.Context, opts gormx.ListOptions) ([]Clos
 
 // Count returns the number of Closure records matching opts.Where
 // (pagination and ordering are ignored).
-func (s *ClosureStore) Count(ctx context.Context, opts gormx.ListOptions) (int64, error) {
+func (s *ClosureStore) Count(ctx context.Context, opts storex.ListOptions) (int64, error) {
 	var n int64
 	db := s.DB.WithContext(ctx).Model(&Closure{})
 	if opts.Where != nil {

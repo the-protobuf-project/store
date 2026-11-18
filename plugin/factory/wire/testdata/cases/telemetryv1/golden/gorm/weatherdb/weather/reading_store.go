@@ -19,7 +19,7 @@ import (
 	"context"
 	"time"
 
-	"example.com/test/gen/gormx"
+	"github.com/the-protobuf-project/runtime-go/database/storex"
 	"gorm.io/gorm"
 )
 
@@ -43,8 +43,8 @@ import (
 // a decorator is added later.
 type ReadingStoreIface interface {
 	Create(ctx context.Context, m *Reading) error
-	List(ctx context.Context, opts gormx.ListOptions) ([]Reading, error)
-	Count(ctx context.Context, opts gormx.ListOptions) (int64, error)
+	List(ctx context.Context, opts storex.ListOptions) ([]Reading, error)
+	Count(ctx context.Context, opts storex.ListOptions) (int64, error)
 	Update(ctx context.Context, m *Reading) error
 	GetByID(ctx context.Context, id string) (*Reading, error)
 	DeleteByID(ctx context.Context, id string) error
@@ -57,7 +57,7 @@ type ReadingStore struct {
 	DB *gorm.DB
 	// Telemetry observes every operation; nil is a no-op. Wire the generated
 	// adapter: NewReadingStore(db).WithTelemetry(telemetry.New(o)).
-	Telemetry gormx.Telemetry
+	Telemetry storex.Telemetry
 }
 
 // Compile-time proof that ReadingStore implements its own interface. Without it a
@@ -65,22 +65,22 @@ type ReadingStore struct {
 // package decorates it.
 var _ ReadingStoreIface = (*ReadingStore)(nil)
 
-// Compile-time proof that ReadingStore satisfies the generic gormx.Store, so the
+// Compile-time proof that ReadingStore satisfies the generic storex.Store, so the
 // generic engine can drive it alongside the typed finders below.
-var _ gormx.Store[Reading] = (*ReadingStore)(nil)
+var _ storex.Store[Reading] = (*ReadingStore)(nil)
 
 // NewReadingStore returns a ReadingStore backed by db.
 func NewReadingStore(db *gorm.DB) *ReadingStore { return &ReadingStore{DB: db} }
 
 // WithTelemetry sets the store's Telemetry and returns the store for chaining.
-func (s *ReadingStore) WithTelemetry(t gormx.Telemetry) *ReadingStore {
+func (s *ReadingStore) WithTelemetry(t storex.Telemetry) *ReadingStore {
 	s.Telemetry = t
 	return s
 }
 
 // Create inserts m.
 func (s *ReadingStore) Create(ctx context.Context, m *Reading) error {
-	tel := gormx.OrNop(s.Telemetry)
+	tel := storex.OrNop(s.Telemetry)
 	start := time.Now()
 	err := tel.Span(ctx, "weather.Reading/Create", m, func(ctx context.Context) error {
 		return s.DB.WithContext(ctx).Create(m).Error
@@ -90,9 +90,9 @@ func (s *ReadingStore) Create(ctx context.Context, m *Reading) error {
 }
 
 // List returns the Reading records matching opts.
-func (s *ReadingStore) List(ctx context.Context, opts gormx.ListOptions) ([]Reading, error) {
+func (s *ReadingStore) List(ctx context.Context, opts storex.ListOptions) ([]Reading, error) {
 	var out []Reading
-	tel := gormx.OrNop(s.Telemetry)
+	tel := storex.OrNop(s.Telemetry)
 	start := time.Now()
 	err := tel.Span(ctx, "weather.Reading/List", nil, func(ctx context.Context) error {
 		return opts.Apply(s.DB.WithContext(ctx)).Find(&out).Error
@@ -106,9 +106,9 @@ func (s *ReadingStore) List(ctx context.Context, opts gormx.ListOptions) ([]Read
 
 // Count returns the number of Reading records matching opts.Where
 // (pagination and ordering are ignored).
-func (s *ReadingStore) Count(ctx context.Context, opts gormx.ListOptions) (int64, error) {
+func (s *ReadingStore) Count(ctx context.Context, opts storex.ListOptions) (int64, error) {
 	var n int64
-	tel := gormx.OrNop(s.Telemetry)
+	tel := storex.OrNop(s.Telemetry)
 	start := time.Now()
 	err := tel.Span(ctx, "weather.Reading/Count", nil, func(ctx context.Context) error {
 		db := s.DB.WithContext(ctx).Model(&Reading{})
@@ -126,7 +126,7 @@ func (s *ReadingStore) Count(ctx context.Context, opts gormx.ListOptions) (int64
 
 // Update persists every field of m, which must carry its primary key.
 func (s *ReadingStore) Update(ctx context.Context, m *Reading) error {
-	tel := gormx.OrNop(s.Telemetry)
+	tel := storex.OrNop(s.Telemetry)
 	start := time.Now()
 	err := tel.Span(ctx, "weather.Reading/Update", m, func(ctx context.Context) error {
 		return s.DB.WithContext(ctx).Save(m).Error
@@ -138,7 +138,7 @@ func (s *ReadingStore) Update(ctx context.Context, m *Reading) error {
 // GetByID fetches the Reading with the given primary key.
 func (s *ReadingStore) GetByID(ctx context.Context, id string) (*Reading, error) {
 	var m Reading
-	tel := gormx.OrNop(s.Telemetry)
+	tel := storex.OrNop(s.Telemetry)
 	start := time.Now()
 	err := tel.Span(ctx, "weather.Reading/GetByID", nil, func(ctx context.Context) error {
 		return s.DB.WithContext(ctx).First(&m, "id = ?", id).Error
@@ -152,7 +152,7 @@ func (s *ReadingStore) GetByID(ctx context.Context, id string) (*Reading, error)
 
 // DeleteByID removes the Reading with the given primary key.
 func (s *ReadingStore) DeleteByID(ctx context.Context, id string) error {
-	tel := gormx.OrNop(s.Telemetry)
+	tel := storex.OrNop(s.Telemetry)
 	start := time.Now()
 	err := tel.Span(ctx, "weather.Reading/DeleteByID", nil, func(ctx context.Context) error {
 		return s.DB.WithContext(ctx).Delete(&Reading{}, "id = ?", id).Error
@@ -164,7 +164,7 @@ func (s *ReadingStore) DeleteByID(ctx context.Context, id string) error {
 // GetByName fetches the Reading with the given name (a unique column).
 func (s *ReadingStore) GetByName(ctx context.Context, v string) (*Reading, error) {
 	var m Reading
-	tel := gormx.OrNop(s.Telemetry)
+	tel := storex.OrNop(s.Telemetry)
 	start := time.Now()
 	err := tel.Span(ctx, "weather.Reading/GetByName", nil, func(ctx context.Context) error {
 		return s.DB.WithContext(ctx).First(&m, "name = ?", v).Error

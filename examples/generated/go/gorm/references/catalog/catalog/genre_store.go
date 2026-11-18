@@ -18,7 +18,7 @@ package catalog
 import (
 	"context"
 
-	"github.com/the-protobuf-project/store/examples/generated/go/gorm/references/gormx"
+	"github.com/the-protobuf-project/runtime-go/database/storex"
 	"gorm.io/gorm"
 )
 
@@ -42,8 +42,8 @@ import (
 // a decorator is added later.
 type GenreStoreIface interface {
 	Create(ctx context.Context, m *Genre) error
-	List(ctx context.Context, opts gormx.ListOptions) ([]Genre, error)
-	Count(ctx context.Context, opts gormx.ListOptions) (int64, error)
+	List(ctx context.Context, opts storex.ListOptions) ([]Genre, error)
+	Count(ctx context.Context, opts storex.ListOptions) (int64, error)
 	Update(ctx context.Context, m *Genre) error
 	GetByID(ctx context.Context, id string) (*Genre, error)
 	DeleteByID(ctx context.Context, id string) error
@@ -56,7 +56,7 @@ type GenreStore struct {
 	DB *gorm.DB
 	// Telemetry observes every operation; nil is a no-op. Wire the generated
 	// adapter: NewGenreStore(db).WithTelemetry(telemetry.New(o)).
-	Telemetry gormx.Telemetry
+	Telemetry storex.Telemetry
 }
 
 // Compile-time proof that GenreStore implements its own interface. Without it a
@@ -64,15 +64,15 @@ type GenreStore struct {
 // package decorates it.
 var _ GenreStoreIface = (*GenreStore)(nil)
 
-// Compile-time proof that GenreStore satisfies the generic gormx.Store, so the
+// Compile-time proof that GenreStore satisfies the generic storex.Store, so the
 // generic engine can drive it alongside the typed finders below.
-var _ gormx.Store[Genre] = (*GenreStore)(nil)
+var _ storex.Store[Genre] = (*GenreStore)(nil)
 
 // NewGenreStore returns a GenreStore backed by db.
 func NewGenreStore(db *gorm.DB) *GenreStore { return &GenreStore{DB: db} }
 
 // WithTelemetry sets the store's Telemetry and returns the store for chaining.
-func (s *GenreStore) WithTelemetry(t gormx.Telemetry) *GenreStore {
+func (s *GenreStore) WithTelemetry(t storex.Telemetry) *GenreStore {
 	s.Telemetry = t
 	return s
 }
@@ -83,7 +83,7 @@ func (s *GenreStore) Create(ctx context.Context, m *Genre) error {
 }
 
 // List returns the Genre records matching opts.
-func (s *GenreStore) List(ctx context.Context, opts gormx.ListOptions) ([]Genre, error) {
+func (s *GenreStore) List(ctx context.Context, opts storex.ListOptions) ([]Genre, error) {
 	var out []Genre
 	if err := opts.Apply(s.DB.WithContext(ctx)).Find(&out).Error; err != nil {
 		return nil, err
@@ -93,7 +93,7 @@ func (s *GenreStore) List(ctx context.Context, opts gormx.ListOptions) ([]Genre,
 
 // Count returns the number of Genre records matching opts.Where
 // (pagination and ordering are ignored).
-func (s *GenreStore) Count(ctx context.Context, opts gormx.ListOptions) (int64, error) {
+func (s *GenreStore) Count(ctx context.Context, opts storex.ListOptions) (int64, error) {
 	var n int64
 	db := s.DB.WithContext(ctx).Model(&Genre{})
 	if opts.Where != nil {

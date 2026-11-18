@@ -1,6 +1,6 @@
 {{.Header}}
 
-//! The shared runtime every generated store builds on, as gormx is for gorm:
+//! The shared runtime every generated store builds on, as storex is for gorm:
 //! [`Query`], the window-and-tag query a store's `query()` starts, the
 //! [`Column`] its tag and field enums implement, and strict record decoding.
 

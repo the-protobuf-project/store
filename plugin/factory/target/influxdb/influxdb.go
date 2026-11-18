@@ -22,7 +22,7 @@
 // Output layout, beside gorm's:
 //
 //	Cargo.toml, lib.rs                       one crate (gorm: go_module)
-//	seriesx/mod.rs                           shared runtime (gorm: gormx)
+//	seriesx/mod.rs                           shared runtime (gorm: runtime-go storex)
 //	<db>/mod.rs                              database selection + registry (gorm: migrate.go)
 //	<db>/README.md
 //	<db>/<schema>/mod.rs
@@ -94,7 +94,7 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 	if err := render(p, "lib.rs", "lib.rs.tpl", tv); err != nil {
 		return err
 	}
-	tv.Header = banner("//", header.Info{}, "Shared runtime of the generated stores, as gormx is for gorm.")
+	tv.Header = banner("//", header.Info{}, "Shared runtime of the generated stores, as storex is for gorm.")
 	if err := render(p, runtimeModule+"/mod.rs", "seriesx.rs.tpl", tv); err != nil {
 		return err
 	}

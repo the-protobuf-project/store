@@ -36,7 +36,7 @@ import (
 
 	genql "example.com/test/genql"
 	"example.com/test/gormdb/filterx"
-	"example.com/test/gormdb/gormx"
+	"github.com/the-protobuf-project/runtime-go/database/storex"
 	"github.com/the-protobuf-project/runtime-go/network/graphql"
 	"github.com/the-protobuf-project/runtime-go/network/runtime"
 )
@@ -253,7 +253,7 @@ func (u *Unit) Fail(err error) {
 // Commit applies every write queued in u and empties it.
 //
 // On GORM every write runs in one transaction, after the no_overlap keys of
-// the rows it inserts are locked all at once and in order (gormx.LockKeys), so
+// the rows it inserts are locked all at once and in order (storex.LockKeys), so
 // two Units inserting rows for the same keys take turns instead of
 // deadlocking: all land or none do.
 //
@@ -310,7 +310,7 @@ func (u *Unit) commit(ctx context.Context) error {
 	}
 	var committed []Committed
 	err := MapGormErr(u.conn.Gorm.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := gormx.LockKeys(tx, u.locks...); err != nil {
+		if err := storex.LockKeys(tx, u.locks...); err != nil {
 			return err
 		}
 		if err := loadPriors(ctx, Conn{Gorm: tx}, u.changes); err != nil {

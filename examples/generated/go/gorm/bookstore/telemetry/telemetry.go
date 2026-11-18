@@ -9,7 +9,7 @@
 // database: bookstore_db
 // package:  telemetry
 //
-// First-party telemetry adapter: the stores' gormx.Telemetry and the SQL-level gorm plugin.
+// First-party telemetry adapter: the stores' storex.Telemetry and the SQL-level gorm plugin.
 // annotations: entity.v1 dev, store.v1 dev
 // engine:      protokit v1.4.0
 // runtime:     github.com/the-protobuf-project/telemetry/telemetry-go
@@ -17,7 +17,7 @@
 // store — https://github.com/the-protobuf-project/store
 
 // Package telemetry is the only generated package that imports the telemetry
-// SDK: it adapts a *Handle into the store-level gormx.Telemetry seam and
+// SDK: it adapts a *Handle into the store-level storex.Telemetry seam and
 // provides a SQL-level gorm plugin, so an application wires observability once
 // and every generated store and query goes through it.
 package telemetry
@@ -29,7 +29,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/the-protobuf-project/store/examples/generated/go/gorm/bookstore/gormx"
+	"github.com/the-protobuf-project/runtime-go/database/storex"
 	"github.com/the-protobuf-project/telemetry/telemetry-go"
 	"gorm.io/gorm"
 )
@@ -44,11 +44,11 @@ type Handle = telemetry.Telemetry
 // it — both are named telemetry, so importing both would collide.
 var Build = telemetry.New
 
-// New adapts o into the gormx.Telemetry every generated store observes
+// New adapts o into the storex.Telemetry every generated store observes
 // through (via WithTelemetry). A nil o is a no-op.
-func New(o *Handle) gormx.Telemetry {
+func New(o *Handle) storex.Telemetry {
 	if o == nil {
-		return gormx.NopTelemetry{}
+		return storex.NopTelemetry{}
 	}
 	return adapter{o: o}
 }
@@ -72,7 +72,7 @@ func (a adapter) RecordOp(ctx context.Context, table, op string, d time.Duration
 	if err != nil {
 		status = "error"
 	}
-	_ = a.o.Metrics.Record(&gormx.OpMetric{Ops: 1, DurationMS: float64(d.Microseconds()) / 1000},
+	_ = a.o.Metrics.Record(&storex.OpMetric{Ops: 1, DurationMS: float64(d.Microseconds()) / 1000},
 		telemetry.WithAttributes(
 			telemetry.StringAttribute("table", table),
 			telemetry.StringAttribute("op", op),

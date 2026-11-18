@@ -18,7 +18,7 @@ package projdemov1
 import (
 	"context"
 
-	"example.com/test/gen/gormx"
+	"github.com/the-protobuf-project/runtime-go/database/storex"
 	"gorm.io/gorm"
 )
 
@@ -42,13 +42,13 @@ import (
 // a decorator is added later.
 type BookingStoreIface interface {
 	Create(ctx context.Context, m *Booking) error
-	List(ctx context.Context, opts gormx.ListOptions) ([]Booking, error)
-	Count(ctx context.Context, opts gormx.ListOptions) (int64, error)
+	List(ctx context.Context, opts storex.ListOptions) ([]Booking, error)
+	Count(ctx context.Context, opts storex.ListOptions) (int64, error)
 	Update(ctx context.Context, m *Booking) error
 	GetByID(ctx context.Context, id string) (*Booking, error)
 	DeleteByID(ctx context.Context, id string) error
 	GetByName(ctx context.Context, v string) (*Booking, error)
-	ListByRoomID(ctx context.Context, id string, opts gormx.ListOptions) ([]Booking, error)
+	ListByRoomID(ctx context.Context, id string, opts storex.ListOptions) ([]Booking, error)
 }
 
 // BookingStore provides typed CRUD access to Booking records.
@@ -57,7 +57,7 @@ type BookingStore struct {
 	DB *gorm.DB
 	// Telemetry observes every operation; nil is a no-op. Wire the generated
 	// adapter: NewBookingStore(db).WithTelemetry(telemetry.New(o)).
-	Telemetry gormx.Telemetry
+	Telemetry storex.Telemetry
 }
 
 // Compile-time proof that BookingStore implements its own interface. Without it a
@@ -65,15 +65,15 @@ type BookingStore struct {
 // package decorates it.
 var _ BookingStoreIface = (*BookingStore)(nil)
 
-// Compile-time proof that BookingStore satisfies the generic gormx.Store, so the
+// Compile-time proof that BookingStore satisfies the generic storex.Store, so the
 // generic engine can drive it alongside the typed finders below.
-var _ gormx.Store[Booking] = (*BookingStore)(nil)
+var _ storex.Store[Booking] = (*BookingStore)(nil)
 
 // NewBookingStore returns a BookingStore backed by db.
 func NewBookingStore(db *gorm.DB) *BookingStore { return &BookingStore{DB: db} }
 
 // WithTelemetry sets the store's Telemetry and returns the store for chaining.
-func (s *BookingStore) WithTelemetry(t gormx.Telemetry) *BookingStore {
+func (s *BookingStore) WithTelemetry(t storex.Telemetry) *BookingStore {
 	s.Telemetry = t
 	return s
 }
@@ -84,7 +84,7 @@ func (s *BookingStore) Create(ctx context.Context, m *Booking) error {
 }
 
 // List returns the Booking records matching opts.
-func (s *BookingStore) List(ctx context.Context, opts gormx.ListOptions) ([]Booking, error) {
+func (s *BookingStore) List(ctx context.Context, opts storex.ListOptions) ([]Booking, error) {
 	var out []Booking
 	if err := opts.Apply(s.DB.WithContext(ctx)).Find(&out).Error; err != nil {
 		return nil, err
@@ -94,7 +94,7 @@ func (s *BookingStore) List(ctx context.Context, opts gormx.ListOptions) ([]Book
 
 // Count returns the number of Booking records matching opts.Where
 // (pagination and ordering are ignored).
-func (s *BookingStore) Count(ctx context.Context, opts gormx.ListOptions) (int64, error) {
+func (s *BookingStore) Count(ctx context.Context, opts storex.ListOptions) (int64, error) {
 	var n int64
 	db := s.DB.WithContext(ctx).Model(&Booking{})
 	if opts.Where != nil {
@@ -135,7 +135,7 @@ func (s *BookingStore) GetByName(ctx context.Context, v string) (*Booking, error
 }
 
 // ListByRoomID returns the Booking records whose room matches id, with opts applied.
-func (s *BookingStore) ListByRoomID(ctx context.Context, id string, opts gormx.ListOptions) ([]Booking, error) {
+func (s *BookingStore) ListByRoomID(ctx context.Context, id string, opts storex.ListOptions) ([]Booking, error) {
 	var out []Booking
 	q := opts.Apply(s.DB.WithContext(ctx).Where("room = ?", id))
 	if err := q.Find(&out).Error; err != nil {

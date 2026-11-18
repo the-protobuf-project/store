@@ -18,7 +18,7 @@ package search
 import (
 	"context"
 
-	"github.com/the-protobuf-project/store/examples/generated/go/gorm/search/gormx"
+	"github.com/the-protobuf-project/runtime-go/database/storex"
 	"gorm.io/gorm"
 )
 
@@ -42,8 +42,8 @@ import (
 // a decorator is added later.
 type RoomDayStoreIface interface {
 	Create(ctx context.Context, m *RoomDay) error
-	List(ctx context.Context, opts gormx.ListOptions) ([]RoomDay, error)
-	Count(ctx context.Context, opts gormx.ListOptions) (int64, error)
+	List(ctx context.Context, opts storex.ListOptions) ([]RoomDay, error)
+	Count(ctx context.Context, opts storex.ListOptions) (int64, error)
 	Update(ctx context.Context, m *RoomDay) error
 	GetByID(ctx context.Context, id string) (*RoomDay, error)
 	DeleteByID(ctx context.Context, id string) error
@@ -55,7 +55,7 @@ type RoomDayStore struct {
 	DB *gorm.DB
 	// Telemetry observes every operation; nil is a no-op. Wire the generated
 	// adapter: NewRoomDayStore(db).WithTelemetry(telemetry.New(o)).
-	Telemetry gormx.Telemetry
+	Telemetry storex.Telemetry
 }
 
 // Compile-time proof that RoomDayStore implements its own interface. Without it a
@@ -63,15 +63,15 @@ type RoomDayStore struct {
 // package decorates it.
 var _ RoomDayStoreIface = (*RoomDayStore)(nil)
 
-// Compile-time proof that RoomDayStore satisfies the generic gormx.Store, so the
+// Compile-time proof that RoomDayStore satisfies the generic storex.Store, so the
 // generic engine can drive it alongside the typed finders below.
-var _ gormx.Store[RoomDay] = (*RoomDayStore)(nil)
+var _ storex.Store[RoomDay] = (*RoomDayStore)(nil)
 
 // NewRoomDayStore returns a RoomDayStore backed by db.
 func NewRoomDayStore(db *gorm.DB) *RoomDayStore { return &RoomDayStore{DB: db} }
 
 // WithTelemetry sets the store's Telemetry and returns the store for chaining.
-func (s *RoomDayStore) WithTelemetry(t gormx.Telemetry) *RoomDayStore {
+func (s *RoomDayStore) WithTelemetry(t storex.Telemetry) *RoomDayStore {
 	s.Telemetry = t
 	return s
 }
@@ -82,7 +82,7 @@ func (s *RoomDayStore) Create(ctx context.Context, m *RoomDay) error {
 }
 
 // List returns the RoomDay records matching opts.
-func (s *RoomDayStore) List(ctx context.Context, opts gormx.ListOptions) ([]RoomDay, error) {
+func (s *RoomDayStore) List(ctx context.Context, opts storex.ListOptions) ([]RoomDay, error) {
 	var out []RoomDay
 	if err := opts.Apply(s.DB.WithContext(ctx)).Find(&out).Error; err != nil {
 		return nil, err
@@ -92,7 +92,7 @@ func (s *RoomDayStore) List(ctx context.Context, opts gormx.ListOptions) ([]Room
 
 // Count returns the number of RoomDay records matching opts.Where
 // (pagination and ordering are ignored).
-func (s *RoomDayStore) Count(ctx context.Context, opts gormx.ListOptions) (int64, error) {
+func (s *RoomDayStore) Count(ctx context.Context, opts storex.ListOptions) (int64, error) {
 	var n int64
 	db := s.DB.WithContext(ctx).Model(&RoomDay{})
 	if opts.Where != nil {

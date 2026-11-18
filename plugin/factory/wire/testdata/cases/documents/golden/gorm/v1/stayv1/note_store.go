@@ -18,7 +18,7 @@ package stayv1
 import (
 	"context"
 
-	"example.com/test/gen/gormx"
+	"github.com/the-protobuf-project/runtime-go/database/storex"
 	"gorm.io/gorm"
 )
 
@@ -42,8 +42,8 @@ import (
 // a decorator is added later.
 type NoteStoreIface interface {
 	Create(ctx context.Context, m *Note) error
-	List(ctx context.Context, opts gormx.ListOptions) ([]Note, error)
-	Count(ctx context.Context, opts gormx.ListOptions) (int64, error)
+	List(ctx context.Context, opts storex.ListOptions) ([]Note, error)
+	Count(ctx context.Context, opts storex.ListOptions) (int64, error)
 	Update(ctx context.Context, m *Note) error
 	GetByID(ctx context.Context, id string) (*Note, error)
 	DeleteByID(ctx context.Context, id string) error
@@ -55,7 +55,7 @@ type NoteStore struct {
 	DB *gorm.DB
 	// Telemetry observes every operation; nil is a no-op. Wire the generated
 	// adapter: NewNoteStore(db).WithTelemetry(telemetry.New(o)).
-	Telemetry gormx.Telemetry
+	Telemetry storex.Telemetry
 }
 
 // Compile-time proof that NoteStore implements its own interface. Without it a
@@ -63,15 +63,15 @@ type NoteStore struct {
 // package decorates it.
 var _ NoteStoreIface = (*NoteStore)(nil)
 
-// Compile-time proof that NoteStore satisfies the generic gormx.Store, so the
+// Compile-time proof that NoteStore satisfies the generic storex.Store, so the
 // generic engine can drive it alongside the typed finders below.
-var _ gormx.Store[Note] = (*NoteStore)(nil)
+var _ storex.Store[Note] = (*NoteStore)(nil)
 
 // NewNoteStore returns a NoteStore backed by db.
 func NewNoteStore(db *gorm.DB) *NoteStore { return &NoteStore{DB: db} }
 
 // WithTelemetry sets the store's Telemetry and returns the store for chaining.
-func (s *NoteStore) WithTelemetry(t gormx.Telemetry) *NoteStore {
+func (s *NoteStore) WithTelemetry(t storex.Telemetry) *NoteStore {
 	s.Telemetry = t
 	return s
 }
@@ -82,7 +82,7 @@ func (s *NoteStore) Create(ctx context.Context, m *Note) error {
 }
 
 // List returns the Note records matching opts.
-func (s *NoteStore) List(ctx context.Context, opts gormx.ListOptions) ([]Note, error) {
+func (s *NoteStore) List(ctx context.Context, opts storex.ListOptions) ([]Note, error) {
 	var out []Note
 	if err := opts.Apply(s.DB.WithContext(ctx)).Find(&out).Error; err != nil {
 		return nil, err
@@ -92,7 +92,7 @@ func (s *NoteStore) List(ctx context.Context, opts gormx.ListOptions) ([]Note, e
 
 // Count returns the number of Note records matching opts.Where
 // (pagination and ordering are ignored).
-func (s *NoteStore) Count(ctx context.Context, opts gormx.ListOptions) (int64, error) {
+func (s *NoteStore) Count(ctx context.Context, opts storex.ListOptions) (int64, error) {
 	var n int64
 	db := s.DB.WithContext(ctx).Model(&Note{})
 	if opts.Where != nil {

@@ -19,7 +19,7 @@ import (
 	"context"
 	"time"
 
-	"example.com/test/gen/gormx"
+	"github.com/the-protobuf-project/runtime-go/database/storex"
 	"gorm.io/gorm"
 )
 
@@ -43,8 +43,8 @@ import (
 // a decorator is added later.
 type OperatorStoreIface interface {
 	Create(ctx context.Context, m *Operator) error
-	List(ctx context.Context, opts gormx.ListOptions) ([]Operator, error)
-	Count(ctx context.Context, opts gormx.ListOptions) (int64, error)
+	List(ctx context.Context, opts storex.ListOptions) ([]Operator, error)
+	Count(ctx context.Context, opts storex.ListOptions) (int64, error)
 	Update(ctx context.Context, m *Operator) error
 	GetByID(ctx context.Context, id string) (*Operator, error)
 	DeleteByID(ctx context.Context, id string) error
@@ -57,7 +57,7 @@ type OperatorStore struct {
 	DB *gorm.DB
 	// Telemetry observes every operation; nil is a no-op. Wire the generated
 	// adapter: NewOperatorStore(db).WithTelemetry(telemetry.New(o)).
-	Telemetry gormx.Telemetry
+	Telemetry storex.Telemetry
 }
 
 // Compile-time proof that OperatorStore implements its own interface. Without it a
@@ -65,22 +65,22 @@ type OperatorStore struct {
 // package decorates it.
 var _ OperatorStoreIface = (*OperatorStore)(nil)
 
-// Compile-time proof that OperatorStore satisfies the generic gormx.Store, so the
+// Compile-time proof that OperatorStore satisfies the generic storex.Store, so the
 // generic engine can drive it alongside the typed finders below.
-var _ gormx.Store[Operator] = (*OperatorStore)(nil)
+var _ storex.Store[Operator] = (*OperatorStore)(nil)
 
 // NewOperatorStore returns a OperatorStore backed by db.
 func NewOperatorStore(db *gorm.DB) *OperatorStore { return &OperatorStore{DB: db} }
 
 // WithTelemetry sets the store's Telemetry and returns the store for chaining.
-func (s *OperatorStore) WithTelemetry(t gormx.Telemetry) *OperatorStore {
+func (s *OperatorStore) WithTelemetry(t storex.Telemetry) *OperatorStore {
 	s.Telemetry = t
 	return s
 }
 
 // Create inserts m.
 func (s *OperatorStore) Create(ctx context.Context, m *Operator) error {
-	tel := gormx.OrNop(s.Telemetry)
+	tel := storex.OrNop(s.Telemetry)
 	start := time.Now()
 	err := tel.Span(ctx, "venue_v1.Operator/Create", m, func(ctx context.Context) error {
 		return s.DB.WithContext(ctx).Create(m).Error
@@ -90,9 +90,9 @@ func (s *OperatorStore) Create(ctx context.Context, m *Operator) error {
 }
 
 // List returns the Operator records matching opts.
-func (s *OperatorStore) List(ctx context.Context, opts gormx.ListOptions) ([]Operator, error) {
+func (s *OperatorStore) List(ctx context.Context, opts storex.ListOptions) ([]Operator, error) {
 	var out []Operator
-	tel := gormx.OrNop(s.Telemetry)
+	tel := storex.OrNop(s.Telemetry)
 	start := time.Now()
 	err := tel.Span(ctx, "venue_v1.Operator/List", nil, func(ctx context.Context) error {
 		return opts.Apply(s.DB.WithContext(ctx)).Find(&out).Error
@@ -106,9 +106,9 @@ func (s *OperatorStore) List(ctx context.Context, opts gormx.ListOptions) ([]Ope
 
 // Count returns the number of Operator records matching opts.Where
 // (pagination and ordering are ignored).
-func (s *OperatorStore) Count(ctx context.Context, opts gormx.ListOptions) (int64, error) {
+func (s *OperatorStore) Count(ctx context.Context, opts storex.ListOptions) (int64, error) {
 	var n int64
-	tel := gormx.OrNop(s.Telemetry)
+	tel := storex.OrNop(s.Telemetry)
 	start := time.Now()
 	err := tel.Span(ctx, "venue_v1.Operator/Count", nil, func(ctx context.Context) error {
 		db := s.DB.WithContext(ctx).Model(&Operator{})
@@ -126,7 +126,7 @@ func (s *OperatorStore) Count(ctx context.Context, opts gormx.ListOptions) (int6
 
 // Update persists every field of m, which must carry its primary key.
 func (s *OperatorStore) Update(ctx context.Context, m *Operator) error {
-	tel := gormx.OrNop(s.Telemetry)
+	tel := storex.OrNop(s.Telemetry)
 	start := time.Now()
 	err := tel.Span(ctx, "venue_v1.Operator/Update", m, func(ctx context.Context) error {
 		return s.DB.WithContext(ctx).Save(m).Error
@@ -138,7 +138,7 @@ func (s *OperatorStore) Update(ctx context.Context, m *Operator) error {
 // GetByID fetches the Operator with the given primary key.
 func (s *OperatorStore) GetByID(ctx context.Context, id string) (*Operator, error) {
 	var m Operator
-	tel := gormx.OrNop(s.Telemetry)
+	tel := storex.OrNop(s.Telemetry)
 	start := time.Now()
 	err := tel.Span(ctx, "venue_v1.Operator/GetByID", nil, func(ctx context.Context) error {
 		return s.DB.WithContext(ctx).First(&m, "id = ?", id).Error
@@ -152,7 +152,7 @@ func (s *OperatorStore) GetByID(ctx context.Context, id string) (*Operator, erro
 
 // DeleteByID removes the Operator with the given primary key.
 func (s *OperatorStore) DeleteByID(ctx context.Context, id string) error {
-	tel := gormx.OrNop(s.Telemetry)
+	tel := storex.OrNop(s.Telemetry)
 	start := time.Now()
 	err := tel.Span(ctx, "venue_v1.Operator/DeleteByID", nil, func(ctx context.Context) error {
 		return s.DB.WithContext(ctx).Delete(&Operator{}, "id = ?", id).Error
@@ -164,7 +164,7 @@ func (s *OperatorStore) DeleteByID(ctx context.Context, id string) error {
 // GetByName fetches the Operator with the given name (a unique column).
 func (s *OperatorStore) GetByName(ctx context.Context, v string) (*Operator, error) {
 	var m Operator
-	tel := gormx.OrNop(s.Telemetry)
+	tel := storex.OrNop(s.Telemetry)
 	start := time.Now()
 	err := tel.Span(ctx, "venue_v1.Operator/GetByName", nil, func(ctx context.Context) error {
 		return s.DB.WithContext(ctx).First(&m, "name = ?", v).Error

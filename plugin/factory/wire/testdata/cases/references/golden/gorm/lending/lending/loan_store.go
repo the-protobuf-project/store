@@ -18,7 +18,7 @@ package lending
 import (
 	"context"
 
-	"example.com/test/gen/gormx"
+	"github.com/the-protobuf-project/runtime-go/database/storex"
 	"gorm.io/gorm"
 )
 
@@ -42,8 +42,8 @@ import (
 // a decorator is added later.
 type LoanStoreIface interface {
 	Create(ctx context.Context, m *Loan) error
-	List(ctx context.Context, opts gormx.ListOptions) ([]Loan, error)
-	Count(ctx context.Context, opts gormx.ListOptions) (int64, error)
+	List(ctx context.Context, opts storex.ListOptions) ([]Loan, error)
+	Count(ctx context.Context, opts storex.ListOptions) (int64, error)
 	Update(ctx context.Context, m *Loan) error
 	GetByID(ctx context.Context, id string) (*Loan, error)
 	DeleteByID(ctx context.Context, id string) error
@@ -56,7 +56,7 @@ type LoanStore struct {
 	DB *gorm.DB
 	// Telemetry observes every operation; nil is a no-op. Wire the generated
 	// adapter: NewLoanStore(db).WithTelemetry(telemetry.New(o)).
-	Telemetry gormx.Telemetry
+	Telemetry storex.Telemetry
 }
 
 // Compile-time proof that LoanStore implements its own interface. Without it a
@@ -64,15 +64,15 @@ type LoanStore struct {
 // package decorates it.
 var _ LoanStoreIface = (*LoanStore)(nil)
 
-// Compile-time proof that LoanStore satisfies the generic gormx.Store, so the
+// Compile-time proof that LoanStore satisfies the generic storex.Store, so the
 // generic engine can drive it alongside the typed finders below.
-var _ gormx.Store[Loan] = (*LoanStore)(nil)
+var _ storex.Store[Loan] = (*LoanStore)(nil)
 
 // NewLoanStore returns a LoanStore backed by db.
 func NewLoanStore(db *gorm.DB) *LoanStore { return &LoanStore{DB: db} }
 
 // WithTelemetry sets the store's Telemetry and returns the store for chaining.
-func (s *LoanStore) WithTelemetry(t gormx.Telemetry) *LoanStore {
+func (s *LoanStore) WithTelemetry(t storex.Telemetry) *LoanStore {
 	s.Telemetry = t
 	return s
 }
@@ -83,7 +83,7 @@ func (s *LoanStore) Create(ctx context.Context, m *Loan) error {
 }
 
 // List returns the Loan records matching opts.
-func (s *LoanStore) List(ctx context.Context, opts gormx.ListOptions) ([]Loan, error) {
+func (s *LoanStore) List(ctx context.Context, opts storex.ListOptions) ([]Loan, error) {
 	var out []Loan
 	if err := opts.Apply(s.DB.WithContext(ctx)).Find(&out).Error; err != nil {
 		return nil, err
@@ -93,7 +93,7 @@ func (s *LoanStore) List(ctx context.Context, opts gormx.ListOptions) ([]Loan, e
 
 // Count returns the number of Loan records matching opts.Where
 // (pagination and ordering are ignored).
-func (s *LoanStore) Count(ctx context.Context, opts gormx.ListOptions) (int64, error) {
+func (s *LoanStore) Count(ctx context.Context, opts storex.ListOptions) (int64, error) {
 	var n int64
 	db := s.DB.WithContext(ctx).Model(&Loan{})
 	if opts.Where != nil {

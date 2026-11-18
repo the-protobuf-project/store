@@ -18,7 +18,7 @@ package weather
 import (
 	"context"
 
-	"example.com/test/gen/gormx"
+	"github.com/the-protobuf-project/runtime-go/database/storex"
 	"gorm.io/gorm"
 )
 
@@ -42,8 +42,8 @@ import (
 // a decorator is added later.
 type CalibrationStoreIface interface {
 	Create(ctx context.Context, m *Calibration) error
-	List(ctx context.Context, opts gormx.ListOptions) ([]Calibration, error)
-	Count(ctx context.Context, opts gormx.ListOptions) (int64, error)
+	List(ctx context.Context, opts storex.ListOptions) ([]Calibration, error)
+	Count(ctx context.Context, opts storex.ListOptions) (int64, error)
 	Update(ctx context.Context, m *Calibration) error
 	GetByID(ctx context.Context, id string) (*Calibration, error)
 	DeleteByID(ctx context.Context, id string) error
@@ -56,7 +56,7 @@ type CalibrationStore struct {
 	DB *gorm.DB
 	// Telemetry observes every operation; nil is a no-op. Wire the generated
 	// adapter: NewCalibrationStore(db).WithTelemetry(telemetry.New(o)).
-	Telemetry gormx.Telemetry
+	Telemetry storex.Telemetry
 }
 
 // Compile-time proof that CalibrationStore implements its own interface. Without it a
@@ -64,15 +64,15 @@ type CalibrationStore struct {
 // package decorates it.
 var _ CalibrationStoreIface = (*CalibrationStore)(nil)
 
-// Compile-time proof that CalibrationStore satisfies the generic gormx.Store, so the
+// Compile-time proof that CalibrationStore satisfies the generic storex.Store, so the
 // generic engine can drive it alongside the typed finders below.
-var _ gormx.Store[Calibration] = (*CalibrationStore)(nil)
+var _ storex.Store[Calibration] = (*CalibrationStore)(nil)
 
 // NewCalibrationStore returns a CalibrationStore backed by db.
 func NewCalibrationStore(db *gorm.DB) *CalibrationStore { return &CalibrationStore{DB: db} }
 
 // WithTelemetry sets the store's Telemetry and returns the store for chaining.
-func (s *CalibrationStore) WithTelemetry(t gormx.Telemetry) *CalibrationStore {
+func (s *CalibrationStore) WithTelemetry(t storex.Telemetry) *CalibrationStore {
 	s.Telemetry = t
 	return s
 }
@@ -83,7 +83,7 @@ func (s *CalibrationStore) Create(ctx context.Context, m *Calibration) error {
 }
 
 // List returns the Calibration records matching opts.
-func (s *CalibrationStore) List(ctx context.Context, opts gormx.ListOptions) ([]Calibration, error) {
+func (s *CalibrationStore) List(ctx context.Context, opts storex.ListOptions) ([]Calibration, error) {
 	var out []Calibration
 	if err := opts.Apply(s.DB.WithContext(ctx)).Find(&out).Error; err != nil {
 		return nil, err
@@ -93,7 +93,7 @@ func (s *CalibrationStore) List(ctx context.Context, opts gormx.ListOptions) ([]
 
 // Count returns the number of Calibration records matching opts.Where
 // (pagination and ordering are ignored).
-func (s *CalibrationStore) Count(ctx context.Context, opts gormx.ListOptions) (int64, error) {
+func (s *CalibrationStore) Count(ctx context.Context, opts storex.ListOptions) (int64, error) {
 	var n int64
 	db := s.DB.WithContext(ctx).Model(&Calibration{})
 	if opts.Where != nil {

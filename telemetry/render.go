@@ -34,7 +34,7 @@ const AdapterPath = Package + "/" + Package + ".go"
 
 // AdapterNote is the banner note describing what the adapter is, so a caller
 // building the header states the same thing this package would.
-const AdapterNote = "First-party telemetry adapter: the stores' gormx.Telemetry and the SQL-level gorm plugin."
+const AdapterNote = "First-party telemetry adapter: the stores' storex.Telemetry and the SQL-level gorm plugin."
 
 // WriteAdapter renders the SDK adapter package for db into w.
 //
@@ -44,11 +44,11 @@ const AdapterNote = "First-party telemetry adapter: the stores' gormx.Telemetry 
 // standalone protoc-gen-telemetry. Taking it as an argument is also what keeps
 // this package free of any dependency on the plugin that currently hosts it.
 //
-// goModule is the import path of the output directory, needed because the
-// adapter imports the generated gormx runtime by its full path. stores reports
+// storexImport is the import path of the store runtime (runtime-go's
+// database/storex) whose Telemetry seam the adapter implements. stores reports
 // whether typed stores were generated, which decides whether the adapter carries
-// the store-level gormx.Telemetry implementation or only the SQL-level plugin.
-func WriteAdapter(w io.Writer, db *schema.Database, header, goModule, gormxPkg string, stores bool) error {
+// the store-level storex.Telemetry implementation or only the SQL-level plugin.
+func WriteAdapter(w io.Writer, db *schema.Database, header, storexImport string, stores bool) error {
 	return renderGo(w, "telemetry.go.tpl", map[string]any{
 		"Header":             header,
 		"Package":            Package,
@@ -56,7 +56,7 @@ func WriteAdapter(w io.Writer, db *schema.Database, header, goModule, gormxPkg s
 		"Metrics":            Metrics(db),
 		"Logs":               Logs(db),
 		"TelemetrySDKImport": Module,
-		"GormxImport":        goModule + "/" + gormxPkg,
+		"StorexImport":       storexImport,
 	})
 }
 

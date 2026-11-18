@@ -18,7 +18,7 @@ package inventory
 import (
 	"context"
 
-	"example.com/test/gen/gormx"
+	"github.com/the-protobuf-project/runtime-go/database/storex"
 	"gorm.io/gorm"
 )
 
@@ -42,8 +42,8 @@ import (
 // a decorator is added later.
 type ShelfStoreIface interface {
 	Create(ctx context.Context, m *Shelf) error
-	List(ctx context.Context, opts gormx.ListOptions) ([]Shelf, error)
-	Count(ctx context.Context, opts gormx.ListOptions) (int64, error)
+	List(ctx context.Context, opts storex.ListOptions) ([]Shelf, error)
+	Count(ctx context.Context, opts storex.ListOptions) (int64, error)
 	Update(ctx context.Context, m *Shelf) error
 	GetByID(ctx context.Context, id string) (*Shelf, error)
 	DeleteByID(ctx context.Context, id string) error
@@ -56,7 +56,7 @@ type ShelfStore struct {
 	DB *gorm.DB
 	// Telemetry observes every operation; nil is a no-op. Wire the generated
 	// adapter: NewShelfStore(db).WithTelemetry(telemetry.New(o)).
-	Telemetry gormx.Telemetry
+	Telemetry storex.Telemetry
 }
 
 // Compile-time proof that ShelfStore implements its own interface. Without it a
@@ -64,15 +64,15 @@ type ShelfStore struct {
 // package decorates it.
 var _ ShelfStoreIface = (*ShelfStore)(nil)
 
-// Compile-time proof that ShelfStore satisfies the generic gormx.Store, so the
+// Compile-time proof that ShelfStore satisfies the generic storex.Store, so the
 // generic engine can drive it alongside the typed finders below.
-var _ gormx.Store[Shelf] = (*ShelfStore)(nil)
+var _ storex.Store[Shelf] = (*ShelfStore)(nil)
 
 // NewShelfStore returns a ShelfStore backed by db.
 func NewShelfStore(db *gorm.DB) *ShelfStore { return &ShelfStore{DB: db} }
 
 // WithTelemetry sets the store's Telemetry and returns the store for chaining.
-func (s *ShelfStore) WithTelemetry(t gormx.Telemetry) *ShelfStore {
+func (s *ShelfStore) WithTelemetry(t storex.Telemetry) *ShelfStore {
 	s.Telemetry = t
 	return s
 }
@@ -83,7 +83,7 @@ func (s *ShelfStore) Create(ctx context.Context, m *Shelf) error {
 }
 
 // List returns the Shelf records matching opts.
-func (s *ShelfStore) List(ctx context.Context, opts gormx.ListOptions) ([]Shelf, error) {
+func (s *ShelfStore) List(ctx context.Context, opts storex.ListOptions) ([]Shelf, error) {
 	var out []Shelf
 	if err := opts.Apply(s.DB.WithContext(ctx)).Find(&out).Error; err != nil {
 		return nil, err
@@ -93,7 +93,7 @@ func (s *ShelfStore) List(ctx context.Context, opts gormx.ListOptions) ([]Shelf,
 
 // Count returns the number of Shelf records matching opts.Where
 // (pagination and ordering are ignored).
-func (s *ShelfStore) Count(ctx context.Context, opts gormx.ListOptions) (int64, error) {
+func (s *ShelfStore) Count(ctx context.Context, opts storex.ListOptions) (int64, error) {
 	var n int64
 	db := s.DB.WithContext(ctx).Model(&Shelf{})
 	if opts.Where != nil {
