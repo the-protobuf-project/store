@@ -18,7 +18,7 @@ package resourcev1
 import (
 	"context"
 
-	"example.com/test/gen/gormx"
+	"github.com/the-protobuf-project/runtime-go/database/storex"
 	"gorm.io/gorm"
 )
 
@@ -42,13 +42,13 @@ import (
 // a decorator is added later.
 type EventStoreIface interface {
 	Create(ctx context.Context, m *Event) error
-	List(ctx context.Context, opts gormx.ListOptions) ([]Event, error)
-	Count(ctx context.Context, opts gormx.ListOptions) (int64, error)
+	List(ctx context.Context, opts storex.ListOptions) ([]Event, error)
+	Count(ctx context.Context, opts storex.ListOptions) (int64, error)
 	Update(ctx context.Context, m *Event) error
 	GetByID(ctx context.Context, id string) (*Event, error)
 	DeleteByID(ctx context.Context, id string) error
 	GetByName(ctx context.Context, v string) (*Event, error)
-	ListByWindowID(ctx context.Context, id string, opts gormx.ListOptions) ([]Event, error)
+	ListByWindowID(ctx context.Context, id string, opts storex.ListOptions) ([]Event, error)
 }
 
 // EventStore provides typed CRUD access to Event records.
@@ -57,7 +57,7 @@ type EventStore struct {
 	DB *gorm.DB
 	// Telemetry observes every operation; nil is a no-op. Wire the generated
 	// adapter: NewEventStore(db).WithTelemetry(telemetry.New(o)).
-	Telemetry gormx.Telemetry
+	Telemetry storex.Telemetry
 }
 
 // Compile-time proof that EventStore implements its own interface. Without it a
@@ -65,15 +65,15 @@ type EventStore struct {
 // package decorates it.
 var _ EventStoreIface = (*EventStore)(nil)
 
-// Compile-time proof that EventStore satisfies the generic gormx.Store, so the
+// Compile-time proof that EventStore satisfies the generic storex.Store, so the
 // generic engine can drive it alongside the typed finders below.
-var _ gormx.Store[Event] = (*EventStore)(nil)
+var _ storex.Store[Event] = (*EventStore)(nil)
 
 // NewEventStore returns a EventStore backed by db.
 func NewEventStore(db *gorm.DB) *EventStore { return &EventStore{DB: db} }
 
 // WithTelemetry sets the store's Telemetry and returns the store for chaining.
-func (s *EventStore) WithTelemetry(t gormx.Telemetry) *EventStore {
+func (s *EventStore) WithTelemetry(t storex.Telemetry) *EventStore {
 	s.Telemetry = t
 	return s
 }
@@ -84,7 +84,7 @@ func (s *EventStore) Create(ctx context.Context, m *Event) error {
 }
 
 // List returns the Event records matching opts.
-func (s *EventStore) List(ctx context.Context, opts gormx.ListOptions) ([]Event, error) {
+func (s *EventStore) List(ctx context.Context, opts storex.ListOptions) ([]Event, error) {
 	var out []Event
 	if err := opts.Apply(s.DB.WithContext(ctx)).Find(&out).Error; err != nil {
 		return nil, err
@@ -94,7 +94,7 @@ func (s *EventStore) List(ctx context.Context, opts gormx.ListOptions) ([]Event,
 
 // Count returns the number of Event records matching opts.Where
 // (pagination and ordering are ignored).
-func (s *EventStore) Count(ctx context.Context, opts gormx.ListOptions) (int64, error) {
+func (s *EventStore) Count(ctx context.Context, opts storex.ListOptions) (int64, error) {
 	var n int64
 	db := s.DB.WithContext(ctx).Model(&Event{})
 	if opts.Where != nil {
@@ -135,7 +135,7 @@ func (s *EventStore) GetByName(ctx context.Context, v string) (*Event, error) {
 }
 
 // ListByWindowID returns the Event records whose window_id matches id, with opts applied.
-func (s *EventStore) ListByWindowID(ctx context.Context, id string, opts gormx.ListOptions) ([]Event, error) {
+func (s *EventStore) ListByWindowID(ctx context.Context, id string, opts storex.ListOptions) ([]Event, error) {
 	var out []Event
 	q := opts.Apply(s.DB.WithContext(ctx).Where("window_id = ?", id))
 	if err := q.Find(&out).Error; err != nil {

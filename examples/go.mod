@@ -9,6 +9,7 @@ replace github.com/the-protobuf-project/store => ../
 require (
 	github.com/lib/pq v1.12.3
 	github.com/oh-tarnished/opensearch-go-sdk v0.1.1
+	github.com/the-protobuf-project/runtime-go/database v0.0.0-20261118052056-98385b147b4d
 	github.com/the-protobuf-project/runtime-go/network v0.0.0-20261024035413-5222320d68ac
 	github.com/the-protobuf-project/store v0.0.0-00010101000000-000000000000
 	github.com/the-protobuf-project/telemetry/telemetry-go v0.0.0-20261023093202-d14384d7957b
@@ -71,7 +72,7 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.33 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/stretchr/testify v1.12.1 // indirect
-	github.com/the-protobuf-project/runtime-go/telemetry v0.0.0-20261021141431-6d4588022f2b // indirect
+	github.com/the-protobuf-project/runtime-go/telemetry v0.0.0-20261118033015-9cd74ccf52a8 // indirect
 	github.com/xo/terminfo v1.2.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel v1.47.0 // indirect

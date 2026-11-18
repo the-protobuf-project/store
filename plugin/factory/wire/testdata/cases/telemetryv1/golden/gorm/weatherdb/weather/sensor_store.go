@@ -18,7 +18,7 @@ package weather
 import (
 	"context"
 
-	"example.com/test/gen/gormx"
+	"github.com/the-protobuf-project/runtime-go/database/storex"
 	"gorm.io/gorm"
 )
 
@@ -42,8 +42,8 @@ import (
 // a decorator is added later.
 type SensorStoreIface interface {
 	Create(ctx context.Context, m *Sensor) error
-	List(ctx context.Context, opts gormx.ListOptions) ([]Sensor, error)
-	Count(ctx context.Context, opts gormx.ListOptions) (int64, error)
+	List(ctx context.Context, opts storex.ListOptions) ([]Sensor, error)
+	Count(ctx context.Context, opts storex.ListOptions) (int64, error)
 	Update(ctx context.Context, m *Sensor) error
 	GetByID(ctx context.Context, id string) (*Sensor, error)
 	DeleteByID(ctx context.Context, id string) error
@@ -56,7 +56,7 @@ type SensorStore struct {
 	DB *gorm.DB
 	// Telemetry observes every operation; nil is a no-op. Wire the generated
 	// adapter: NewSensorStore(db).WithTelemetry(telemetry.New(o)).
-	Telemetry gormx.Telemetry
+	Telemetry storex.Telemetry
 }
 
 // Compile-time proof that SensorStore implements its own interface. Without it a
@@ -64,22 +64,22 @@ type SensorStore struct {
 // package decorates it.
 var _ SensorStoreIface = (*SensorStore)(nil)
 
-// Compile-time proof that SensorStore satisfies the generic gormx.Store, so the
+// Compile-time proof that SensorStore satisfies the generic storex.Store, so the
 // generic engine can drive it alongside the typed finders below.
-var _ gormx.Store[Sensor] = (*SensorStore)(nil)
+var _ storex.Store[Sensor] = (*SensorStore)(nil)
 
 // NewSensorStore returns a SensorStore backed by db.
 func NewSensorStore(db *gorm.DB) *SensorStore { return &SensorStore{DB: db} }
 
 // WithTelemetry sets the store's Telemetry and returns the store for chaining.
-func (s *SensorStore) WithTelemetry(t gormx.Telemetry) *SensorStore {
+func (s *SensorStore) WithTelemetry(t storex.Telemetry) *SensorStore {
 	s.Telemetry = t
 	return s
 }
 
 // Create inserts m.
 func (s *SensorStore) Create(ctx context.Context, m *Sensor) error {
-	tel := gormx.OrNop(s.Telemetry)
+	tel := storex.OrNop(s.Telemetry)
 	err := tel.Span(ctx, "weather.Sensor/Create", m, func(ctx context.Context) error {
 		return s.DB.WithContext(ctx).Create(m).Error
 	})
@@ -87,9 +87,9 @@ func (s *SensorStore) Create(ctx context.Context, m *Sensor) error {
 }
 
 // List returns the Sensor records matching opts.
-func (s *SensorStore) List(ctx context.Context, opts gormx.ListOptions) ([]Sensor, error) {
+func (s *SensorStore) List(ctx context.Context, opts storex.ListOptions) ([]Sensor, error) {
 	var out []Sensor
-	tel := gormx.OrNop(s.Telemetry)
+	tel := storex.OrNop(s.Telemetry)
 	err := tel.Span(ctx, "weather.Sensor/List", nil, func(ctx context.Context) error {
 		return opts.Apply(s.DB.WithContext(ctx)).Find(&out).Error
 	})
@@ -101,9 +101,9 @@ func (s *SensorStore) List(ctx context.Context, opts gormx.ListOptions) ([]Senso
 
 // Count returns the number of Sensor records matching opts.Where
 // (pagination and ordering are ignored).
-func (s *SensorStore) Count(ctx context.Context, opts gormx.ListOptions) (int64, error) {
+func (s *SensorStore) Count(ctx context.Context, opts storex.ListOptions) (int64, error) {
 	var n int64
-	tel := gormx.OrNop(s.Telemetry)
+	tel := storex.OrNop(s.Telemetry)
 	err := tel.Span(ctx, "weather.Sensor/Count", nil, func(ctx context.Context) error {
 		db := s.DB.WithContext(ctx).Model(&Sensor{})
 		if opts.Where != nil {
@@ -119,7 +119,7 @@ func (s *SensorStore) Count(ctx context.Context, opts gormx.ListOptions) (int64,
 
 // Update persists every field of m, which must carry its primary key.
 func (s *SensorStore) Update(ctx context.Context, m *Sensor) error {
-	tel := gormx.OrNop(s.Telemetry)
+	tel := storex.OrNop(s.Telemetry)
 	err := tel.Span(ctx, "weather.Sensor/Update", m, func(ctx context.Context) error {
 		return s.DB.WithContext(ctx).Save(m).Error
 	})
@@ -129,7 +129,7 @@ func (s *SensorStore) Update(ctx context.Context, m *Sensor) error {
 // GetByID fetches the Sensor with the given primary key.
 func (s *SensorStore) GetByID(ctx context.Context, id string) (*Sensor, error) {
 	var m Sensor
-	tel := gormx.OrNop(s.Telemetry)
+	tel := storex.OrNop(s.Telemetry)
 	err := tel.Span(ctx, "weather.Sensor/GetByID", nil, func(ctx context.Context) error {
 		return s.DB.WithContext(ctx).First(&m, "id = ?", id).Error
 	})
@@ -141,7 +141,7 @@ func (s *SensorStore) GetByID(ctx context.Context, id string) (*Sensor, error) {
 
 // DeleteByID removes the Sensor with the given primary key.
 func (s *SensorStore) DeleteByID(ctx context.Context, id string) error {
-	tel := gormx.OrNop(s.Telemetry)
+	tel := storex.OrNop(s.Telemetry)
 	err := tel.Span(ctx, "weather.Sensor/DeleteByID", nil, func(ctx context.Context) error {
 		return s.DB.WithContext(ctx).Delete(&Sensor{}, "id = ?", id).Error
 	})
@@ -151,7 +151,7 @@ func (s *SensorStore) DeleteByID(ctx context.Context, id string) error {
 // GetByName fetches the Sensor with the given name (a unique column).
 func (s *SensorStore) GetByName(ctx context.Context, v string) (*Sensor, error) {
 	var m Sensor
-	tel := gormx.OrNop(s.Telemetry)
+	tel := storex.OrNop(s.Telemetry)
 	err := tel.Span(ctx, "weather.Sensor/GetByName", nil, func(ctx context.Context) error {
 		return s.DB.WithContext(ctx).First(&m, "name = ?", v).Error
 	})

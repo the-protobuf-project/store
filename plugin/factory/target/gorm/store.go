@@ -11,8 +11,8 @@ package gorm
 // for foreign keys) — derived generically from each resource, no per-proto code.
 //
 // Stores live in the models package (referencing the model types directly) but
-// are emitted one file per model to keep each small, and import the shared gormx
-// runtime (ListOptions, the generic Store interface) by its <go_module>/gormx
+// are emitted one file per model to keep each small, and import the shared
+// runtime (ListOptions, the generic Store interface) from runtime-go's storex
 // path — so the stores opt now also requires the go_module opt. Opt-in via the
 // stores plugin opt: it introduces a gorm.io/gorm dependency.
 
@@ -35,11 +35,10 @@ import (
 // version is the consumer's to resolve, so the banner names the module only.
 const gormRuntimeModule = "gorm.io/gorm"
 
-// gormxImportPath is the import path of the shared gormx runtime package, emitted
-// at <go_module>/gormx. Stores import its ListOptions and Store interface.
-func gormxImportPath(db *schema.Database) string {
-	return dbGoModule(db) + "/gormx"
-}
+// storexImport is the import path of the shared store runtime the generated
+// stores import: ListOptions, the generic Store interface, LockKey/LockKeys and
+// the Telemetry seam. It lives in runtime-go, so it is no longer generated.
+const storexImport = "github.com/the-protobuf-project/runtime-go/database/storex"
 
 // finderView is one typed finder method: GetBy<Col> for a unique column or
 // ListBy<Col> for a foreign-key column.
@@ -48,23 +47,6 @@ type finderView struct {
 	Column  string // db column name used in the WHERE clause
 	ArgType string // Go type of the lookup argument (never a pointer)
 	Op      string // op label on the instrumented metric, e.g. "get_by_name"
-}
-
-// gormxView assembles the data for the shared gormx runtime package, emitted
-// once at <go_module>/gormx. db supplies the version banner; the type/interface
-// bodies are static.
-func gormxView(db *schema.Database) map[string]any {
-	return map[string]any{
-		"Header": provenance.Render("//", header.Info{
-			PluginVersion: db.PluginVersion,
-			ProtocVersion: db.ProtocVersion,
-			Database:      db.Name,
-			SchemaLabel:   "package",
-			Schema:        gormxPkg,
-			Notes:         []string{"Shared GORM runtime: ListOptions, the generic Store interface, the GenericStore engine, and EnsureSchemas."},
-		}, gormRuntimeModule),
-		"Package": gormxPkg,
-	}
 }
 
 // storeModelView assembles the data for one resource's <model>_store.go file.
@@ -128,7 +110,7 @@ func storeModelView(db *schema.Database, s *schema.Schema, pkg string, t *schema
 	}
 
 	// A table with no_overlap rules serialises its inserts per key (see
-	// gormx.LockKeys), so its store names each rule's key fields.
+	// storex.LockKeys), so its store names each rule's key fields.
 	var noOverlap []noOverlapView
 	for _, p := range nooverlap.For(s, t, fx) {
 		v := noOverlapView{Constraint: p.Name}
@@ -138,8 +120,8 @@ func storeModelView(db *schema.Database, s *schema.Schema, pkg string, t *schema
 		noOverlap = append(noOverlap, v)
 	}
 
-	// Stores import the shared gormx runtime (ListOptions, Store) alongside gorm.
-	third := []string{gormxImportPath(db), "gorm.io/gorm"}
+	// Stores import the shared storex runtime (ListOptions, Store) alongside gorm.
+	third := []string{storexImport, "gorm.io/gorm"}
 	sort.Strings(third)
 
 	// Telemetry: when the tree opt is on and the table doesn't opt out, every
@@ -166,7 +148,7 @@ func storeModelView(db *schema.Database, s *schema.Schema, pkg string, t *schema
 		"HasPK":     hasPK,
 		"PKColumn":  t.PKColumn,
 		"PKArgType": pkArgType,
-		// The generic gormx.Store fixes id as a string, so only string-PK stores
+		// The generic storex.Store fixes id as a string, so only string-PK stores
 		// (orm's ULID/UUID default) can assert they satisfy it.
 		"AssertStore":   hasPK && pkArgType == "string",
 		"UniqueFinders": unique,

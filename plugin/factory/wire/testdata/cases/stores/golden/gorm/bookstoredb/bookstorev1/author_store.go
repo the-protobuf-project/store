@@ -18,7 +18,7 @@ package bookstorev1
 import (
 	"context"
 
-	"example.com/test/gen/gormx"
+	"github.com/the-protobuf-project/runtime-go/database/storex"
 	"gorm.io/gorm"
 )
 
@@ -42,8 +42,8 @@ import (
 // a decorator is added later.
 type AuthorStoreIface interface {
 	Create(ctx context.Context, m *Author) error
-	List(ctx context.Context, opts gormx.ListOptions) ([]Author, error)
-	Count(ctx context.Context, opts gormx.ListOptions) (int64, error)
+	List(ctx context.Context, opts storex.ListOptions) ([]Author, error)
+	Count(ctx context.Context, opts storex.ListOptions) (int64, error)
 	Update(ctx context.Context, m *Author) error
 	GetByID(ctx context.Context, id string) (*Author, error)
 	DeleteByID(ctx context.Context, id string) error
@@ -56,7 +56,7 @@ type AuthorStore struct {
 	DB *gorm.DB
 	// Telemetry observes every operation; nil is a no-op. Wire the generated
 	// adapter: NewAuthorStore(db).WithTelemetry(telemetry.New(o)).
-	Telemetry gormx.Telemetry
+	Telemetry storex.Telemetry
 }
 
 // Compile-time proof that AuthorStore implements its own interface. Without it a
@@ -64,15 +64,15 @@ type AuthorStore struct {
 // package decorates it.
 var _ AuthorStoreIface = (*AuthorStore)(nil)
 
-// Compile-time proof that AuthorStore satisfies the generic gormx.Store, so the
+// Compile-time proof that AuthorStore satisfies the generic storex.Store, so the
 // generic engine can drive it alongside the typed finders below.
-var _ gormx.Store[Author] = (*AuthorStore)(nil)
+var _ storex.Store[Author] = (*AuthorStore)(nil)
 
 // NewAuthorStore returns a AuthorStore backed by db.
 func NewAuthorStore(db *gorm.DB) *AuthorStore { return &AuthorStore{DB: db} }
 
 // WithTelemetry sets the store's Telemetry and returns the store for chaining.
-func (s *AuthorStore) WithTelemetry(t gormx.Telemetry) *AuthorStore {
+func (s *AuthorStore) WithTelemetry(t storex.Telemetry) *AuthorStore {
 	s.Telemetry = t
 	return s
 }
@@ -83,7 +83,7 @@ func (s *AuthorStore) Create(ctx context.Context, m *Author) error {
 }
 
 // List returns the Author records matching opts.
-func (s *AuthorStore) List(ctx context.Context, opts gormx.ListOptions) ([]Author, error) {
+func (s *AuthorStore) List(ctx context.Context, opts storex.ListOptions) ([]Author, error) {
 	var out []Author
 	if err := opts.Apply(s.DB.WithContext(ctx)).Find(&out).Error; err != nil {
 		return nil, err
@@ -93,7 +93,7 @@ func (s *AuthorStore) List(ctx context.Context, opts gormx.ListOptions) ([]Autho
 
 // Count returns the number of Author records matching opts.Where
 // (pagination and ordering are ignored).
-func (s *AuthorStore) Count(ctx context.Context, opts gormx.ListOptions) (int64, error) {
+func (s *AuthorStore) Count(ctx context.Context, opts storex.ListOptions) (int64, error) {
 	var n int64
 	db := s.DB.WithContext(ctx).Model(&Author{})
 	if opts.Where != nil {

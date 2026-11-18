@@ -5,7 +5,7 @@ package influxdb
 
 // tree.go lays the output out as the gorm target does: one crate for the
 // whole tree (gorm's go_module), a shared runtime beside the databases
-// (seriesx, gorm's gormx), and per database a module that selects it plus one
+// (seriesx; gorm's is runtime-go storex), and per database a module that selects it plus one
 // module per schema holding models.rs and a <model>_store.rs per measurement.
 
 import (

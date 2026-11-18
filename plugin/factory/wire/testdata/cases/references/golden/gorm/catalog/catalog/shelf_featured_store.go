@@ -18,7 +18,7 @@ package catalog
 import (
 	"context"
 
-	"example.com/test/gen/gormx"
+	"github.com/the-protobuf-project/runtime-go/database/storex"
 	"gorm.io/gorm"
 )
 
@@ -42,13 +42,13 @@ import (
 // a decorator is added later.
 type ShelfFeaturedStoreIface interface {
 	Create(ctx context.Context, m *ShelfFeatured) error
-	List(ctx context.Context, opts gormx.ListOptions) ([]ShelfFeatured, error)
-	Count(ctx context.Context, opts gormx.ListOptions) (int64, error)
+	List(ctx context.Context, opts storex.ListOptions) ([]ShelfFeatured, error)
+	Count(ctx context.Context, opts storex.ListOptions) (int64, error)
 	Update(ctx context.Context, m *ShelfFeatured) error
 	GetByID(ctx context.Context, id string) (*ShelfFeatured, error)
 	DeleteByID(ctx context.Context, id string) error
-	ListByShelfID(ctx context.Context, id string, opts gormx.ListOptions) ([]ShelfFeatured, error)
-	ListByBookID(ctx context.Context, id string, opts gormx.ListOptions) ([]ShelfFeatured, error)
+	ListByShelfID(ctx context.Context, id string, opts storex.ListOptions) ([]ShelfFeatured, error)
+	ListByBookID(ctx context.Context, id string, opts storex.ListOptions) ([]ShelfFeatured, error)
 }
 
 // ShelfFeaturedStore provides typed CRUD access to ShelfFeatured records.
@@ -57,7 +57,7 @@ type ShelfFeaturedStore struct {
 	DB *gorm.DB
 	// Telemetry observes every operation; nil is a no-op. Wire the generated
 	// adapter: NewShelfFeaturedStore(db).WithTelemetry(telemetry.New(o)).
-	Telemetry gormx.Telemetry
+	Telemetry storex.Telemetry
 }
 
 // Compile-time proof that ShelfFeaturedStore implements its own interface. Without it a
@@ -65,15 +65,15 @@ type ShelfFeaturedStore struct {
 // package decorates it.
 var _ ShelfFeaturedStoreIface = (*ShelfFeaturedStore)(nil)
 
-// Compile-time proof that ShelfFeaturedStore satisfies the generic gormx.Store, so the
+// Compile-time proof that ShelfFeaturedStore satisfies the generic storex.Store, so the
 // generic engine can drive it alongside the typed finders below.
-var _ gormx.Store[ShelfFeatured] = (*ShelfFeaturedStore)(nil)
+var _ storex.Store[ShelfFeatured] = (*ShelfFeaturedStore)(nil)
 
 // NewShelfFeaturedStore returns a ShelfFeaturedStore backed by db.
 func NewShelfFeaturedStore(db *gorm.DB) *ShelfFeaturedStore { return &ShelfFeaturedStore{DB: db} }
 
 // WithTelemetry sets the store's Telemetry and returns the store for chaining.
-func (s *ShelfFeaturedStore) WithTelemetry(t gormx.Telemetry) *ShelfFeaturedStore {
+func (s *ShelfFeaturedStore) WithTelemetry(t storex.Telemetry) *ShelfFeaturedStore {
 	s.Telemetry = t
 	return s
 }
@@ -84,7 +84,7 @@ func (s *ShelfFeaturedStore) Create(ctx context.Context, m *ShelfFeatured) error
 }
 
 // List returns the ShelfFeatured records matching opts.
-func (s *ShelfFeaturedStore) List(ctx context.Context, opts gormx.ListOptions) ([]ShelfFeatured, error) {
+func (s *ShelfFeaturedStore) List(ctx context.Context, opts storex.ListOptions) ([]ShelfFeatured, error) {
 	var out []ShelfFeatured
 	if err := opts.Apply(s.DB.WithContext(ctx)).Find(&out).Error; err != nil {
 		return nil, err
@@ -94,7 +94,7 @@ func (s *ShelfFeaturedStore) List(ctx context.Context, opts gormx.ListOptions) (
 
 // Count returns the number of ShelfFeatured records matching opts.Where
 // (pagination and ordering are ignored).
-func (s *ShelfFeaturedStore) Count(ctx context.Context, opts gormx.ListOptions) (int64, error) {
+func (s *ShelfFeaturedStore) Count(ctx context.Context, opts storex.ListOptions) (int64, error) {
 	var n int64
 	db := s.DB.WithContext(ctx).Model(&ShelfFeatured{})
 	if opts.Where != nil {
@@ -126,7 +126,7 @@ func (s *ShelfFeaturedStore) DeleteByID(ctx context.Context, id string) error {
 }
 
 // ListByShelfID returns the ShelfFeatured records whose shelf_id matches id, with opts applied.
-func (s *ShelfFeaturedStore) ListByShelfID(ctx context.Context, id string, opts gormx.ListOptions) ([]ShelfFeatured, error) {
+func (s *ShelfFeaturedStore) ListByShelfID(ctx context.Context, id string, opts storex.ListOptions) ([]ShelfFeatured, error) {
 	var out []ShelfFeatured
 	q := opts.Apply(s.DB.WithContext(ctx).Where("shelf_id = ?", id))
 	if err := q.Find(&out).Error; err != nil {
@@ -136,7 +136,7 @@ func (s *ShelfFeaturedStore) ListByShelfID(ctx context.Context, id string, opts 
 }
 
 // ListByBookID returns the ShelfFeatured records whose book_id matches id, with opts applied.
-func (s *ShelfFeaturedStore) ListByBookID(ctx context.Context, id string, opts gormx.ListOptions) ([]ShelfFeatured, error) {
+func (s *ShelfFeaturedStore) ListByBookID(ctx context.Context, id string, opts storex.ListOptions) ([]ShelfFeatured, error) {
 	var out []ShelfFeatured
 	q := opts.Apply(s.DB.WithContext(ctx).Where("book_id = ?", id))
 	if err := q.Find(&out).Error; err != nil {

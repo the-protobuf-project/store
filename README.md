@@ -623,7 +623,6 @@ generated/go/gorm/bookstore/bookstoredb/bookstorev1/models.go        # package =
 generated/go/gorm/bookstore/bookstoredb/bookstorev1/author_store.go  # typed CRUD store (stores opt)
 generated/go/gorm/bookstore/bookstoredb/bookstorev1/filters.go       # AIP-160/132 filter & sort specs (filters opt)
 generated/go/gorm/bookstore/bookstoredb/bookstorev1/protobuf.go      # proto ↔ model converters (converters opt)
-generated/gorm/gormx/gormx.go                       # shared runtime: ListOptions, Store[M], engine (stores opt)
 generated/gorm/filterx/                             # shared filter/order/list engines: SQL + Hasura (filters opt)
 generated/go/gorm/bookstore/bookstoredb/migrate.go              # factory Registry + EnsureSchemas + Instrument (needs go_module)
 generated/go/gorm/bookstore/bookstoredb/README.md               # ER diagram + model reference
@@ -678,9 +677,11 @@ underscore: the database `bookstore_db` generates into `bookstoredb/`.
 
 Two opt-in extras layer onto the gorm target's runtime:
 
-**Stores** (`stores` opt, also needs `go_module`) generate a typed CRUD store per
-resource — one small `<model>_store.go` file each — plus a shared `gormx` runtime
-package they all import, so you don't hand-write the boilerplate. Each store is
+**Stores** (`stores` opt) generate a typed CRUD store per resource — one small
+`<model>_store.go` file each — over a shared runtime they all import from
+runtime-go, [`database/storex`](https://github.com/the-protobuf-project/runtime-go/tree/main/database/storex),
+so you don't hand-write the boilerplate and a fix to the runtime reaches you with
+runtime-go, not with a regeneration. Each store is
 derived entirely from the resource's schema (PK, unique columns, foreign keys):
 
 ```go
@@ -688,25 +689,27 @@ store := bookstorev1.NewAuthorStore(db)
 
 a, err := store.GetByID(ctx, id)                 // primary key
 a, err = store.GetByName(ctx, "authors/rowling") // a UNIQUE column → GetBy<Col>
-list, err := store.List(ctx, gormx.ListOptions{Limit: 20, OrderBy: "display_name"})
-n, err := store.Count(ctx, gormx.ListOptions{})
+list, err := store.List(ctx, storex.ListOptions{Limit: 20, OrderBy: "display_name"})
+n, err := store.Count(ctx, storex.ListOptions{})
 books, err := bookstorev1.NewBookStore(db).
-    ListByAuthorID(ctx, a.ID, gormx.ListOptions{}) // a foreign key → ListBy<FK>
+    ListByAuthorID(ctx, a.ID, storex.ListOptions{}) // a foreign key → ListBy<FK>
 ```
 
 Every store exposes `Create`, `GetByID`, `List`, `Count`, `Update`, `DeleteByID`,
 plus `GetBy<Col>` finders for unique columns (including single-column unique
-indexes) and `ListBy<FK>` finders for foreign keys. The shared `gormx` package
+indexes) and `ListBy<FK>` finders for foreign keys. The shared `storex` package
 holds `ListOptions` (`Limit` / `Offset` / `OrderBy` / `Where` + `Args`), a generic
 `Store[M]` interface every store satisfies, and a `GenericStore[M]` engine that
 runs CRUD for any model — so one engine can drive every entity. Enabling `stores`
-adds a `gorm.io/gorm` dependency to the models package.
+adds `gorm.io/gorm` and `github.com/the-protobuf-project/runtime-go/database`
+dependencies to the models package. (Before store v1.9.0 this runtime was
+generated into every project as `<go_module>/gormx`; regenerating removes it.)
 
 **Telemetry** (`telemetry` opt, **off by default**) folds first-party
 [telemetry](https://github.com/the-protobuf-project/telemetry)
 observability into the generated tree — spans, per-operation metrics, and
 trace-correlated logs — with no third-party otel library involved. Every
-generated store gains a `Telemetry gormx.Telemetry` field (nil is a no-op,
+generated store gains a `Telemetry storex.Telemetry` field (nil is a no-op,
 so existing callers keep compiling) and a `WithTelemetry` chainer; wire the
 generated adapter once and every instrumented store, and the migration
 `Registry`, observe through it:
@@ -984,7 +987,7 @@ GORM and a GraphQL adapter behind one interface. Besides `Create`, `Get`, `List`
   ```
 
   - On GORM, `Commit` runs everything in one transaction, first taking the
-    `no_overlap` locks of every row it inserts, in order (`gormx.LockKeys`).
+    `no_overlap` locks of every row it inserts, in order (`storex.LockKeys`).
     All of it lands or none does.
   - On GraphQL, `Commit` runs each queued write's reads (the record an update
     merges onto, the value-object rows it replaces), then sends every
@@ -1394,7 +1397,7 @@ output, as gorm's is one Go module.
 ```text
 gen/rust/
   Cargo.toml, lib.rs                     the crate                  (gorm: go_module)
-  seriesx/mod.rs                         shared runtime: Query, ... (gorm: gormx/)
+  seriesx/mod.rs                         shared runtime: Query, ... (gorm: runtime-go storex)
   sensors_db/mod.rs                      selects the database       (gorm: migrate.go)
   sensors_db/README.md
   sensors_db/environment/models.rs       structs, enums, descriptors (gorm: models.go)
@@ -2155,7 +2158,7 @@ Passed via `opt:` in `buf.gen.yaml`.
 | --- | --- |
 | `target` | What to emit: `prisma` \| `gorm` \| `sql` \| `repository` \| `opensearch` \| `influxdb` \| `graphql`. Required. (`graphql` reads its endpoint from `store.yaml`'s [`graphql`](#top-level-keys) block — see [GraphQL client SDK](#graphql-client-sdk).) |
 | `go_module` | **gorm only.** Go import path of the output directory (e.g. `github.com/me/gen`). Enables the `migrate.go` factory registry, whose package imports each per-schema models package. Omit it and the per-schema model packages still generate, just without the aggregator. |
-| `stores` | **gorm only.** Also emit a typed CRUD store per resource — one `<model>_store.go` file each (see [GORM stores](#gorm-stores-and-tracing)). Off by default; turning it on adds a `gorm.io/gorm` dependency to each models package. |
+| `stores` | **gorm only.** Also emit a typed CRUD store per resource — one `<model>_store.go` file each (see [GORM stores](#gorm-stores-and-tracing)). Off by default; turning it on adds `gorm.io/gorm` and `github.com/the-protobuf-project/runtime-go/database` (its `storex` runtime) dependencies to each models package. |
 | `filters` | **gorm only.** Emit AIP-160 filter / AIP-132 order_by specs per schema (`filters.go`) plus the shared `filterx` engine package serving both **SQL (GORM)** and **Hasura DDN GraphQL** (see [filters and list engines](#aip-160-filters-and-list-engines-sql--hasura)). Off by default; requires `go_module`. The Hasura engine adds a `github.com/the-protobuf-project/runtime-go` dependency. With `telemetry`, also emits a [telemetry](https://github.com/the-protobuf-project/telemetry) `Observer` adapter (`filterx.TelemetryObserver`) for the list engines' spans and debug events. |
 | `converters` | **gorm only.** Emit `protobuf.go` proto ↔ model converters per schema — `<Model>ToProto` / `<Model>FromProto` plus enum value mappers (see [converters](#proto--model-converters)). Off by default. |
 | `telemetry` | **gorm only.** Fold first-party [telemetry](https://github.com/the-protobuf-project/telemetry) instrumentation into the generated output — instrumented stores (with `stores`), a `telemetry` adapter/plugin package, a `filterx` observer (with `filters`), and `Registry.Instrument` (see [Telemetry](#gorm-stores-and-tracing)). **Off by default**; takes effect with `go_module`, and adds the `github.com/the-protobuf-project/telemetry/telemetry-go` dependency. Tune it further via `store.yaml` `telemetry:` and `telemetry.v1`'s `(telemetry.v1.telemetry)`/`(telemetry.v1.telemetry_field)` annotations. |

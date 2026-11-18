@@ -3,14 +3,14 @@
 // 	protoc-gen-store (unknown)
 // 	protoc (unknown)
 //
-// Shared runtime of the generated stores, as gormx is for gorm.
+// Shared runtime of the generated stores, as storex is for gorm.
 // annotations: entity.v1 (unknown), store.v1 (unknown)
 // engine:      protokit (unknown)
 // runtime:     tpp-database
 //
 // store — https://github.com/the-protobuf-project/store
 
-//! The shared runtime every generated store builds on, as gormx is for gorm:
+//! The shared runtime every generated store builds on, as storex is for gorm:
 //! [`Query`], the window-and-tag query a store's `query()` starts, the
 //! [`Column`] its tag and field enums implement, and strict record decoding.
 

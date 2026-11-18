@@ -18,7 +18,7 @@ package catalog
 import (
 	"context"
 
-	"example.com/test/gen/gormx"
+	"github.com/the-protobuf-project/runtime-go/database/storex"
 	"gorm.io/gorm"
 )
 
@@ -42,14 +42,14 @@ import (
 // a decorator is added later.
 type PageStoreIface interface {
 	Create(ctx context.Context, m *Page) error
-	List(ctx context.Context, opts gormx.ListOptions) ([]Page, error)
-	Count(ctx context.Context, opts gormx.ListOptions) (int64, error)
+	List(ctx context.Context, opts storex.ListOptions) ([]Page, error)
+	Count(ctx context.Context, opts storex.ListOptions) (int64, error)
 	Update(ctx context.Context, m *Page) error
 	GetByID(ctx context.Context, id string) (*Page, error)
 	DeleteByID(ctx context.Context, id string) error
 	GetByName(ctx context.Context, v string) (*Page, error)
-	ListByShelfID(ctx context.Context, id string, opts gormx.ListOptions) ([]Page, error)
-	ListByBookID(ctx context.Context, id string, opts gormx.ListOptions) ([]Page, error)
+	ListByShelfID(ctx context.Context, id string, opts storex.ListOptions) ([]Page, error)
+	ListByBookID(ctx context.Context, id string, opts storex.ListOptions) ([]Page, error)
 }
 
 // PageStore provides typed CRUD access to Page records.
@@ -58,7 +58,7 @@ type PageStore struct {
 	DB *gorm.DB
 	// Telemetry observes every operation; nil is a no-op. Wire the generated
 	// adapter: NewPageStore(db).WithTelemetry(telemetry.New(o)).
-	Telemetry gormx.Telemetry
+	Telemetry storex.Telemetry
 }
 
 // Compile-time proof that PageStore implements its own interface. Without it a
@@ -66,15 +66,15 @@ type PageStore struct {
 // package decorates it.
 var _ PageStoreIface = (*PageStore)(nil)
 
-// Compile-time proof that PageStore satisfies the generic gormx.Store, so the
+// Compile-time proof that PageStore satisfies the generic storex.Store, so the
 // generic engine can drive it alongside the typed finders below.
-var _ gormx.Store[Page] = (*PageStore)(nil)
+var _ storex.Store[Page] = (*PageStore)(nil)
 
 // NewPageStore returns a PageStore backed by db.
 func NewPageStore(db *gorm.DB) *PageStore { return &PageStore{DB: db} }
 
 // WithTelemetry sets the store's Telemetry and returns the store for chaining.
-func (s *PageStore) WithTelemetry(t gormx.Telemetry) *PageStore {
+func (s *PageStore) WithTelemetry(t storex.Telemetry) *PageStore {
 	s.Telemetry = t
 	return s
 }
@@ -85,7 +85,7 @@ func (s *PageStore) Create(ctx context.Context, m *Page) error {
 }
 
 // List returns the Page records matching opts.
-func (s *PageStore) List(ctx context.Context, opts gormx.ListOptions) ([]Page, error) {
+func (s *PageStore) List(ctx context.Context, opts storex.ListOptions) ([]Page, error) {
 	var out []Page
 	if err := opts.Apply(s.DB.WithContext(ctx)).Find(&out).Error; err != nil {
 		return nil, err
@@ -95,7 +95,7 @@ func (s *PageStore) List(ctx context.Context, opts gormx.ListOptions) ([]Page, e
 
 // Count returns the number of Page records matching opts.Where
 // (pagination and ordering are ignored).
-func (s *PageStore) Count(ctx context.Context, opts gormx.ListOptions) (int64, error) {
+func (s *PageStore) Count(ctx context.Context, opts storex.ListOptions) (int64, error) {
 	var n int64
 	db := s.DB.WithContext(ctx).Model(&Page{})
 	if opts.Where != nil {
@@ -136,7 +136,7 @@ func (s *PageStore) GetByName(ctx context.Context, v string) (*Page, error) {
 }
 
 // ListByShelfID returns the Page records whose shelf_id matches id, with opts applied.
-func (s *PageStore) ListByShelfID(ctx context.Context, id string, opts gormx.ListOptions) ([]Page, error) {
+func (s *PageStore) ListByShelfID(ctx context.Context, id string, opts storex.ListOptions) ([]Page, error) {
 	var out []Page
 	q := opts.Apply(s.DB.WithContext(ctx).Where("shelf_id = ?", id))
 	if err := q.Find(&out).Error; err != nil {
@@ -146,7 +146,7 @@ func (s *PageStore) ListByShelfID(ctx context.Context, id string, opts gormx.Lis
 }
 
 // ListByBookID returns the Page records whose book_id matches id, with opts applied.
-func (s *PageStore) ListByBookID(ctx context.Context, id string, opts gormx.ListOptions) ([]Page, error) {
+func (s *PageStore) ListByBookID(ctx context.Context, id string, opts storex.ListOptions) ([]Page, error) {
 	var out []Page
 	q := opts.Apply(s.DB.WithContext(ctx).Where("book_id = ?", id))
 	if err := q.Find(&out).Error; err != nil {

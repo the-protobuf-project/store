@@ -129,7 +129,7 @@ func (p Plan) DDL() string {
 // the constraint check cleanly.
 //
 // The lock key is the constraint's name, then each key column's text, each
-// after a unit separator (0x1F) -- the key gormx.LockKey builds, so a
+// after a unit separator (0x1F) -- the key storex.LockKey builds, so a
 // generated Batch can take the same locks up front, in order.
 //
 // Two statements, both re-runnable: the function, then the trigger, created

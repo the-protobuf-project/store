@@ -24,8 +24,8 @@ package {{.Package}}
 // a decorator is added later.
 type {{.Iface}} interface {
 	Create(ctx context.Context, m *{{.Name}}) error
-	List(ctx context.Context, opts gormx.ListOptions) ([]{{.Name}}, error)
-	Count(ctx context.Context, opts gormx.ListOptions) (int64, error)
+	List(ctx context.Context, opts storex.ListOptions) ([]{{.Name}}, error)
+	Count(ctx context.Context, opts storex.ListOptions) (int64, error)
 	Update(ctx context.Context, m *{{.Name}}) error
 {{- if .HasPK}}
 	GetByID(ctx context.Context, id {{.PKArgType}}) (*{{.Name}}, error)
@@ -35,7 +35,7 @@ type {{.Iface}} interface {
 	{{.Method}}(ctx context.Context, v {{.ArgType}}) (*{{$.Name}}, error)
 {{- end}}
 {{- range .FKFinders}}
-	{{.Method}}(ctx context.Context, id {{.ArgType}}, opts gormx.ListOptions) ([]{{$.Name}}, error)
+	{{.Method}}(ctx context.Context, id {{.ArgType}}, opts storex.ListOptions) ([]{{$.Name}}, error)
 {{- end}}
 }
 
@@ -45,7 +45,7 @@ type {{.Store}} struct {
 	DB *gorm.DB
 	// Telemetry observes every operation; nil is a no-op. Wire the generated
 	// adapter: New{{.Store}}(db).WithTelemetry(telemetry.New(o)).
-	Telemetry gormx.Telemetry
+	Telemetry storex.Telemetry
 }
 
 // Compile-time proof that {{.Store}} implements its own interface. Without it a
@@ -54,16 +54,16 @@ type {{.Store}} struct {
 var _ {{.Iface}} = (*{{.Store}})(nil)
 {{- if .AssertStore}}
 
-// Compile-time proof that {{.Store}} satisfies the generic gormx.Store, so the
+// Compile-time proof that {{.Store}} satisfies the generic storex.Store, so the
 // generic engine can drive it alongside the typed finders below.
-var _ gormx.Store[{{.Name}}] = (*{{.Store}})(nil)
+var _ storex.Store[{{.Name}}] = (*{{.Store}})(nil)
 {{- end}}
 
 // New{{.Store}} returns a {{.Store}} backed by db.
 func New{{.Store}}(db *gorm.DB) *{{.Store}} { return &{{.Store}}{DB: db} }
 
 // WithTelemetry sets the store's Telemetry and returns the store for chaining.
-func (s *{{.Store}}) WithTelemetry(t gormx.Telemetry) *{{.Store}} {
+func (s *{{.Store}}) WithTelemetry(t storex.Telemetry) *{{.Store}} {
 	s.Telemetry = t
 	return s
 }
@@ -71,7 +71,7 @@ func (s *{{.Store}}) WithTelemetry(t gormx.Telemetry) *{{.Store}} {
 // Create inserts m.
 func (s *{{.Store}}) Create(ctx context.Context, m *{{.Name}}) error {
 {{- if .Telemetry}}
-	tel := gormx.OrNop(s.Telemetry)
+	tel := storex.OrNop(s.Telemetry)
 {{- if .Metrics}}
 	start := time.Now()
 {{- end}}
@@ -90,22 +90,22 @@ func (s *{{.Store}}) Create(ctx context.Context, m *{{.Name}}) error {
 
 // NoOverlapKeys are the advisory-lock keys of m's no_overlap rules, the ones
 // the table's lock trigger takes on insert. A repository Batch takes them all
-// up front, in order (gormx.LockKeys), so two batches inserting rows for the
+// up front, in order (storex.LockKeys), so two batches inserting rows for the
 // same keys in different orders take turns instead of deadlocking.
 func (m *{{.Name}}) NoOverlapKeys() []string {
 	return []string{
 {{- range .NoOverlap}}
-		gormx.LockKey("{{.Constraint}}"{{range .Fields}}, m.{{.}}{{end}}),
+		storex.LockKey("{{.Constraint}}"{{range .Fields}}, m.{{.}}{{end}}),
 {{- end}}
 	}
 }
 {{- end}}
 
 // List returns the {{.Name}} records matching opts.
-func (s *{{.Store}}) List(ctx context.Context, opts gormx.ListOptions) ([]{{.Name}}, error) {
+func (s *{{.Store}}) List(ctx context.Context, opts storex.ListOptions) ([]{{.Name}}, error) {
 	var out []{{.Name}}
 {{- if .Telemetry}}
-	tel := gormx.OrNop(s.Telemetry)
+	tel := storex.OrNop(s.Telemetry)
 {{- if .Metrics}}
 	start := time.Now()
 {{- end}}
@@ -128,10 +128,10 @@ func (s *{{.Store}}) List(ctx context.Context, opts gormx.ListOptions) ([]{{.Nam
 
 // Count returns the number of {{.Name}} records matching opts.Where
 // (pagination and ordering are ignored).
-func (s *{{.Store}}) Count(ctx context.Context, opts gormx.ListOptions) (int64, error) {
+func (s *{{.Store}}) Count(ctx context.Context, opts storex.ListOptions) (int64, error) {
 	var n int64
 {{- if .Telemetry}}
-	tel := gormx.OrNop(s.Telemetry)
+	tel := storex.OrNop(s.Telemetry)
 {{- if .Metrics}}
 	start := time.Now()
 {{- end}}
@@ -163,7 +163,7 @@ func (s *{{.Store}}) Count(ctx context.Context, opts gormx.ListOptions) (int64, 
 // Update persists every field of m, which must carry its primary key.
 func (s *{{.Store}}) Update(ctx context.Context, m *{{.Name}}) error {
 {{- if .Telemetry}}
-	tel := gormx.OrNop(s.Telemetry)
+	tel := storex.OrNop(s.Telemetry)
 {{- if .Metrics}}
 	start := time.Now()
 {{- end}}
@@ -183,7 +183,7 @@ func (s *{{.Store}}) Update(ctx context.Context, m *{{.Name}}) error {
 func (s *{{.Store}}) GetByID(ctx context.Context, id {{.PKArgType}}) (*{{.Name}}, error) {
 	var m {{.Name}}
 {{- if .Telemetry}}
-	tel := gormx.OrNop(s.Telemetry)
+	tel := storex.OrNop(s.Telemetry)
 {{- if .Metrics}}
 	start := time.Now()
 {{- end}}
@@ -207,7 +207,7 @@ func (s *{{.Store}}) GetByID(ctx context.Context, id {{.PKArgType}}) (*{{.Name}}
 // DeleteByID removes the {{.Name}} with the given primary key.
 func (s *{{.Store}}) DeleteByID(ctx context.Context, id {{.PKArgType}}) error {
 {{- if .Telemetry}}
-	tel := gormx.OrNop(s.Telemetry)
+	tel := storex.OrNop(s.Telemetry)
 {{- if .Metrics}}
 	start := time.Now()
 {{- end}}
@@ -228,7 +228,7 @@ func (s *{{.Store}}) DeleteByID(ctx context.Context, id {{.PKArgType}}) error {
 func (s *{{$.Store}}) {{.Method}}(ctx context.Context, v {{.ArgType}}) (*{{$.Name}}, error) {
 	var m {{$.Name}}
 {{- if $.Telemetry}}
-	tel := gormx.OrNop(s.Telemetry)
+	tel := storex.OrNop(s.Telemetry)
 {{- if $.Metrics}}
 	start := time.Now()
 {{- end}}
@@ -251,10 +251,10 @@ func (s *{{$.Store}}) {{.Method}}(ctx context.Context, v {{.ArgType}}) (*{{$.Nam
 {{end}}
 {{- range .FKFinders}}
 // {{.Method}} returns the {{$.Name}} records whose {{.Column}} matches id, with opts applied.
-func (s *{{$.Store}}) {{.Method}}(ctx context.Context, id {{.ArgType}}, opts gormx.ListOptions) ([]{{$.Name}}, error) {
+func (s *{{$.Store}}) {{.Method}}(ctx context.Context, id {{.ArgType}}, opts storex.ListOptions) ([]{{$.Name}}, error) {
 	var out []{{$.Name}}
 {{- if $.Telemetry}}
-	tel := gormx.OrNop(s.Telemetry)
+	tel := storex.OrNop(s.Telemetry)
 {{- if $.Metrics}}
 	start := time.Now()
 {{- end}}

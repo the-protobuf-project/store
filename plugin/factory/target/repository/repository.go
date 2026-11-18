@@ -265,7 +265,7 @@ func repoxView(db *schema.Database) map[string]any {
 			Notes:         []string{"Shared runtime for the generated proto-facing repositories."},
 		}),
 		"FilterxImport":        dbGormModule(db) + "/filterx",
-		"GormxImport":          dbGormModule(db) + "/gormx",
+		"StorexImport":         "github.com/the-protobuf-project/runtime-go/database/storex",
 		"GraphQLDSLImport":     graphqlDSLModule,
 		"GraphQLRuntimeImport": graphqlRuntimeModule,
 		"GraphQLModule":        dbGraphQLModule(db),

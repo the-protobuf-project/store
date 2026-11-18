@@ -18,7 +18,7 @@ package catalog
 import (
 	"context"
 
-	"github.com/the-protobuf-project/store/examples/generated/go/gorm/references/gormx"
+	"github.com/the-protobuf-project/runtime-go/database/storex"
 	"gorm.io/gorm"
 )
 
@@ -42,13 +42,13 @@ import (
 // a decorator is added later.
 type BookGenresStoreIface interface {
 	Create(ctx context.Context, m *BookGenres) error
-	List(ctx context.Context, opts gormx.ListOptions) ([]BookGenres, error)
-	Count(ctx context.Context, opts gormx.ListOptions) (int64, error)
+	List(ctx context.Context, opts storex.ListOptions) ([]BookGenres, error)
+	Count(ctx context.Context, opts storex.ListOptions) (int64, error)
 	Update(ctx context.Context, m *BookGenres) error
 	GetByID(ctx context.Context, id string) (*BookGenres, error)
 	DeleteByID(ctx context.Context, id string) error
-	ListByBookID(ctx context.Context, id string, opts gormx.ListOptions) ([]BookGenres, error)
-	ListByGenreID(ctx context.Context, id string, opts gormx.ListOptions) ([]BookGenres, error)
+	ListByBookID(ctx context.Context, id string, opts storex.ListOptions) ([]BookGenres, error)
+	ListByGenreID(ctx context.Context, id string, opts storex.ListOptions) ([]BookGenres, error)
 }
 
 // BookGenresStore provides typed CRUD access to BookGenres records.
@@ -57,7 +57,7 @@ type BookGenresStore struct {
 	DB *gorm.DB
 	// Telemetry observes every operation; nil is a no-op. Wire the generated
 	// adapter: NewBookGenresStore(db).WithTelemetry(telemetry.New(o)).
-	Telemetry gormx.Telemetry
+	Telemetry storex.Telemetry
 }
 
 // Compile-time proof that BookGenresStore implements its own interface. Without it a
@@ -65,15 +65,15 @@ type BookGenresStore struct {
 // package decorates it.
 var _ BookGenresStoreIface = (*BookGenresStore)(nil)
 
-// Compile-time proof that BookGenresStore satisfies the generic gormx.Store, so the
+// Compile-time proof that BookGenresStore satisfies the generic storex.Store, so the
 // generic engine can drive it alongside the typed finders below.
-var _ gormx.Store[BookGenres] = (*BookGenresStore)(nil)
+var _ storex.Store[BookGenres] = (*BookGenresStore)(nil)
 
 // NewBookGenresStore returns a BookGenresStore backed by db.
 func NewBookGenresStore(db *gorm.DB) *BookGenresStore { return &BookGenresStore{DB: db} }
 
 // WithTelemetry sets the store's Telemetry and returns the store for chaining.
-func (s *BookGenresStore) WithTelemetry(t gormx.Telemetry) *BookGenresStore {
+func (s *BookGenresStore) WithTelemetry(t storex.Telemetry) *BookGenresStore {
 	s.Telemetry = t
 	return s
 }
@@ -84,7 +84,7 @@ func (s *BookGenresStore) Create(ctx context.Context, m *BookGenres) error {
 }
 
 // List returns the BookGenres records matching opts.
-func (s *BookGenresStore) List(ctx context.Context, opts gormx.ListOptions) ([]BookGenres, error) {
+func (s *BookGenresStore) List(ctx context.Context, opts storex.ListOptions) ([]BookGenres, error) {
 	var out []BookGenres
 	if err := opts.Apply(s.DB.WithContext(ctx)).Find(&out).Error; err != nil {
 		return nil, err
@@ -94,7 +94,7 @@ func (s *BookGenresStore) List(ctx context.Context, opts gormx.ListOptions) ([]B
 
 // Count returns the number of BookGenres records matching opts.Where
 // (pagination and ordering are ignored).
-func (s *BookGenresStore) Count(ctx context.Context, opts gormx.ListOptions) (int64, error) {
+func (s *BookGenresStore) Count(ctx context.Context, opts storex.ListOptions) (int64, error) {
 	var n int64
 	db := s.DB.WithContext(ctx).Model(&BookGenres{})
 	if opts.Where != nil {
@@ -126,7 +126,7 @@ func (s *BookGenresStore) DeleteByID(ctx context.Context, id string) error {
 }
 
 // ListByBookID returns the BookGenres records whose book_id matches id, with opts applied.
-func (s *BookGenresStore) ListByBookID(ctx context.Context, id string, opts gormx.ListOptions) ([]BookGenres, error) {
+func (s *BookGenresStore) ListByBookID(ctx context.Context, id string, opts storex.ListOptions) ([]BookGenres, error) {
 	var out []BookGenres
 	q := opts.Apply(s.DB.WithContext(ctx).Where("book_id = ?", id))
 	if err := q.Find(&out).Error; err != nil {
@@ -136,7 +136,7 @@ func (s *BookGenresStore) ListByBookID(ctx context.Context, id string, opts gorm
 }
 
 // ListByGenreID returns the BookGenres records whose genre_id matches id, with opts applied.
-func (s *BookGenresStore) ListByGenreID(ctx context.Context, id string, opts gormx.ListOptions) ([]BookGenres, error) {
+func (s *BookGenresStore) ListByGenreID(ctx context.Context, id string, opts storex.ListOptions) ([]BookGenres, error) {
 	var out []BookGenres
 	q := opts.Apply(s.DB.WithContext(ctx).Where("genre_id = ?", id))
 	if err := q.Find(&out).Error; err != nil {

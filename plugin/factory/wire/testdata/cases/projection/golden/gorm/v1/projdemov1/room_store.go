@@ -18,7 +18,7 @@ package projdemov1
 import (
 	"context"
 
-	"example.com/test/gen/gormx"
+	"github.com/the-protobuf-project/runtime-go/database/storex"
 	"gorm.io/gorm"
 )
 
@@ -42,8 +42,8 @@ import (
 // a decorator is added later.
 type RoomStoreIface interface {
 	Create(ctx context.Context, m *Room) error
-	List(ctx context.Context, opts gormx.ListOptions) ([]Room, error)
-	Count(ctx context.Context, opts gormx.ListOptions) (int64, error)
+	List(ctx context.Context, opts storex.ListOptions) ([]Room, error)
+	Count(ctx context.Context, opts storex.ListOptions) (int64, error)
 	Update(ctx context.Context, m *Room) error
 	GetByID(ctx context.Context, id string) (*Room, error)
 	DeleteByID(ctx context.Context, id string) error
@@ -56,7 +56,7 @@ type RoomStore struct {
 	DB *gorm.DB
 	// Telemetry observes every operation; nil is a no-op. Wire the generated
 	// adapter: NewRoomStore(db).WithTelemetry(telemetry.New(o)).
-	Telemetry gormx.Telemetry
+	Telemetry storex.Telemetry
 }
 
 // Compile-time proof that RoomStore implements its own interface. Without it a
@@ -64,15 +64,15 @@ type RoomStore struct {
 // package decorates it.
 var _ RoomStoreIface = (*RoomStore)(nil)
 
-// Compile-time proof that RoomStore satisfies the generic gormx.Store, so the
+// Compile-time proof that RoomStore satisfies the generic storex.Store, so the
 // generic engine can drive it alongside the typed finders below.
-var _ gormx.Store[Room] = (*RoomStore)(nil)
+var _ storex.Store[Room] = (*RoomStore)(nil)
 
 // NewRoomStore returns a RoomStore backed by db.
 func NewRoomStore(db *gorm.DB) *RoomStore { return &RoomStore{DB: db} }
 
 // WithTelemetry sets the store's Telemetry and returns the store for chaining.
-func (s *RoomStore) WithTelemetry(t gormx.Telemetry) *RoomStore {
+func (s *RoomStore) WithTelemetry(t storex.Telemetry) *RoomStore {
 	s.Telemetry = t
 	return s
 }
@@ -83,7 +83,7 @@ func (s *RoomStore) Create(ctx context.Context, m *Room) error {
 }
 
 // List returns the Room records matching opts.
-func (s *RoomStore) List(ctx context.Context, opts gormx.ListOptions) ([]Room, error) {
+func (s *RoomStore) List(ctx context.Context, opts storex.ListOptions) ([]Room, error) {
 	var out []Room
 	if err := opts.Apply(s.DB.WithContext(ctx)).Find(&out).Error; err != nil {
 		return nil, err
@@ -93,7 +93,7 @@ func (s *RoomStore) List(ctx context.Context, opts gormx.ListOptions) ([]Room, e
 
 // Count returns the number of Room records matching opts.Where
 // (pagination and ordering are ignored).
-func (s *RoomStore) Count(ctx context.Context, opts gormx.ListOptions) (int64, error) {
+func (s *RoomStore) Count(ctx context.Context, opts storex.ListOptions) (int64, error) {
 	var n int64
 	db := s.DB.WithContext(ctx).Model(&Room{})
 	if opts.Where != nil {
