@@ -1,0 +1,24 @@
+version: 2
+updates:
+  - package-ecosystem: "gomod"
+    directories:
+      - "/"
+      - "/examples"
+    schedule:
+      interval: "weekly"
+    assignees:
+      - "ParthuReddy31"
+  - package-ecosystem: "cargo"
+    directories:
+      - "/examples/library-rust"
+      - "/examples/sensors"
+    schedule:
+      interval: "weekly"
+    assignees:
+      - "ParthuReddy31"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    assignees:
+      - "ParthuReddy31"
