@@ -80,15 +80,23 @@ impl DeviceHealthStore {
     }
 }
 
-/// The tag filters of a `device_healths` query, one per tag.
-impl Query<DeviceHealth> {
+/// The tag filters of a `device_healths` query, one per tag: a trait, because
+/// [`Query`] is runtime-rs's. It is exported beside the store, so the glob
+/// import that brings the store brings these.
+pub trait DeviceHealthFilters {
     /// Points whose `device_id` tag is `value`.
-    pub fn device_id(self, value: &str) -> Self {
+    fn device_id(self, value: &str) -> Self;
+
+    /// Points whose `firmware` tag is `value`.
+    fn firmware(self, value: &str) -> Self;
+}
+
+impl DeviceHealthFilters for Query<DeviceHealth> {
+    fn device_id(self, value: &str) -> Self {
         self.eq(DeviceHealthTag::DeviceId, value)
     }
 
-    /// Points whose `firmware` tag is `value`.
-    pub fn firmware(self, value: &str) -> Self {
+    fn firmware(self, value: &str) -> Self {
         self.eq(DeviceHealthTag::Firmware, value)
     }
 }

@@ -80,15 +80,23 @@ impl ClimateReadingStore {
     }
 }
 
-/// The tag filters of a `climate_readings` query, one per tag.
-impl Query<ClimateReading> {
+/// The tag filters of a `climate_readings` query, one per tag: a trait, because
+/// [`Query`] is runtime-rs's. It is exported beside the store, so the glob
+/// import that brings the store brings these.
+pub trait ClimateReadingFilters {
     /// Points whose `device_id` tag is `value`.
-    pub fn device_id(self, value: &str) -> Self {
+    fn device_id(self, value: &str) -> Self;
+
+    /// Points whose `site` tag is `value`.
+    fn site(self, value: &str) -> Self;
+}
+
+impl ClimateReadingFilters for Query<ClimateReading> {
+    fn device_id(self, value: &str) -> Self {
         self.eq(ClimateReadingTag::DeviceId, value)
     }
 
-    /// Points whose `site` tag is `value`.
-    pub fn site(self, value: &str) -> Self {
+    fn site(self, value: &str) -> Self {
         self.eq(ClimateReadingTag::Site, value)
     }
 }

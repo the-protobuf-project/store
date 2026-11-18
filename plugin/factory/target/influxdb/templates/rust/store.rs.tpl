@@ -65,13 +65,23 @@ impl {{$m.Store}} {
 }
 {{- if $m.Tags}}
 
-/// The tag filters of a `{{$m.Table}}` query, one per tag.
-impl Query<{{$m.Name}}> {
+/// The tag filters of a `{{$m.Table}}` query, one per tag: a trait, because
+/// [`Query`] is runtime-rs's. It is exported beside the store, so the glob
+/// import that brings the store brings these.
+pub trait {{$m.Filters}} {
 {{- range $i, $t := $m.Tags}}
 {{- if $i}}
 {{end}}
     /// Points whose `{{$t.Column}}` tag is `value`.
-    pub fn {{$t.Method}}(self, value: &str) -> Self {
+    fn {{$t.Method}}(self, value: &str) -> Self;
+{{- end}}
+}
+
+impl {{$m.Filters}} for Query<{{$m.Name}}> {
+{{- range $i, $t := $m.Tags}}
+{{- if $i}}
+{{end}}
+    fn {{$t.Method}}(self, value: &str) -> Self {
         self.eq({{$m.TagEnum}}::{{$t.Variant}}, value)
     }
 {{- end}}

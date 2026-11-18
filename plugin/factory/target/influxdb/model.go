@@ -34,6 +34,7 @@ type modelView struct {
 	Store     string // the store type, <Name>Store
 	StoreFile string // its file and module, <name>_store
 	TagEnum   string // <Name>Tag, the tags a query filters and groups by
+	Filters   string // <Name>Filters, the trait adding one filter per tag to its Query
 	FieldEnum string // <Name>Field, the numeric fields it reduces
 	Time      string // the time column
 	Tags      []columnView
@@ -146,6 +147,7 @@ func modelOf(t *schema.Table, ts *storepbv1.TimeSeries) (*modelView, error) {
 		Store:     t.LocalName + "Store",
 		StoreFile: naming.SnakeCase(t.LocalName) + "_store",
 		TagEnum:   t.LocalName + "Tag",
+		Filters:   t.LocalName + "Filters",
 		FieldEnum: t.LocalName + "Field",
 		Time:      timeCol.Name,
 	}
