@@ -1,0 +1,18 @@
+version: 2
+updates:
+  - package-ecosystem: "gomod"
+    directories:
+      - "/"
+      - "/examples"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "cargo"
+    directories:
+      - "/examples/library-rust"
+      - "/examples/sensors"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
