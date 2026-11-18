@@ -80,10 +80,16 @@ impl GpsFixStore {
     }
 }
 
-/// The tag filters of a `gps_fixes` query, one per tag.
-impl Query<GpsFix> {
+/// The tag filters of a `gps_fixes` query, one per tag: a trait, because
+/// [`Query`] is runtime-rs's. It is exported beside the store, so the glob
+/// import that brings the store brings these.
+pub trait GpsFixFilters {
     /// Points whose `device_id` tag is `value`.
-    pub fn device_id(self, value: &str) -> Self {
+    fn device_id(self, value: &str) -> Self;
+}
+
+impl GpsFixFilters for Query<GpsFix> {
+    fn device_id(self, value: &str) -> Self {
         self.eq(GpsFixTag::DeviceId, value)
     }
 }

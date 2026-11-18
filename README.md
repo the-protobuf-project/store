@@ -1400,14 +1400,18 @@ output, as gorm's is one Go module.
 
 ```text
 gen/rust/
-  Cargo.toml, lib.rs                     the crate                  (gorm: go_module)
-  seriesx/mod.rs                         shared runtime: Query, ... (gorm: runtime-go storex)
+  Cargo.toml, lib.rs                     the crate; lib.rs re-exports runtime-rs's
+                                         database::seriesx (Query, ...) as seriesx
   sensors_db/mod.rs                      selects the database       (gorm: migrate.go)
   sensors_db/README.md
   sensors_db/environment/models.rs       structs, enums, descriptors (gorm: models.go)
   sensors_db/environment/climate_reading_store.rs   one store per table (gorm: <model>_store.go)
   sensors_db/fleet/...
 ```
+
+The shared runtime the stores build on, `seriesx`, is runtime-rs's
+`database::seriesx` (before store v1.9.0 it was generated into every crate;
+regenerating removes it), as the gorm target's is runtime-go's `storex`.
 
 #### How storage is divided
 

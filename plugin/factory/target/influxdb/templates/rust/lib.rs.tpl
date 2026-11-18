@@ -4,7 +4,9 @@
 //!
 //! One module per database, each selecting its InfluxDB 3 database or Arrow
 //! capture directory, with a typed store per table; [`seriesx`] is the runtime
-//! they share.
+//! they share, runtime-rs's `database::seriesx`.
+
+pub use database::seriesx;
 
 {{range .Mods}}pub mod {{.}};
 {{end -}}

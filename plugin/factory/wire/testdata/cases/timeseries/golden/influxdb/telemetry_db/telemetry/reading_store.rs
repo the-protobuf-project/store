@@ -77,15 +77,23 @@ impl ReadingStore {
     }
 }
 
-/// The tag filters of a `readings` query, one per tag.
-impl Query<Reading> {
+/// The tag filters of a `readings` query, one per tag: a trait, because
+/// [`Query`] is runtime-rs's. It is exported beside the store, so the glob
+/// import that brings the store brings these.
+pub trait ReadingFilters {
     /// Points whose `device` tag is `value`.
-    pub fn device(self, value: &str) -> Self {
+    fn device(self, value: &str) -> Self;
+
+    /// Points whose `site` tag is `value`.
+    fn site(self, value: &str) -> Self;
+}
+
+impl ReadingFilters for Query<Reading> {
+    fn device(self, value: &str) -> Self {
         self.eq(ReadingTag::Device, value)
     }
 
-    /// Points whose `site` tag is `value`.
-    pub fn site(self, value: &str) -> Self {
+    fn site(self, value: &str) -> Self {
         self.eq(ReadingTag::Site, value)
     }
 }

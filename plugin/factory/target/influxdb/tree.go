@@ -22,7 +22,8 @@ import (
 	"github.com/the-protobuf-project/store/plugin/factory/facets"
 )
 
-// runtimeModule is the shared runtime's module, emitted once per tree.
+// runtimeModule is the shared runtime's module name in the generated crate,
+// re-exported from runtime-rs (database::seriesx), so no database may take it.
 const runtimeModule = "seriesx"
 
 // defaultCrate names the crate when the crate opt is unset.
@@ -40,9 +41,10 @@ type treeView struct {
 	Databases    []*dbView
 }
 
-// Mods lists lib.rs's module declarations as rustfmt orders them.
+// Mods lists lib.rs's module declarations as rustfmt orders them: one per
+// database. The shared runtime is runtime-rs's, re-exported, not declared.
 func (t *treeView) Mods() []string {
-	names := []string{runtimeModule}
+	var names []string
 	for _, d := range t.Databases {
 		names = append(names, d.Module)
 	}
