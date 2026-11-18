@@ -19,7 +19,7 @@
 package bookstorev1
 
 import (
-	"github.com/the-protobuf-project/store/examples/generated/go/gorm/bookstore/filterx"
+	"github.com/the-protobuf-project/runtime-go/database/filterx"
 )
 
 // AuthorFilterSpec is Author's AIP-160 filter / AIP-132 order_by surface,

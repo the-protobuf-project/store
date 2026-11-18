@@ -19,7 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/the-protobuf-project/store/examples/generated/go/gorm/references/filterx"
+	"github.com/the-protobuf-project/runtime-go/database/filterx"
 	"github.com/the-protobuf-project/store/examples/generated/go/gorm/references/lending/lending"
 	"github.com/the-protobuf-project/store/examples/generated/go/protobuf/references/lendingv1"
 	"github.com/the-protobuf-project/store/examples/generated/go/repository/references/repox"

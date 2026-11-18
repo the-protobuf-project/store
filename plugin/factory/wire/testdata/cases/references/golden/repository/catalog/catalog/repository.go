@@ -21,7 +21,7 @@ import (
 	"example.com/test/gen/repox"
 	"example.com/test/genql"
 	"example.com/test/gormdb/catalog/catalog"
-	"example.com/test/gormdb/filterx"
+	"github.com/the-protobuf-project/runtime-go/database/filterx"
 	"gorm.io/gorm"
 	"time"
 )

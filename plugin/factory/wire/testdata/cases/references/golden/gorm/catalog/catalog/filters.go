@@ -16,7 +16,7 @@
 package catalog
 
 import (
-	"example.com/test/gen/filterx"
+	"github.com/the-protobuf-project/runtime-go/database/filterx"
 )
 
 // ShelfFilterSpec is Shelf's AIP-160 filter / AIP-132 order_by surface,

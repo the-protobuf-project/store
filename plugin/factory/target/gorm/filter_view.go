@@ -16,16 +16,13 @@ import (
 	"github.com/the-protobuf-project/protokit/schema"
 	"github.com/the-protobuf-project/store/plugin/factory/facets"
 	"github.com/the-protobuf-project/store/plugin/factory/provenance"
+	"github.com/the-protobuf-project/store/telemetry"
 )
 
-// filterxPkg is the package name and output directory of the shared filter
-// engine package at <go_module>/filterx (core + both engines, one package).
-const filterxPkg = "filterx"
-
-// graphqlRuntimeModule is the import path of the shared GraphQL predicate DSL
-// the hasura engine builds on (Predicate, typed fields, OrderTerm, and the
-// generic QueryHandler the list engine drives).
-const graphqlRuntimeModule = "github.com/the-protobuf-project/runtime-go/network/graphql"
+// filterxImport is the import path of the shared AIP-160/132 engines the
+// generated specs are data for. It lives in runtime-go, so it is no longer
+// generated.
+const filterxImport = "github.com/the-protobuf-project/runtime-go/database/filterx"
 
 // filtersView assembles the data for one schema's filters.go: one Spec var per
 // table. Returns nil when no table in the schema yields a spec.
@@ -50,24 +47,25 @@ func filtersView(db *schema.Database, s *schema.Schema, pkg string, fx facets.Se
 			Notes:         []string{"AIP-160 filter / AIP-132 order_by specs — data for the shared filterx engines."},
 		}),
 		"Package":       pkg,
-		"FilterxImport": dbGoModule(db) + "/" + filterxPkg,
+		"FilterxImport": filterxImport,
 		"Tables":        tables,
 	}
 }
 
-// filterxView is the shared view for every once-per-tree filterx template
-// (core, gorm engine, hasura engine, telemetry adapter — one package).
-func filterxView(db *schema.Database) map[string]any {
+// filterxObserverView is the view of the filterx observer the telemetry adapter
+// package carries: it adapts the SDK handle to runtime-go filterx's Observer.
+func filterxObserverView(db *schema.Database) map[string]any {
 	return map[string]any{
 		"Header": provenance.Render("//", header.Info{
 			PluginVersion: db.PluginVersion,
 			ProtocVersion: db.ProtocVersion,
 			Database:      db.Name,
 			SchemaLabel:   "package",
-			Schema:        filterxPkg,
-			Notes:         []string{"Shared AIP-160 filter / AIP-132 order_by / paginated-list engines driven by the generated per-schema specs."},
-		}),
-		"GraphQLImport":      graphqlRuntimeModule,
+			Schema:        telemetry.Package,
+			Notes:         []string{"The telemetry SDK as the Observer of runtime-go's filterx list engines."},
+		}, telemetry.Module),
+		"Package":            telemetry.Package,
+		"FilterxImport":      filterxImport,
 		"TelemetrySDKImport": telemetryModule,
 	}
 }

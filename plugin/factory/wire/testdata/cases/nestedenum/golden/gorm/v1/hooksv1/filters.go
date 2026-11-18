@@ -16,7 +16,7 @@
 package hooksv1
 
 import (
-	"example.com/test/gen/filterx"
+	"github.com/the-protobuf-project/runtime-go/database/filterx"
 )
 
 // WebhookFilterSpec is Webhook's AIP-160 filter / AIP-132 order_by surface,

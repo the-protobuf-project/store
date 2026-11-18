@@ -52,7 +52,7 @@ import (
 
 	"github.com/oh-tarnished/opensearch-go-sdk/opensearch"
 
-	"github.com/the-protobuf-project/store/examples/generated/go/gorm/search/filterx"
+	"github.com/the-protobuf-project/runtime-go/database/filterx"
 	"github.com/the-protobuf-project/store/examples/generated/go/repository/search/repox"
 )
 

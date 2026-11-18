@@ -50,7 +50,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
 
-	"github.com/the-protobuf-project/store/examples/generated/go/gorm/search/filterx"
+	"github.com/the-protobuf-project/runtime-go/database/filterx"
 )
 
 // ChangeOp is what a write did to a record.

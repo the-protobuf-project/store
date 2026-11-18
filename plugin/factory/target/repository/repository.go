@@ -177,7 +177,7 @@ func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 				}{"schema_references.go.tpl", map[string]any{
 					"Header":    fileHeader(db, s, "Reference integrity across databases and services: ReferenceService sources and reconcilers."),
 					"Package":   pkg,
-					"Imports":   renderImports(map[string]string{"context": "", dbGoModule(db) + "/" + repoxPkg: "", dbGormModule(db) + "/filterx": ""}),
+					"Imports":   renderImports(map[string]string{"context": "", dbGoModule(db) + "/" + repoxPkg: "", "github.com/the-protobuf-project/runtime-go/database/filterx": ""}),
 					"Resources": view.Resources,
 				}}
 			}
@@ -264,7 +264,7 @@ func repoxView(db *schema.Database) map[string]any {
 			Schema:        repoxPkg,
 			Notes:         []string{"Shared runtime for the generated proto-facing repositories."},
 		}),
-		"FilterxImport":        dbGormModule(db) + "/filterx",
+		"FilterxImport":        "github.com/the-protobuf-project/runtime-go/database/filterx",
 		"StorexImport":         "github.com/the-protobuf-project/runtime-go/database/storex",
 		"GraphQLDSLImport":     graphqlDSLModule,
 		"GraphQLRuntimeImport": graphqlRuntimeModule,

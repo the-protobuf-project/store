@@ -34,8 +34,8 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"gorm.io/gorm"
 
+	"github.com/the-protobuf-project/runtime-go/database/filterx"
 	"github.com/the-protobuf-project/runtime-go/database/storex"
-	"github.com/the-protobuf-project/store/examples/generated/go/gorm/references/filterx"
 )
 
 // Error sentinels the repository interfaces speak. Callers translate them to

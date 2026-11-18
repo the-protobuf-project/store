@@ -35,7 +35,7 @@ import (
 	"gorm.io/gorm"
 
 	genql "example.com/test/genql"
-	"example.com/test/gormdb/filterx"
+	"github.com/the-protobuf-project/runtime-go/database/filterx"
 	"github.com/the-protobuf-project/runtime-go/database/storex"
 	"github.com/the-protobuf-project/runtime-go/network/graphql"
 	"github.com/the-protobuf-project/runtime-go/network/runtime"

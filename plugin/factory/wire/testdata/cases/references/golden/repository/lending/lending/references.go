@@ -23,7 +23,7 @@ package lending
 import (
 	"context"
 	"example.com/test/gen/repox"
-	"example.com/test/gormdb/filterx"
+	"github.com/the-protobuf-project/runtime-go/database/filterx"
 )
 
 // ReferrerSources are this schema's external reference fields, read through

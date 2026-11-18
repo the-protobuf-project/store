@@ -52,8 +52,8 @@ import (
 
 	"github.com/oh-tarnished/opensearch-go-sdk/opensearch"
 
-	"example.com/test/gormdb/filterx"
 	"example.com/test/repo/repox"
+	"github.com/the-protobuf-project/runtime-go/database/filterx"
 )
 
 // IndexSpec is a generated index's shape.

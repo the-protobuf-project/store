@@ -16,7 +16,7 @@
 package stayv1
 
 import (
-	"example.com/test/gen/filterx"
+	"github.com/the-protobuf-project/runtime-go/database/filterx"
 )
 
 // BookingFilterSpec is Booking's AIP-160 filter / AIP-132 order_by surface,

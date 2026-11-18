@@ -61,7 +61,7 @@ func gormFileView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 		"gorm.io/gorm/clause":              "", // updateTx's row lock
 		"google.golang.org/protobuf/proto": "",
 		dbGoModule(db) + "/" + repoxPkg:    "",
-		dbGormModule(db) + "/filterx":      "",
+		"github.com/the-protobuf-project/runtime-go/database/filterx": "",
 	}
 	for _, r := range rs {
 		if r.Parented {

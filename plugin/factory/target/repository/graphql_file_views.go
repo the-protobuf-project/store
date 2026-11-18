@@ -44,8 +44,8 @@ func graphqlFileView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg str
 		"google.golang.org/protobuf/proto": "",
 		graphqlDSLModule:                   "graphql",
 		dbGoModule(db) + "/" + repoxPkg:    "",
-		dbGormModule(db) + "/filterx":      "",
-		client:                             clientPkgName(client),
+		"github.com/the-protobuf-project/runtime-go/database/filterx": "",
+		client: clientPkgName(client),
 	}
 	needTime := false
 	for _, r := range rs {

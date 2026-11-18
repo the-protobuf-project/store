@@ -9,8 +9,8 @@ replace github.com/the-protobuf-project/store => ../
 require (
 	github.com/lib/pq v1.12.3
 	github.com/oh-tarnished/opensearch-go-sdk v0.1.1
-	github.com/the-protobuf-project/runtime-go/database v0.0.0-20261118052056-98385b147b4d
-	github.com/the-protobuf-project/runtime-go/network v0.0.0-20261024035413-5222320d68ac
+	github.com/the-protobuf-project/runtime-go/database v0.0.0-20261118145608-230eeaf68eea
+	github.com/the-protobuf-project/runtime-go/network v0.0.0-20261118052056-98385b147b4d
 	github.com/the-protobuf-project/store v0.0.0-00010101000000-000000000000
 	github.com/the-protobuf-project/telemetry/telemetry-go v0.0.0-20261023093202-d14384d7957b
 	google.golang.org/genproto v0.0.0-20261019180522-ce908d29299b
@@ -53,7 +53,7 @@ require (
 	github.com/jackc/puddle/v2 v2.2.3 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
-	github.com/klauspost/compress v1.20.3 // indirect
+	github.com/klauspost/compress v1.20.4 // indirect
 	github.com/knadh/koanf/maps v0.1.3 // indirect
 	github.com/knadh/koanf/parsers/json v1.0.1 // indirect
 	github.com/knadh/koanf/parsers/toml v0.1.0 // indirect
@@ -72,7 +72,7 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.33 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/stretchr/testify v1.12.1 // indirect
-	github.com/the-protobuf-project/runtime-go/telemetry v0.0.0-20261118033015-9cd74ccf52a8 // indirect
+	github.com/the-protobuf-project/runtime-go/telemetry v0.0.0-20261118052056-98385b147b4d // indirect
 	github.com/xo/terminfo v1.2.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel v1.47.0 // indirect
@@ -93,8 +93,8 @@ require (
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/exp v0.0.0-20261014143641-f0251eb4aa3e // indirect
 	golang.org/x/net v0.62.0 // indirect
-	golang.org/x/sync v0.24.0 // indirect
-	golang.org/x/sys v0.49.0 // indirect
-	golang.org/x/text v0.43.0 // indirect
+	golang.org/x/sync v0.25.0 // indirect
+	golang.org/x/sys v0.50.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20261026165753-2ffab32bce7e // indirect
 )

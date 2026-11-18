@@ -31,7 +31,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"gorm.io/gorm"
 
-	"example.com/test/gormdb/filterx"
+	"github.com/the-protobuf-project/runtime-go/database/filterx"
 )
 
 // RequireFields returns ErrInvalidArgument naming the first of fields (m's

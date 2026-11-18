@@ -92,7 +92,7 @@ func schemaView(pb *pbIndex, db *schema.Database, s *schema.Schema, resources ma
 		"context":                       "",
 		"gorm.io/gorm":                  "",
 		dbGoModule(db) + "/" + repoxPkg: "",
-		dbGormModule(db) + "/filterx":   "",
+		"github.com/the-protobuf-project/runtime-go/database/filterx": "",
 	}
 	if m := dbGraphQLModule(db); m != "" {
 		imports[m] = clientPkgName(m)
