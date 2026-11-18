@@ -1,39 +1,43 @@
 # store
 
-> **One contract, many targets.** `protoc-gen-store` is a co-generation factory:
-> feed it **Protobuf** (annotated with [Google AIP](https://google.aip.dev/)) and it
-> emits production-grade **Prisma, GORM, and PostgreSQL** schemas; feed it a
-> **GraphQL** endpoint or `.graphql` SDL and it emits a typed **Go client**. One
-> binary, one `store.yaml`, outputs that always agree.
+> **One contract, every language.** `protoc-gen-store` reads your **Protobuf**
+> resources (annotated with [Google AIP](https://google.aip.dev/)) and generates
+> the persistence layer for each language you ship: **Go**, **Rust**,
+> **TypeScript** and **SQL** today. Every language's output is generated from the
+> same model, so a Go service and a Rust service share one database, row for row.
 
 [![Release](https://img.shields.io/github/v/release/the-protobuf-project/store?sort=semver&logo=github)](https://github.com/the-protobuf-project/store/releases)
-[![Go Reference](https://pkg.go.dev/badge/github.com/the-protobuf-project/store.svg)](https://pkg.go.dev/github.com/the-protobuf-project/store)
-[![Go Version](https://img.shields.io/github/go-mod/go-version/the-protobuf-project/store?logo=go)](go.mod)
-[![Buf BSR](https://img.shields.io/badge/BSR-the--protobuf--project%2Form-0B7FFF?logo=buffer)](https://buf.build/the-protobuf-project/store)
+[![Buf BSR](https://img.shields.io/badge/BSR-the--protobuf--project%2Fstore-0B7FFF?logo=buffer)](https://buf.build/the-protobuf-project/store)
 [![CI](https://github.com/the-protobuf-project/store/actions/workflows/test.yaml/badge.svg)](https://github.com/the-protobuf-project/store/actions/workflows/test.yaml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
 ## Contents
 
 - [Overview](#overview)
+- [Languages](#languages)
 - [Features](#features)
-- [Architecture](#architecture)
 - [How it works](#how-it-works)
-- [Install](#install)
-- [Quick start](#quick-start)
+- [Setup](#setup)
+  - [1. Install the plugin](#1-install-the-plugin)
+  - [2. Add the annotations](#2-add-the-annotations)
+  - [3. Annotate a resource](#3-annotate-a-resource)
+  - [4. Generate for your language](#4-generate-for-your-language): [Go](#go-setup) · [Rust](#rust-setup) · [TypeScript](#typescript-setup) · [SQL](#sql-setup)
+  - [Troubleshooting](#troubleshooting)
+- [What comes out](#what-comes-out)
 - [Output layout](#output-layout)
-- [GraphQL client SDK](#graphql-client-sdk)
+- [Go](#go)
+- [Rust](#rust)
+- [TypeScript (Prisma)](#typescript-prisma)
 - [Projections and search](#projections-and-search)
-- [Time series in Rust (`lang=rust target=influxdb`)](#time-series-in-rust-langrust-targetinfluxdb)
-- [Repositories in Rust (`lang=rust target=repository`)](#repositories-in-rust-langrust-targetrepository)
 - [Reference integrity](#reference-integrity)
 - [Annotations reference](#annotations-reference)
-- [Configuration — `store.yaml`](#configuration--ormyaml)
+- [Configuration — `store.yaml`](#configuration--storeyaml)
 - [Plugin options](#plugin-options)
 - [Defaults applied automatically](#defaults-applied-automatically)
 - [Determinism & migrations](#determinism--migrations)
 - [Versioned migrations (`migrate`)](#versioned-migrations-migrate)
 - [Type mapping](#type-mapping)
+- [Adding a language](#adding-a-language)
 - [Examples](#examples)
 - [Building from source](#building-from-source)
 - [Releases & versioning](#releases--versioning)
@@ -41,75 +45,68 @@
 
 ## Overview
 
-**store** is a single binary, `protoc-gen-store`, built as a **co-generation factory** —
-a `source → target × language` pipeline. A *source* turns a contract into a neutral
-model; a *target* renders that model into code. Two sources ship today:
+You describe your resources once, in proto, with the AIP annotations you already
+use (`google.api.resource`, `field_behavior`, `resource_reference`). store infers
+the tables, columns, keys, foreign keys and relations from them, applies
+[production defaults](#defaults-applied-automatically), and renders that one model
+through a **target** (what to generate) in a **language** (what to generate it in).
 
-- **proto** — a [protoc](https://protobuf.dev/) plugin. Annotate messages with the
-  [Google AIP](https://google.aip.dev/) standards you already use
-  (`google.api.resource`, `field_behavior`, `resource_reference`) and store infers
-  tables, columns, primary keys, foreign keys, and relations.
-- **graphql** — point it at a live GraphQL endpoint (or a cached `.graphql` SDL file)
-  and it introspects the schema.
+No language is the primary one. Each is a renderer over the same model, held to
+the same schema: the Rust repositories describe exactly the tables, columns, SQL
+types and constraints that the SQL target's DDL declares and that Go's GORM
+models map, and the example suites check that row for row. A new language is a new
+renderer over that model, not a port (see [Adding a language](#adding-a-language)).
 
-Both run through the same binary on `buf generate`, selected per output by a
-`target=` plugin entry; everything else lives in one [`store.yaml`](#configuration--ormyaml).
+store is a single binary that runs on `buf generate` (or `protoc`). You pick what
+it emits with plugin options; everything shared lives in one optional
+[`store.yaml`](#configuration--storeyaml).
 
-| Source | Target | Output |
-| --- | --- | --- |
-| proto | **prisma** | A complete, runnable Prisma 7 project — multi-file schema, `package.json`, `tsconfig.json`, config, and a `.env.example` to copy to `.env`. |
-| proto | **gorm** | Go structs with GORM tags + a migration registry; optional [CRUD stores + first-party telemetry](#gorm-stores-and-tracing), [AIP-160 filter / AIP-132 order_by list engines for **SQL and Hasura GraphQL**](#aip-160-filters-and-list-engines-sql--hasura), and [proto ↔ model converters](#proto--model-converters). |
-| proto | **sql** | PostgreSQL DDL — per-schema reference files **and** one transactional, **idempotent** `migrate.sql`; FK constraints, indexes, `updated_at` triggers, `COMMENT ON`. |
-| proto | **influxdb** (Rust) | A Rust [time-series client](#time-series-in-rust-langrust-targetinfluxdb) laid out like gorm's output: per database a module that selects the **InfluxDB 3** database or **Arrow IPC** captures, per `time_series` message a model and a typed store (writes, tag filters, windows, latest, aggregates). |
-| graphql | **graphql** | A typed Go GraphQL client — row models, a fluent predicate DSL, CRUD/subscription methods (see [GraphQL client SDK](#graphql-client-sdk)). |
+## Languages
 
-Each database target also emits a `README.md` with a Mermaid ER diagram and a
-per-model column reference, so the generated tree is self-documenting. Postgres and
-MongoDB providers are both supported, and the GraphQL client speaks the
-Hasura/DDN/Grafbase lineage through a pluggable [dialect](#dialects). Code emitters
-are organized per language (Go today), so a target can grow Python/TypeScript/… output
-by adding a template set beside the shared, language-agnostic parsing.
+| Language | Target (`opt`) | What you get | Runtime it uses |
+| --- | --- | --- | --- |
+| **Go** | `target=gorm` | Models with GORM tags, a migration registry, and optionally typed CRUD stores, AIP-160 filters / AIP-132 ordering, and proto ↔ model converters | [GORM](https://gorm.io) |
+| **Go** | `target=repository` | A proto-facing repository per resource (`Create`/`Get`/`List`/`Update`/`Delete`, soft delete, etags, units of work) over the GORM output or a GraphQL client | GORM, or the `graphql` target's client |
+| **Go** | `target=graphql` | A typed GraphQL client from an endpoint or `.graphql` SDL | Hasura / DDN / Grafbase [dialects](#dialects) |
+| **Rust** | `lang=rust target=repository` | A storage descriptor and a typed repository per resource (`Repository<Message>`), the same records Go stores | [runtime-rs](https://github.com/the-protobuf-project/runtime-rs) `tpp-database`: Postgres, MySQL, SQLite, MongoDB, Redis, Tauri store |
+| **Rust** | `lang=rust target=influxdb` | A time-series model and store per `time_series` message | runtime-rs `tpp-database`: InfluxDB 3, Arrow IPC captures |
+| **TypeScript** | `target=prisma` | A runnable Prisma 7 project: multi-file schema, `package.json`, config | [Prisma](https://www.prisma.io) |
+| **SQL** (any language) | `target=sql` | PostgreSQL DDL: per-schema files and one transactional, idempotent `migrate.sql` | none; apply with `psql`, Atlas or your migration tool |
+
+Each database target also writes a `README.md` with a Mermaid ER diagram and a
+per-model column reference, so the generated tree documents itself. Some features
+have reached one language before another; [Go](#go) and [Rust](#rust) each list
+what they cover.
 
 ## Features
 
-- **A co-generation factory.** One `source → target × language` pipeline. Sources
-  (proto, GraphQL) turn a contract into a neutral model; targets render it. Adding a
-  target or a source is a self-contained addition — the shared parsing, config, and
-  emit machinery are reused. The proto IR engine
-  ([protokit](https://github.com/the-protobuf-project/protokit)) is itself generic, so
-  a sibling plugin ([web3](https://github.com/the-protobuf-project/web3)) renders a
-  blockchain backend from the same model.
-- **AIP-native.** ~80% of the proto schema is read straight from standard AIP
-  annotations; only the remaining ~20% needs `entity.v1.*` / `store.v1.*` options.
-- **GraphQL client from a schema.** Point the `graphql` target at an endpoint or a
-  `.graphql` SDL file and get a typed Go client — models, a predicate DSL, CRUD and
-  subscriptions — behind a pluggable [dialect](#dialects) (Hasura/DDN/Grafbase today).
-- **Ready for more languages.** Each code target keeps its language-specific templates
-  under a per-language folder (Go now), so Python/Rust/TypeScript output is a new
-  template set over the same parsing — not a rewrite.
-- **Production defaults.** ULID surrogate keys, auto-managed timestamps,
-  FK indexing, soft-delete markers, and enum hygiene — all overridable.
-- **List queries built in — SQL and Hasura.** Opt-in [AIP-160](https://google.aip.dev/160)
-  `filter` / [AIP-132](https://google.aip.dev/132) `order_by` engines: generated
-  per-resource specs drive one shared `filterx` SDK whose **GORM (SQL)** and
-  **Hasura DDN (GraphQL)** engines accept identical filter strings by
-  construction — free-text search, sort allowlists, and opaque page tokens
-  included.
-- **Idempotent SQL.** The consolidated `migrate.sql` is transactional and guarded
-  (`IF NOT EXISTS`, `CREATE OR REPLACE`, deferred FK `ALTER`s) — safe to re-apply.
+- **One model, every language.** Parsing, defaults, naming and validation happen
+  once; each language is a renderer over the result, so outputs agree by
+  construction and a new language reuses everything but its templates.
+- **AIP-native.** Most of the schema comes from the standard AIP annotations you
+  already write; only the rest needs `entity.v1` / `store.v1` options.
+- **Production defaults.** ULID surrogate keys, managed timestamps, FK indexes,
+  soft-delete markers and enum hygiene, all overridable
+  ([defaults](#defaults-applied-automatically)).
+- **List queries.** AIP-160 `filter` and AIP-132 `order_by`, with free-text
+  search columns, the same filter grammar in Go's SQL and Hasura engines and in
+  Rust's records runtime.
+- **Idempotent SQL.** `migrate.sql` is transactional and guarded
+  (`IF NOT EXISTS`, `CREATE OR REPLACE`, deferred FK `ALTER`s), so it is safe to
+  re-apply.
 - **Relational nesting.** Nested and imported value messages become real child
-  tables (PK + FK), never opaque `JSONB` blobs — your structure stays queryable.
-- **Monorepo layout.** An optional [`store.yaml`](#configuration--ormyaml)
+  tables with keys, not opaque `JSONB`, so the structure stays queryable.
+- **Monorepo layout.** An optional [`store.yaml`](#configuration--storeyaml)
   maps proto packages to databases and schemas without per-file annotations.
-- **Deterministic.** Re-running on unchanged protos produces byte-identical
-  output (enforced by golden tests), so regenerate → `migrate diff` is a no-op.
-- **Self-documenting.** Each target ships a `README.md` with a Mermaid ER diagram.
+- **Deterministic.** Unchanged protos regenerate byte-identical output (golden
+  tests hold it), so regenerate → migration diff is a no-op.
+- **Self-documenting.** Each database target writes a `README.md` with a Mermaid
+  ER diagram.
 
-## Architecture
+## How it works
 
-The factory is a `source → model → target` pipeline. A **source** turns an input
-contract into a neutral model; a **target** renders that model. All of it lives in one
-binary, configured by one [`store.yaml`](#configuration--ormyaml).
+The factory is a `source → model → target × language` pipeline. A **source** turns
+a contract into a neutral model; a **target** renders that model in a language.
 
 ```mermaid
 flowchart LR
@@ -121,90 +118,93 @@ flowchart LR
 
     P --> PS["proto source<br/>(protokit IR)"]
     Q --> QS["graphql source<br/>(introspect / SDL → IR)"]
-    PS --> M[("core model<br/>+ typed facets")]
+    PS --> M[("one model<br/>+ typed facets")]
     QS --> M
 
     M --> T{{"target × language"}}
-    T --> PR["prisma"]
-    T --> GO["gorm"]
-    T --> SQL["sql"]
-    T --> GQL["graphql<br/>(Go client)"]
+    T --> GO["Go<br/>gorm · repository · graphql"]
+    T --> RS["Rust<br/>repository · influxdb"]
+    T --> TS["TypeScript<br/>prisma"]
+    T --> SQL["SQL<br/>DDL + migrate.sql"]
 
-    PR --> DB[("PostgreSQL /<br/>MongoDB")]
-    GO --> DB
+    GO --> DB[("one database")]
+    RS --> DB
+    TS --> DB
     SQL --> DB
-    GQL --> APP["your Go app"]
 ```
 
-Each source builds the model, then the selected target renders it independently. The
-**parsing is language-agnostic** — a target's language-specific templates live under a
-per-language folder, so adding Python/TypeScript output reuses the same model. On the
-proto side, files that declare the **same datasource name merge into one database**, so
-a multi-file proto package becomes a single schema tree; the proto IR is built by the
-generic [protokit](https://github.com/the-protobuf-project/protokit) engine, which a
-sibling plugin ([web3](https://github.com/the-protobuf-project/web3)) reuses for a
-blockchain backend.
+Files that declare the **same datasource name merge into one database**, so a
+multi-file proto package becomes one schema tree. The proto model is built by the
+generic [protokit](https://github.com/the-protobuf-project/protokit) engine, which
+a sibling plugin ([web3](https://github.com/the-protobuf-project/web3)) reuses for
+a blockchain backend.
 
-## How it works
-
-Every annotation maps to a concrete piece of schema. store collects them all
-into the IR, applies its [production defaults](#defaults-applied-automatically),
-then hands the IR to the selected renderer.
-
-```mermaid
-flowchart TD
-    R["google.api.resource<br/>on a message"] -->|"a table (schema + name)"| T["Table in IR"]
-    ID["field_behavior = IDENTIFIER"] -->|"PRIMARY KEY → demoted to UNIQUE<br/>when a surrogate id is synthesized"| T
-    REQ["field_behavior = REQUIRED"] -->|"NOT NULL<br/>(nullable otherwise → pointer/? types)"| T
-    REF["resource_reference<br/>on a field"] -->|"FOREIGN KEY → resolved to referenced PK"| T
-    SC["proto scalar / well-known type"] -->|"SQL column type"| T
-    O["entity.v1 / store.v1<br/>options"] -->|"overrides + extras<br/>(types, indexes, id strategy, FK actions)"| T
-
-    T --> IR[("IR")]
-    IR --> RENDER{{"target renderer"}}
-    RENDER --> PR["prisma"]
-    RENDER --> GO["gorm"]
-    RENDER --> SQL["sql"]
-```
+Every annotation maps to a concrete piece of schema:
 
 | Source annotation | Inferred output |
 | --- | --- |
 | `google.api.resource` on a message | a table; schema + name from `type` / `plural` |
-| `field_behavior = IDENTIFIER` | `PRIMARY KEY NOT NULL` |
-| `field_behavior = REQUIRED` | `NOT NULL` (nullable otherwise → pointer/`?` types) |
-| `resource_reference` on a field | a `FOREIGN KEY`, resolved to the referenced PK |
+| `field_behavior = IDENTIFIER` | the resource name: a `UNIQUE NOT NULL` lookup column (a ULID `id` is the primary key) |
+| `field_behavior = REQUIRED` | `NOT NULL` (nullable otherwise: a pointer, `Option` or `?` type) |
+| `resource_reference` on a field | a `FOREIGN KEY`, resolved to the referenced resource |
 | proto scalar / well-known type | the column's SQL type (see [Type mapping](#type-mapping)) |
+| `entity.v1` / `store.v1` options | overrides and extras: types, indexes, id strategy, FK actions |
 
-## Install
+## Setup
+
+This takes you from nothing to generated, compiling code in your language. Steps
+1–3 are the same for every language; step 4 is per language.
+
+**You need:** [buf](https://buf.build/docs/installation) (or `protoc`), and the
+toolchain of the language you generate for. Go is **not** required unless you
+generate Go.
+
+### 1. Install the plugin
+
+`protoc-gen-store` is a standalone binary. Install it any one of these ways and
+make sure it is on your `PATH`, which is where `buf` and `protoc` look for it.
 
 ```bash
 # Homebrew (macOS / Linux)
 brew install the-protobuf-project/tap/protoc-gen-store
 
-# or go install
+# A prebuilt binary (linux / darwin / windows, amd64 / arm64), from
+# https://github.com/the-protobuf-project/store/releases, unpacked onto your PATH
+
+# Or build it with Go
 go install github.com/the-protobuf-project/store/plugin/cmd/protoc-gen-store@latest
 ```
 
-Releases ship prebuilt binaries for **linux / darwin / windows** on **amd64 / arm64**
-on the [Releases page](https://github.com/the-protobuf-project/store/releases).
-The plugin must be on your `PATH` so `protoc`/`buf` can find it.
+Check it: `protoc-gen-store --version`. In CI, pin a release (`@v1.8.0`, or that
+release's binary): the version is written into every generated file's banner, so
+a pinned version keeps regenerated output byte-identical.
 
-You'll also need the option definitions on your import path. With
-[buf](https://buf.build), add the module to your `buf.yaml` `deps`:
+### 2. Add the annotations
+
+The `entity.v1` and `store.v1` options are published on the Buf Schema Registry.
+Add the module to your `buf.yaml`, then fetch it:
 
 ```yaml
+# buf.yaml
+version: v2
+modules:
+  - path: proto
 deps:
-  - buf.build/the-protobuf-project/store
+  - buf.build/googleapis/googleapis          # google.api.resource, field_behavior
+  - buf.build/the-protobuf-project/store     # entity.v1 + store.v1
 ```
 
-then `import "entity/v1/annotations.proto";` and
-`import "store/v1/annotations.proto";` in your protos.
+```bash
+buf dep update
+```
 
-## Quick start
+With plain `protoc`, put the [`protobuf/`](protobuf) directory of this repository
+and googleapis on your `-I` path instead.
 
-**1. Annotate a proto.**
+### 3. Annotate a resource
 
 ```proto
+// proto/bookstore/v1/bookstore.proto
 syntax = "proto3";
 package bookstore.v1;
 
@@ -213,6 +213,7 @@ import "google/api/resource.proto";
 import "entity/v1/annotations.proto";
 import "store/v1/annotations.proto";
 
+// Every message in this file is stored in the database "bookstore_db".
 option (entity.v1.datasource) = {
   database: "bookstore_db"
   provider: "postgres"
@@ -225,45 +226,287 @@ message Author {
     singular: "author"
     plural: "authors"
   };
-  // Use a generated ULID primary key + created_at/updated_at columns.
+  // A generated ULID primary key, plus created_at / updated_at columns.
   option (entity.v1.table) = { id: ID_STRATEGY_ULID, timestamps: true };
 
-  // IDENTIFIER → the AIP resource name; becomes a UNIQUE lookup column.
+  // IDENTIFIER: the AIP resource name, a UNIQUE lookup column.
   string name = 1 [(google.api.field_behavior) = IDENTIFIER];
-
-  // REQUIRED → NOT NULL; string defaults to VARCHAR(255).
+  // REQUIRED: NOT NULL. A string defaults to VARCHAR(255).
   string display_name = 2 [(google.api.field_behavior) = REQUIRED];
-
-  // Override the default for a free-form column.
+  // Override the default type of a free-form column.
   string bio = 3 [(store.v1.column) = { type: "TEXT" }];
 }
 ```
 
-**2. Add the plugin to `buf.gen.yaml`.**
+The resource is the contract. Everything below generates from this one file.
+
+### 4. Generate for your language
+
+Add one plugin entry per thing you want to `buf.gen.yaml`, then run
+`buf generate`. You can generate several languages from the same protos in one
+run: each entry writes its own `out:` directory.
+
+> [!NOTE]
+> protoc asks every plugin for a Go import path, even when nothing it writes is
+> Go. If your protos don't set `option go_package`, give one per file with an `M`
+> option, e.g. `Mbookstore/v1/bookstore.proto=example.com/gen/bookstore/v1`.
+
+<a id="go-setup"></a>
+#### Go
+
+The Go messages come from `protoc-gen-go`; store writes the GORM models and
+stores, and the repositories over them.
 
 ```yaml
+# buf.gen.yaml
 version: v2
+inputs:
+  - directory: proto
 plugins:
+  - remote: buf.build/protocolbuffers/go:v1.36.11
+    out: gen/go/pb
+    opt: module=example.com/app/gen/go/pb
   - local: protoc-gen-store
-    out: generated/prisma
-    opt: [target=prisma]   # prisma | gorm | sql
+    out: gen/go/gorm
+    strategy: all                          # one run sees every file of a database
+    opt:
+      - target=gorm
+      - go_module=example.com/app/gen/go/gorm   # the import path of out:
+      - stores=true                        # typed CRUD stores
+      - filters=true                       # AIP-160 filter / AIP-132 order_by
+      - converters=true                    # proto <-> model
+  - local: protoc-gen-store                # optional: proto-facing repositories
+    out: gen/go/repository
+    strategy: all
+    opt:
+      - target=repository
+      - go_module=example.com/app/gen/go/repository
+      - gorm_module=example.com/app/gen/go/gorm
 ```
-
-**3. Generate.**
 
 ```bash
 buf generate
+# The Go messages import the annotations' Go package from the store module:
+# require it at the release you generate with, so it resolves to that module.
+go get gorm.io/gorm gorm.io/driver/postgres github.com/the-protobuf-project/store@v1.8.0
+go mod tidy
 ```
 
-> [!NOTE]
-> store doesn't generate Go message stubs, so protoc/buf needs a Go import
-> path for each file. If your protos don't set `option go_package`, supply it
-> per file in `opt:` with an `M` mapping, e.g.
-> `Mbookstore/v1/bookstore.proto=example.com/gen/bookstore/v1`.
+Migrate and use it (`bookstore_db` generates into the Go package `bookstoredb`):
 
-### What comes out
+```go
+import (
+    "example.com/app/gen/go/gorm/bookstoredb"
+    "example.com/app/gen/go/gorm/bookstoredb/bookstorev1"
+    "gorm.io/driver/postgres"
+    "gorm.io/gorm"
+)
 
-The `Author` message above produces, across targets — **Prisma:**
+db, err := gorm.Open(postgres.Open(os.Getenv("DATABASE_URL")))
+if err != nil { /* ... */ }
+if err := bookstoredb.Default.EnsureSchemas(db); err != nil { /* ... */ }  // CREATE SCHEMA
+if err := bookstoredb.Default.Migrate(db); err != nil { /* ... */ }        // every table
+
+authors := bookstorev1.NewAuthorStore(db)
+a, err := authors.GetByName(ctx, "authors/rowling")
+```
+
+Next: [Go](#go) covers stores, filters, converters, repositories and the
+GraphQL client.
+
+<a id="rust-setup"></a>
+#### Rust
+
+store writes a crate of repositories that names your prost messages; the
+messages themselves come from `prost-build`. The repositories run on runtime-rs's
+`tpp-database`, taken from its `main` branch.
+
+```yaml
+# buf.gen.yaml
+version: v2
+inputs:
+  - directory: proto
+plugins:
+  - local: protoc-gen-store
+    out: gen/rust/repository
+    strategy: all
+    opt:
+      - lang=rust
+      - target=repository
+      - crate=bookstore              # the generated crate's package name
+      - rust_proto_module=crate::pb  # where your prost messages live (the default)
+      - Mbookstore/v1/bookstore.proto=example.com/unused   # see the note above
+```
+
+```bash
+buf generate
+buf build proto --exclude-source-info -o descriptor.binpb   # for prost-build and reflection
+```
+
+Add the runtime and prost to your `Cargo.toml`. Choose the provider features you
+need: `orm-postgres`, `orm-mysql`, `orm-sqlite`, `mongodb`, `redis`,
+`tauri-store`.
+
+```toml
+[dependencies]
+tpp-database = { git = "https://github.com/the-protobuf-project/runtime-rs", branch = "main", default-features = false, features = ["orm-postgres"] }
+prost = "0.14"
+prost-types = "0.14"
+prost-reflect = { version = "0.16", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[build-dependencies]
+prost = "0.14"
+prost-build = "0.14"
+prost-types = "0.14"
+```
+
+Commit `Cargo.lock`: it records which runtime-rs commit you build against.
+
+The repositories look messages up by reflection, so the messages must derive
+`prost_reflect::ReflectMessage`. Compile them from the descriptor set in
+`build.rs`:
+
+```rust
+// build.rs
+use prost::Message;
+
+fn main() -> std::io::Result<()> {
+    println!("cargo:rerun-if-changed=descriptor.binpb");
+    let fds = prost_types::FileDescriptorSet::decode(std::fs::read("descriptor.binpb")?.as_slice())?;
+    let mut config = prost_build::Config::new();
+    for file in fds.file.iter().filter(|f| f.package() == "bookstore.v1") {
+        for message in &file.message_type {
+            let name = format!("{}.{}", file.package(), message.name());
+            config
+                .type_attribute(&name, "#[derive(::prost_reflect::ReflectMessage)]")
+                .type_attribute(&name, format!(r#"#[prost_reflect(message_name = "{name}")]"#))
+                .type_attribute(&name, r#"#[prost_reflect(descriptor_pool = "crate::DESCRIPTOR_POOL")]"#);
+        }
+    }
+    config.compile_fds(fds)
+}
+```
+
+Mount the messages at `crate::pb` and the generated crate beside them:
+
+```rust
+// src/lib.rs
+use std::sync::LazyLock;
+use prost_reflect::DescriptorPool;
+
+pub mod pb {
+    pub mod bookstore {
+        pub mod v1 {
+            include!(concat!(env!("OUT_DIR"), "/bookstore.v1.rs"));
+        }
+    }
+}
+
+#[path = "../gen/rust/repository/lib.rs"]
+pub mod repository;
+
+pub static DESCRIPTOR_POOL: LazyLock<DescriptorPool> = LazyLock::new(|| {
+    DescriptorPool::decode(include_bytes!("../descriptor.binpb").as_ref()).unwrap()
+});
+```
+
+Create the tables and use a repository (the crate is `database` in code):
+
+```rust
+use database::orm::{OrmProvider, sqlx::postgres::PgPoolOptions};
+use database::records::Provider; // set_database
+use my_app::{DESCRIPTOR_POOL, repository::bookstore::v1 as bookstore};
+
+let pool = PgPoolOptions::new().connect(&std::env::var("DATABASE_URL")?).await?;
+let db = OrmProvider::new(pool).set_database("").await?;
+
+let author = DESCRIPTOR_POOL.get_message_by_name("bookstore.v1.Author").unwrap();
+db.schema.ensure_schema(&bookstore::author_resource(author)).await?;
+
+let repos = bookstore::repositories(&db, &DESCRIPTOR_POOL)?;
+let a = repos.authors.get("authors/rowling").await?;
+```
+
+Next: [Rust](#rust) covers the generated API, how fields become columns, caches
+and time series. [`examples/library-rust`](examples/library-rust) is this setup,
+complete and tested.
+
+<a id="typescript-setup"></a>
+#### TypeScript
+
+```yaml
+# buf.gen.yaml
+version: v2
+inputs:
+  - directory: proto
+plugins:
+  - local: protoc-gen-store
+    out: gen/prisma
+    strategy: all
+    opt:
+      - target=prisma
+      - Mbookstore/v1/bookstore.proto=example.com/unused   # see the note above
+```
+
+```bash
+buf generate
+cd gen/prisma/bookstore_db
+cp .env.example .env            # then set BOOKSTORE_DB_DATABASE_URL
+npm install
+npm run prisma:generate
+```
+
+Next: [TypeScript (Prisma)](#typescript-prisma).
+
+<a id="sql-setup"></a>
+#### SQL
+
+For any language, or none: the DDL alone.
+
+```yaml
+# buf.gen.yaml
+version: v2
+inputs:
+  - directory: proto
+plugins:
+  - local: protoc-gen-store
+    out: gen/sql
+    strategy: all
+    opt:
+      - target=sql
+      - Mbookstore/v1/bookstore.proto=example.com/unused   # see the note above
+```
+
+```bash
+buf generate
+psql "$DATABASE_URL" -f gen/sql/bookstore_db/migrate.sql   # idempotent: safe to re-apply
+```
+
+For versioned migration files instead, see
+[Versioned migrations](#versioned-migrations-migrate).
+
+### Troubleshooting
+
+| Symptom | Cause and fix |
+| --- | --- |
+| `protoc-gen-store: program not found or is not executable` | The binary isn't on `PATH`. Run `protoc-gen-store --version`; with `go install`, add `$(go env GOPATH)/bin` to `PATH`. |
+| `entity/v1/annotations.proto: file does not exist` | The annotations module is missing. Add `buf.build/the-protobuf-project/store` to `deps` and run `buf dep update` (step 2). |
+| `unable to determine Go import path` | protoc needs a Go path for every file, whatever you generate. Set `option go_package`, or add an `M<file>=<path>` option. |
+| Go: `ambiguous import: found package github.com/the-protobuf-project/store/plugin/entity/pb/entitypbv1 in multiple modules` | An old, separate `store/plugin/entity` module was picked up. Require the store module itself: `go get github.com/the-protobuf-project/store@v1.8.0`, then `go mod tidy`. |
+| A message generates nothing | Only messages with `google.api.resource` become tables (or `store.v1.projection`, or a `time_series` for `influxdb`). |
+| Two files' tables land in different runs | Use `strategy: all` so one run sees every file of a database. |
+| Rust: `repositories()` fails with `the descriptor pool has no message …` | The descriptor pool lacks the message. Rebuild `descriptor.binpb` after changing protos, and include every package the repositories name. |
+| Rust: a type mismatch on a `pb::…` path | `rust_proto_module` doesn't point at your prost messages. Mount them at `crate::pb`, or set the option to where they are. |
+| Rust: `CREATE TABLE` fails on SQLite or MySQL with an enum column | An enum's `sql_type` is the Postgres enum type. Clear it on those dialects before `ensure_schema` (see [Rust](#rust)). |
+| Regenerated output differs in CI only | The plugin versions differ. Pin the same release locally and in CI. |
+| The generation fails with a `strict` error | A schema problem was raised to an error. The message names the field; see [`strict`](#plugin-options). |
+
+## What comes out
+
+The `Author` resource from [Setup](#3-annotate-a-resource) produces, in each language (doc comments trimmed).
+
+**TypeScript (Prisma):**
 
 ```prisma
 model Author {
@@ -271,32 +514,75 @@ model Author {
   name        String   @unique @map("name")
   displayName String   @map("display_name")
   bio         String?  @map("bio")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
-  books       Book[]
+  createdAt   DateTime @default(now()) @bookstore_db.Timestamptz(6) @map("created_at")
+  updatedAt   DateTime @updatedAt @bookstore_db.Timestamptz(6) @map("updated_at")
 
   @@map("authors")
   @@schema("bookstore_v1")
 }
 ```
 
-**GORM:**
+**Go (GORM):**
 
 ```go
 type Author struct {
-  ID          string    `gorm:"column:id;primaryKey;not null"`
-  Name        string    `gorm:"column:name;not null;uniqueIndex"`
-  DisplayName string    `gorm:"column:display_name;not null"`
-  Bio         *string   `gorm:"column:bio"`
-  CreatedAt   time.Time `gorm:"column:created_at;autoCreateTime"`
-  UpdatedAt   time.Time `gorm:"column:updated_at;autoUpdateTime"`
-  Books       []Book    `gorm:"foreignKey:AuthorID"`
+  ID          string    `gorm:"column:id;primaryKey;not null" json:"id"`
+  Name        string    `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
+  DisplayName string    `gorm:"column:display_name;not null" json:"display_name" validate:"required"`
+  Bio         *string   `gorm:"column:bio" json:"bio,omitempty"`
+  CreatedAt   time.Time `gorm:"column:created_at;type:timestamptz;not null;autoCreateTime" json:"created_at"`
+  UpdatedAt   time.Time `gorm:"column:updated_at;type:timestamptz;not null;autoUpdateTime" json:"updated_at"`
 }
 
 func (*Author) TableName() string { return "bookstore_v1.authors" }
 ```
 
-(`///` doc comments and `json`/`validate` tags are emitted too — trimmed here for space.)
+(Doc comments are emitted too, trimmed here.)
+
+**Rust (`tpp-database`):** the same table as a storage descriptor, plus a typed
+repository:
+
+```rust
+pub fn author_resource(message: MessageDescriptor) -> Resource {
+    Resource {
+        schema: "bookstore_v1".into(),
+        columns: vec![
+            Column { primary_key: true, not_null: true, generated: Some(Generated::Ulid),
+                     ..column("id", "", Kind::String, "CHAR(26)") },
+            Column { not_null: true, unique: true,
+                     ..column("name", "name", Kind::String, "VARCHAR(255)") },
+            Column { not_null: true,
+                     ..column("display_name", "display_name", Kind::String, "VARCHAR(255)") },
+            column("bio", "bio", Kind::String, "TEXT"),
+            Column { not_null: true, auto_create: true,
+                     ..column("created_at", "", Kind::Timestamp, "TIMESTAMPTZ") },
+            Column { not_null: true, auto_update: true,
+                     ..column("updated_at", "", Kind::Timestamp, "TIMESTAMPTZ") },
+        ],
+        ..Resource::new(message, "authors", "name", Vec::new())
+    }
+}
+
+pub struct Repositories {
+    pub authors: Arc<dyn Repository<pb::Author>>,
+}
+```
+
+**SQL:**
+
+```sql
+CREATE TABLE "bookstore_v1"."authors" (
+    "id"  CHAR(26)  NOT NULL  PRIMARY KEY,
+    "name"  VARCHAR(255)  NOT NULL  UNIQUE,
+    "display_name"  VARCHAR(255)  NOT NULL,
+    "bio"  TEXT,
+    "created_at"  TIMESTAMPTZ  NOT NULL  DEFAULT now(),
+    "updated_at"  TIMESTAMPTZ  NOT NULL  DEFAULT now()
+);
+```
+
+The column names, types and constraints are the same in all three: that is what
+lets services in different languages share the database.
 
 And every target also drops a `README.md` with the relationships drawn out, e.g.:
 
@@ -341,6 +627,8 @@ generated/gorm/gormx/gormx.go                       # shared runtime: ListOption
 generated/gorm/filterx/                             # shared filter/order/list engines: SQL + Hasura (filters opt)
 generated/go/gorm/bookstore/bookstoredb/migrate.go              # factory Registry + EnsureSchemas + Instrument (needs go_module)
 generated/go/gorm/bookstore/bookstoredb/README.md               # ER diagram + model reference
+gen/rust/repository/Cargo.toml, lib.rs           # Rust: one crate (lang=rust)
+gen/rust/repository/bookstore/v1/mod.rs          # Rust: descriptors, rules, Repositories per package
 generated/sql/bookstore_db/migrate.sql              # whole DB, one transactional file
 generated/sql/bookstore_db/bookstore_v1.postgres.sql
 generated/sql/bookstore_db/README.md
@@ -378,6 +666,13 @@ if err := bookstoredb.Default.Migrate(db); err != nil { // db is your *gorm.DB
 }
 bookstoredb.Default.Register(&MyModel{})  // add your own to the same registry
 ```
+
+## Go
+
+Go output is GORM models (`target=gorm`), proto-facing repositories over them
+(`target=repository`), and a typed GraphQL client (`target=graphql`). Setup is
+in [Setup → Go](#go-setup). Generated Go package paths never contain an
+underscore: the database `bookstore_db` generates into `bookstoredb/`.
 
 ### GORM stores and tracing
 
@@ -793,7 +1088,7 @@ the end. `in` narrows every read (`Filter`, `Where`, `ShowDeleted`,
 (GORM, GraphQL) implement it over their `List`, across parents for a parented
 resource.
 
-## GraphQL client SDK
+### GraphQL client SDK
 
 The same `protoc-gen-store` binary also generates a **typed Go GraphQL client** from
 a live server. Where the proto flow is `proto → database schema`, this flow is
@@ -839,7 +1134,7 @@ filter engine with zero glue.
 > (a `go_package` option or an `M` mapping) even though the `graphql` target
 > ignores them — buf compiles the module before invoking any plugin.
 
-### Dialects
+#### Dialects
 
 The engine-specific conventions (bool_exp combinators, `_eq`/`_in` comparisons,
 `insert`/`update`/`delete` verb prefixes, `returning` / `affectedRows` mutation
@@ -857,7 +1152,7 @@ runtime `graphql`/`runtime` import identifiers, the import is deterministically
 aliased (`gqlnet`/`rtnet`) and its references rewritten, so the output always
 compiles regardless of the source schema's naming.
 
-### One subgraph of a shared DDN engine
+#### One subgraph of a shared DDN engine
 
 Several apps can share one Hasura DDN engine whose supergraph holds a subgraph
 per app. Each subgraph's `subgraph.yaml` gives its GraphQL names a prefix, and
@@ -904,7 +1199,308 @@ subgraph's part of the schema under its wire names.
 The repository target's DDN reference plugin config names root fields too: pass
 the same root-field prefix to it as the `graphql_root_field_prefix=` opt.
 
+## Rust
+
+Rust output is a crate of typed repositories (`lang=rust target=repository`)
+over any records provider runtime-rs supports, and time-series stores
+(`lang=rust target=influxdb`) over InfluxDB 3 and Arrow captures. Both bind
+[runtime-rs](https://github.com/the-protobuf-project/runtime-rs)'s
+`tpp-database` crate at its `main` branch; commit your `Cargo.lock` to pin the
+commit. Setup is in [Setup → Rust](#rust-setup).
+
+To build against a local runtime-rs checkout, redirect the dependency from your
+workspace rather than editing generated output:
+
+```toml
+[patch."https://github.com/the-protobuf-project/runtime-rs"]
+tpp-database = { path = "../runtime-rs/database" }
+```
+
+### Repositories in Rust (`lang=rust target=repository`)
+
+The `repository` target, `lang=rust`, renders a repository for every
+`google.api.resource` table with a generated key
+(`(entity.v1.table) = {id: ID_STRATEGY_ULID}`), the same resources the Go
+repositories cover. Each language binds its own runtime: Go composes the gorm
+output, and Rust binds the typed repository contract of
+[tpp-database](https://github.com/the-protobuf-project/runtime-rs)
+(`database::repository::RecordsRepository`), which runs over any records
+provider: Postgres, MySQL, SQLite, MongoDB, Redis or a Tauri store.
+
+Each resource is described to the runtime with a `database::records::Resource`
+built from the IR the sql and gorm targets render, so the table, column names,
+SQL types, keys, `UNIQUE` / `NOT NULL` and foreign keys are theirs, and services
+in either language share one database.
+
+```yaml
+- local: protoc-gen-store
+  out: gen/rust/repository
+  opt:
+    - lang=rust
+    - target=repository
+    - crate=library                 # the Cargo package name; default "generated"
+    - rust_proto_module=crate::pb   # where the prost messages live; the default
+```
+
+#### Output layout
+
+| File | Holds |
+| --- | --- |
+| `Cargo.toml`, `lib.rs` | one crate, as influxdb's; `lib.rs` declares a module per proto package |
+| `<package path>/mod.rs` | one proto package's repositories: `library.v1` → `library/v1/mod.rs` |
+
+The code names the prost messages through `rust_proto_module` (default
+`crate::pb`, as protoc-gen-service's Rust target names them), so the tree is
+usually mounted into the crate that holds them, beside the generated services:
+
+```rust
+pub mod pb { /* prost + prost-reflect messages, e.g. pb::library::v1::Book */ }
+
+#[path = "../gen/rust/repository/lib.rs"]
+pub mod repository;
+```
+
+The messages must derive `prost_reflect::ReflectMessage` (prost-reflect-build).
+
+#### Generated API
+
+Per proto package, for each resource (`<resource>` is the message name in
+snake_case, `<plural>` the `google.api.resource` plural in snake_case):
+
+```rust
+/// The storage descriptor: table, schema, key (the resource name), columns, foreign keys.
+pub fn <resource>_resource(message: prost_reflect::MessageDescriptor) -> database::records::Resource;
+/// Etag, soft delete (OUTPUT_ONLY delete_time / expire_time) and output-only fields.
+/// Retention is zero; the caller sets it.
+pub fn <resource>_rules() -> database::repository::Rules;
+
+pub struct Repositories {
+    pub <plural>: std::sync::Arc<dyn database::repository::Repository<pb::<Message>>>,
+    // ... one per resource
+}
+/// Looks each message up in `pool` and binds a RecordsRepository per resource.
+pub fn repositories(db: &database::records::DB, pool: &prost_reflect::DescriptorPool)
+    -> database::Result<Repositories>;
+```
+
+```rust
+use repository::library::v1 as library;
+
+let db = OrmProvider::new(pool).set_database("").await?;
+let books = DESCRIPTOR_POOL.get_message_by_name("library.v1.Book").unwrap();
+db.schema.ensure_schema(&library::book_resource(books)).await?;
+let repos = library::repositories(&db, &DESCRIPTOR_POOL)?;
+let book = repos.books.get("publishers/acme/books/dune").await?;
+```
+
+#### How fields become columns
+
+| IR | `Column` |
+| --- | --- |
+| column name, proto field | `name`, `field` (empty for a column no field carries) |
+| `string`, `int32/64`, `uint32/64`, `float`/`double`, `bool`, `bytes`, `google.protobuf.Timestamp` | `Kind::String`, `Int`, `Uint`, `Float`, `Bool`, `Bytes`, `Timestamp` |
+| an enum | `Kind::String` with `labels` (number → label, spelled as gorm stores it: `FORMAT_EBOOK` is `EBOOK`), so the label is stored, not the number |
+| the sql target's type (`VARCHAR(255)`, `(store.v1.column)` overrides, …) | `sql_type`; an enum's is the Postgres enum type the DDL declares (`"library_v1"."format"`) |
+| `REQUIRED` / `IDENTIFIER` | `not_null` |
+| `(store.v1.column).unique`, a single-column unique index | `unique` |
+| the synthesized `id` | `primary_key`, `generated: Some(Generated::Ulid)` (or `Uuid`), no field |
+| `create_time` / `update_time` (`OUTPUT_ONLY` Timestamp), synthesized `created_at` / `updated_at` | `auto_create` / `auto_update` |
+| a parent's `<parent>_id` | a field-less `NOT NULL` column, a foreign key, and `Rules.parent_column` |
+| `google.api.resource_reference` | a foreign key to the referenced resource's column; to a top-level resource, also a `Rules.references` entry, so the bare id is stored as Go stores it |
+| `(store.v1.query) = {search: true}` on a filterable text column | listed in `Resource.search` (sorted column names), the columns a bareword filter term searches: exactly the gorm filter spec's `Search`, from the same function |
+
+The resource's key (`pk_column`) is its `name` column: records are addressed by
+resource name, while `id` stays the SQL primary key.
+
+`<resource>_rules()` also carries the `google.api.resource` `pattern`, from which
+the repository checks names, mints them (`publishers/<ULID>`, or a ULID id under
+a parent given as `publishers/p/books/`) and sets a root resource's `id` to its
+name's id, the same rows a Go repository's `Create` writes. `parent_column` is set only under a
+two-collection pattern; a deeper resource gets `None` (its parent is keyed by a
+surrogate Go looks up), so the runtime cannot fill its `<parent>_id` yet.
+
+On Postgres the runtime casts enum values to the `sql_type` enum type and
+`ensure_schema` creates it. SQLite and MySQL cannot parse that type name in
+`CREATE TABLE`, so create their tables from a copy whose enum `sql_type` is
+cleared (as `examples/library-rust` does) until the runtime falls back itself.
+
+#### Caches
+
+When a package has a resource with `(cache.v1.cache)` record or list caching
+enabled (read by extension number 52001, so no dependency on protoc-gen-cache),
+its `mod.rs` also declares `pub mod cache;`: protoc-gen-cache (`lang=rust`) writes
+`<package path>/cache.rs` beside it, decorating these repositories. Run both
+plugins into the same `out:`.
+
+#### Not yet
+
+Generation fails, naming the field, for a resource the records runtime cannot
+store in one row: a value object or deeper graph in a child table, a repeated
+reference in a join table, a repeated field, a message column other than
+`google.protobuf.Timestamp` (wrappers, `Duration`, `google.type.*`, documents)
+and a oneof's case column. Facets, `ListByKeys`, read masks, batches and units,
+and the GraphQL adapter have reached the Go repositories and not yet Rust's.
+
+The example [`examples/library-rust`](examples/library-rust) mounts the
+generated crate beside its prost messages and checks, on SQLite, that every
+descriptor matches the sql target's DDL and round-trips Book, Publisher and
+Author through `repositories()`, reading the stored rows back to check they are
+the rows the Go repositories write too: minted names and ids, the parent's id, references as bare ids,
+enums as labels, etags, soft delete and parent-scoped lists (`just test-library`).
+
+### Time series in Rust (`lang=rust target=influxdb`)
+
+A message that declares `(store.v1.table).time_series` is a **measurement**: a
+stream of points identified by their tags and time, not rows identified by a key.
+The `influxdb` target, `lang=rust`, renders every measurement as a Rust client for
+[tpp-database](https://github.com/the-protobuf-project/runtime-rs) (the
+`database` crate of runtime-rs, pulled from its `main` branch), whose backends are
+**InfluxDB 3** and **Arrow IPC captures**. Messages without `time_series` render
+nothing here, so the target runs over a mixed tree while gorm, prisma and sql keep
+rendering the relational messages.
+
+```proto
+option (entity.v1.datasource) = {database: "sensors_db" schema: "environment"};
+
+message ClimateReading {
+  option (google.api.resource) = {type: "sensors.v1/ClimateReading" pattern: "climateReadings/{climate_reading}"};
+  option (store.v1.table) = {
+    time_series: {time: "observe_time", tags: ["device_id", "site"]}
+  };
+
+  string device_id = 1;                       // tag
+  string site = 2;                            // tag
+  google.protobuf.Timestamp observe_time = 3; // the point's time
+  double temperature_c = 4;                   // every other field is a stored value
+  ReadingQuality quality = 5;
+}
+```
+
+```yaml
+- local: protoc-gen-store
+  out: gen/rust
+  strategy: all
+  opt:
+    - lang=rust
+    - target=influxdb
+    - crate=sensors   # the Cargo package name; default "generated"
+```
+
+#### Output layout
+
+The tree is laid out as the gorm target lays out Go: one crate for the whole
+output, as gorm's is one Go module.
+
+```text
+gen/rust/
+  Cargo.toml, lib.rs                     the crate                  (gorm: go_module)
+  seriesx/mod.rs                         shared runtime: Query, ... (gorm: gormx/)
+  sensors_db/mod.rs                      selects the database       (gorm: migrate.go)
+  sensors_db/README.md
+  sensors_db/environment/models.rs       structs, enums, descriptors (gorm: models.go)
+  sensors_db/environment/climate_reading_store.rs   one store per table (gorm: <model>_store.go)
+  sensors_db/fleet/...
+```
+
+#### How storage is divided
+
+| Proto | InfluxDB 3 | Arrow captures | Rust |
+| --- | --- | --- | --- |
+| database (`entity.v1.datasource`) | a database | `<root>/<database>/` | `<db>` module: `DATABASE`, `connect_influx*`, `open_arrow`, `mirror` |
+| schema | — (InfluxDB has none) | — | a module |
+| message | a table | `<root>/<database>/<table>/` | a struct and its `<Model>Store` |
+| `time_series.tags` | tags | tag columns | `<Model>Tag` and one query filter per tag |
+| `time_series.time` | `time` | the time column | `i64` epoch nanoseconds |
+| any other field | a field | a column | a struct field; `<Model>Field` when numeric |
+
+Because a schema is only a module, two schemas of one database declaring the
+same table would write into one InfluxDB table, so generation refuses it.
+
+#### Using it
+
+```rust
+use sensors::sensors_db::{self, environment::*};
+
+// Select the database: InfluxDB 3 from INFLUX_HOST / INFLUX_TOKEN
+// (INFLUX_DATABASE overrides "sensors_db"), Arrow captures, or both.
+let influx = sensors_db::connect_influx_env().await?;
+let arrow = sensors_db::open_arrow("captures").await?;
+let db = sensors_db::mirror(influx, arrow);
+sensors_db::ensure_schema(&db).await?;
+
+// Select the table: one store per measurement.
+let climate = ClimateReadingStore::new(&db);   // ClimateReadingStore::TABLE == "climate_readings"
+climate.create_many(&points).await?;
+
+let north = climate.query().between(start, end).site("north").all().await?;
+let newest = climate.query().device_id("probe-2").latest().await?;
+let per_minute = climate
+    .query()
+    .between(start, end)
+    .group_by(ClimateReadingTag::Site)
+    .aggregate(Duration::from_secs(60), [ClimateReadingField::TemperatureC.avg()])
+    .await?;
+```
+
+`Query` reads a page (`fetch`), every point (`all`), the newest (`latest`), a
+`count`, or reduced buckets (`aggregate`); `filter` adds any AIP-160 clause. A
+proto enum becomes a Rust `enum` with `TryFrom<i32>`, while the field keeps the
+`i32`, as prost does. `provision_influx` creates the database with a retention.
+
+For sustained ingest, wrap the database in `buffered`: each `create` queues into
+a background batch writer (5,000 points a batch, 8 in flight), about 32,000
+points/s against a local InfluxDB 3 Core where an awaited `create` manages about
+one, since each durable write waits for the WAL. Queued points are in memory until
+flushed, so `db.close().await?` before exit.
+
+| Proto | Rust | `Kind` |
+| --- | --- | --- |
+| `string` | `String` | `String` |
+| `bool` | `bool` | `Bool` |
+| `int32` / `int64` | `i32` / `i64` | `Int` |
+| `uint32` / `uint64` | `u32` / `u64` | `Uint` |
+| `float` / `double` | `f32` / `f64` | `Float` |
+| `enum` | `i32` + a Rust `enum` | `Enum` |
+| `Timestamp` | `i64` epoch nanoseconds | `Timestamp` for the time field, `Int` otherwise |
+
+The time field is a `google.protobuf.Timestamp` or an `int64` of epoch
+nanoseconds; tags are `string` fields. Only the message's own fields are
+rendered: the surrogate key and audit timestamps the relational targets
+synthesize are not part of a point. A point is written whole and neither backend
+stores a null, so generation fails, naming the field, on anything a point cannot
+hold: repeated fields, maps and documents, wrappers and other messages, `optional`
+and `oneof` fields, `bytes` and the remaining well-known types, and a field that
+becomes a child table. Mark such a field `(entity.v1.column).skip` to leave it out
+everywhere.
+
+[`examples/generated/rust/influxdb/sensors`](examples/generated/rust/influxdb/sensors) is the client generated from
+[`examples/proto/sensors`](examples/proto/sensors), and
+[`examples/sensors`](examples/sensors) runs it (`just test-sensors`). To build against a local
+runtime-rs checkout, redirect the dependency from your workspace rather than
+editing generated output:
+
+```toml
+[patch."https://github.com/the-protobuf-project/runtime-rs"]
+tpp-database = { path = "../runtime-rs/database" }
+```
+
+## TypeScript (Prisma)
+
+`target=prisma` writes a complete, runnable Prisma 7 project per database: a
+multi-file schema (one `.prisma` file per source proto), `package.json`,
+`tsconfig.json`, a Prisma config, and `.env.example`. Setup is in
+[Setup → TypeScript](#typescript-setup), and [Output layout](#output-layout)
+shows the tree.
+
+`.env` is never generated, only `.env.example`: a protoc plugin overwrites every
+file it writes, so generating `.env` would erase your credentials on the next
+`buf generate`. Keep `.env` git-ignored and yours.
+
 ## Projections and search
+
+> Projections are generated for **Go** (`target=repository`, and `target=opensearch`
+> for search indices) today. The Rust repository target fails on a projection
+> rather than ignoring it.
 
 A **projection** is a table derived from other resources, kept current inside
 the writes to them, and searched by time window, tags, JSON attributes and
@@ -1130,273 +1726,6 @@ is gone, and drops the old index.
 
 The example in [`examples/search`](examples/search) runs all of this against
 Postgres and OpenSearch (`just search`, `just test-search`).
-
-## Time series in Rust (`lang=rust target=influxdb`)
-
-A message that declares `(store.v1.table).time_series` is a **measurement**: a
-stream of points identified by their tags and time, not rows identified by a key.
-The `influxdb` target, `lang=rust`, renders every measurement as a Rust client for
-[tpp-database](https://github.com/the-protobuf-project/runtime-rs) (the
-`database` crate of runtime-rs, pulled from its `main` branch), whose backends are
-**InfluxDB 3** and **Arrow IPC captures**. Messages without `time_series` render
-nothing here, so the target runs over a mixed tree while gorm, prisma and sql keep
-rendering the relational messages.
-
-```proto
-option (entity.v1.datasource) = {database: "sensors_db" schema: "environment"};
-
-message ClimateReading {
-  option (google.api.resource) = {type: "sensors.v1/ClimateReading" pattern: "climateReadings/{climate_reading}"};
-  option (store.v1.table) = {
-    time_series: {time: "observe_time", tags: ["device_id", "site"]}
-  };
-
-  string device_id = 1;                       // tag
-  string site = 2;                            // tag
-  google.protobuf.Timestamp observe_time = 3; // the point's time
-  double temperature_c = 4;                   // every other field is a stored value
-  ReadingQuality quality = 5;
-}
-```
-
-```yaml
-- local: protoc-gen-store
-  out: gen/rust
-  strategy: all
-  opt:
-    - lang=rust
-    - target=influxdb
-    - crate=sensors   # the Cargo package name; default "generated"
-```
-
-### Output layout
-
-The tree is laid out as the gorm target lays out Go: one crate for the whole
-output, as gorm's is one Go module.
-
-```text
-gen/rust/
-  Cargo.toml, lib.rs                     the crate                  (gorm: go_module)
-  seriesx/mod.rs                         shared runtime: Query, ... (gorm: gormx/)
-  sensors_db/mod.rs                      selects the database       (gorm: migrate.go)
-  sensors_db/README.md
-  sensors_db/environment/models.rs       structs, enums, descriptors (gorm: models.go)
-  sensors_db/environment/climate_reading_store.rs   one store per table (gorm: <model>_store.go)
-  sensors_db/fleet/...
-```
-
-### How storage is divided
-
-| Proto | InfluxDB 3 | Arrow captures | Rust |
-| --- | --- | --- | --- |
-| database (`entity.v1.datasource`) | a database | `<root>/<database>/` | `<db>` module: `DATABASE`, `connect_influx*`, `open_arrow`, `mirror` |
-| schema | — (InfluxDB has none) | — | a module |
-| message | a table | `<root>/<database>/<table>/` | a struct and its `<Model>Store` |
-| `time_series.tags` | tags | tag columns | `<Model>Tag` and one query filter per tag |
-| `time_series.time` | `time` | the time column | `i64` epoch nanoseconds |
-| any other field | a field | a column | a struct field; `<Model>Field` when numeric |
-
-Because a schema is only a module, two schemas of one database declaring the
-same table would write into one InfluxDB table, so generation refuses it.
-
-### Using it
-
-```rust
-use sensors::sensors_db::{self, environment::*};
-
-// Select the database: InfluxDB 3 from INFLUX_HOST / INFLUX_TOKEN
-// (INFLUX_DATABASE overrides "sensors_db"), Arrow captures, or both.
-let influx = sensors_db::connect_influx_env().await?;
-let arrow = sensors_db::open_arrow("captures").await?;
-let db = sensors_db::mirror(influx, arrow);
-sensors_db::ensure_schema(&db).await?;
-
-// Select the table: one store per measurement.
-let climate = ClimateReadingStore::new(&db);   // ClimateReadingStore::TABLE == "climate_readings"
-climate.create_many(&points).await?;
-
-let north = climate.query().between(start, end).site("north").all().await?;
-let newest = climate.query().device_id("probe-2").latest().await?;
-let per_minute = climate
-    .query()
-    .between(start, end)
-    .group_by(ClimateReadingTag::Site)
-    .aggregate(Duration::from_secs(60), [ClimateReadingField::TemperatureC.avg()])
-    .await?;
-```
-
-`Query` reads a page (`fetch`), every point (`all`), the newest (`latest`), a
-`count`, or reduced buckets (`aggregate`); `filter` adds any AIP-160 clause. A
-proto enum becomes a Rust `enum` with `TryFrom<i32>`, while the field keeps the
-`i32`, as prost does. `provision_influx` creates the database with a retention.
-
-For sustained ingest, wrap the database in `buffered`: each `create` queues into
-a background batch writer (5,000 points a batch, 8 in flight), about 32,000
-points/s against a local InfluxDB 3 Core where an awaited `create` manages about
-one, since each durable write waits for the WAL. Queued points are in memory until
-flushed, so `db.close().await?` before exit.
-
-| Proto | Rust | `Kind` |
-| --- | --- | --- |
-| `string` | `String` | `String` |
-| `bool` | `bool` | `Bool` |
-| `int32` / `int64` | `i32` / `i64` | `Int` |
-| `uint32` / `uint64` | `u32` / `u64` | `Uint` |
-| `float` / `double` | `f32` / `f64` | `Float` |
-| `enum` | `i32` + a Rust `enum` | `Enum` |
-| `Timestamp` | `i64` epoch nanoseconds | `Timestamp` for the time field, `Int` otherwise |
-
-The time field is a `google.protobuf.Timestamp` or an `int64` of epoch
-nanoseconds; tags are `string` fields. Only the message's own fields are
-rendered: the surrogate key and audit timestamps the relational targets
-synthesize are not part of a point. A point is written whole and neither backend
-stores a null, so generation fails, naming the field, on anything a point cannot
-hold: repeated fields, maps and documents, wrappers and other messages, `optional`
-and `oneof` fields, `bytes` and the remaining well-known types, and a field that
-becomes a child table. Mark such a field `(entity.v1.column).skip` to leave it out
-everywhere.
-
-[`examples/generated/rust/influxdb/sensors`](examples/generated/rust/influxdb/sensors) is the client generated from
-[`examples/proto/sensors`](examples/proto/sensors), and
-[`examples/sensors`](examples/sensors) runs it (`just test-sensors`). To build against a local
-runtime-rs checkout, redirect the dependency from your workspace rather than
-editing generated output:
-
-```toml
-[patch."https://github.com/the-protobuf-project/runtime-rs"]
-tpp-database = { path = "../runtime-rs/database" }
-```
-
-## Repositories in Rust (`lang=rust target=repository`)
-
-The `repository` target, `lang=rust`, renders the same repositories the Go
-target does, for the same messages: every `google.api.resource` table with a
-generated key (`(entity.v1.table) = {id: ID_STRATEGY_ULID}`). Go composes the
-gorm output; Rust binds the typed repository contract of
-[tpp-database](https://github.com/the-protobuf-project/runtime-rs)
-(`database::repository::RecordsRepository`), which runs over any records
-provider: Postgres, MySQL, SQLite, MongoDB, Redis or a Tauri store.
-
-Each resource is described to the runtime with a `database::records::Resource`
-built from the IR the sql and gorm targets render, so the table, column names,
-SQL types, keys, `UNIQUE` / `NOT NULL` and foreign keys are theirs, and a Go
-service and a Rust service share one database.
-
-```yaml
-- local: protoc-gen-store
-  out: gen/rust/repository
-  opt:
-    - lang=rust
-    - target=repository
-    - crate=library                 # the Cargo package name; default "generated"
-    - rust_proto_module=crate::pb   # where the prost messages live; the default
-```
-
-### Output layout
-
-| File | Holds |
-| --- | --- |
-| `Cargo.toml`, `lib.rs` | one crate, as influxdb's; `lib.rs` declares a module per proto package |
-| `<package path>/mod.rs` | one proto package's repositories: `library.v1` → `library/v1/mod.rs` |
-
-The code names the prost messages through `rust_proto_module` (default
-`crate::pb`, as protoc-gen-service's Rust target names them), so the tree is
-usually mounted into the crate that holds them, beside the generated services:
-
-```rust
-pub mod pb { /* prost + prost-reflect messages, e.g. pb::library::v1::Book */ }
-
-#[path = "../gen/rust/repository/lib.rs"]
-pub mod repository;
-```
-
-The messages must derive `prost_reflect::ReflectMessage` (prost-reflect-build).
-
-### Generated API
-
-Per proto package, for each resource (`<resource>` is the message name in
-snake_case, `<plural>` the `google.api.resource` plural in snake_case):
-
-```rust
-/// The storage descriptor: table, schema, key (the resource name), columns, foreign keys.
-pub fn <resource>_resource(message: prost_reflect::MessageDescriptor) -> database::records::Resource;
-/// Etag, soft delete (OUTPUT_ONLY delete_time / expire_time) and output-only fields.
-/// Retention is zero; the caller sets it.
-pub fn <resource>_rules() -> database::repository::Rules;
-
-pub struct Repositories {
-    pub <plural>: std::sync::Arc<dyn database::repository::Repository<pb::<Message>>>,
-    // ... one per resource
-}
-/// Looks each message up in `pool` and binds a RecordsRepository per resource.
-pub fn repositories(db: &database::records::DB, pool: &prost_reflect::DescriptorPool)
-    -> database::Result<Repositories>;
-```
-
-```rust
-use repository::library::v1 as library;
-
-let db = OrmProvider::new(pool).set_database("").await?;
-let books = DESCRIPTOR_POOL.get_message_by_name("library.v1.Book").unwrap();
-db.schema.ensure_schema(&library::book_resource(books)).await?;
-let repos = library::repositories(&db, &DESCRIPTOR_POOL)?;
-let book = repos.books.get("publishers/acme/books/dune").await?;
-```
-
-### How fields become columns
-
-| IR | `Column` |
-| --- | --- |
-| column name, proto field | `name`, `field` (empty for a column no field carries) |
-| `string`, `int32/64`, `uint32/64`, `float`/`double`, `bool`, `bytes`, `google.protobuf.Timestamp` | `Kind::String`, `Int`, `Uint`, `Float`, `Bool`, `Bytes`, `Timestamp` |
-| an enum | `Kind::String` with `labels` (number → label, spelled as gorm stores it: `FORMAT_EBOOK` is `EBOOK`), so the label is stored, not the number |
-| the sql target's type (`VARCHAR(255)`, `(store.v1.column)` overrides, …) | `sql_type`; an enum's is the Postgres enum type the DDL declares (`"library_v1"."format"`) |
-| `REQUIRED` / `IDENTIFIER` | `not_null` |
-| `(store.v1.column).unique`, a single-column unique index | `unique` |
-| the synthesized `id` | `primary_key`, `generated: Some(Generated::Ulid)` (or `Uuid`), no field |
-| `create_time` / `update_time` (`OUTPUT_ONLY` Timestamp), synthesized `created_at` / `updated_at` | `auto_create` / `auto_update` |
-| a parent's `<parent>_id` | a field-less `NOT NULL` column, a foreign key, and `Rules.parent_column` |
-| `google.api.resource_reference` | a foreign key to the referenced resource's column; to a top-level resource, also a `Rules.references` entry, so the bare id is stored as Go stores it |
-| `(store.v1.query) = {search: true}` on a filterable text column | listed in `Resource.search` (sorted column names), the columns a bareword filter term searches: exactly the gorm filter spec's `Search`, from the same function |
-
-The resource's key (`pk_column`) is its `name` column: records are addressed by
-resource name, while `id` stays the SQL primary key.
-
-`<resource>_rules()` also carries the `google.api.resource` `pattern`, from which
-the repository checks names, mints them (`publishers/<ULID>`, or a ULID id under
-a parent given as `publishers/p/books/`) and sets a root resource's `id` to its
-name's id, as Go's `Create` does. `parent_column` is set only under a
-two-collection pattern; a deeper resource gets `None` (its parent is keyed by a
-surrogate Go looks up), so the runtime cannot fill its `<parent>_id` yet.
-
-On Postgres the runtime casts enum values to the `sql_type` enum type and
-`ensure_schema` creates it. SQLite and MySQL cannot parse that type name in
-`CREATE TABLE`, so create their tables from a copy whose enum `sql_type` is
-cleared (as `examples/library-rust` does) until the runtime falls back itself.
-
-### Caches
-
-When a package has a resource with `(cache.v1.cache)` record or list caching
-enabled (read by extension number 52001, so no dependency on protoc-gen-cache),
-its `mod.rs` also declares `pub mod cache;`: protoc-gen-cache (`lang=rust`) writes
-`<package path>/cache.rs` beside it, decorating these repositories. Run both
-plugins into the same `out:`.
-
-### Not yet
-
-Generation fails, naming the field, for a resource the records runtime cannot
-store in one row: a value object or deeper graph in a child table, a repeated
-reference in a join table, a repeated field, a message column other than
-`google.protobuf.Timestamp` (wrappers, `Duration`, `google.type.*`, documents)
-and a oneof's case column. Facets, `ListByKeys`, read masks, batches and units,
-and the GraphQL adapter are Go-only for now.
-
-The example [`examples/library-rust`](examples/library-rust) mounts the
-generated crate beside its prost messages and checks, on SQLite, that every
-descriptor matches the sql target's DDL and round-trips Book, Publisher and
-Author through `repositories()`, reading the stored rows back to check they are
-what Go writes: minted names and ids, the parent's id, references as bare ids,
-enums as labels, etags, soft delete and parent-scoped lists (`just test-library`).
 
 ## Reference integrity
 
@@ -1831,7 +2160,7 @@ Passed via `opt:` in `buf.gen.yaml`.
 | `converters` | **gorm only.** Emit `protobuf.go` proto ↔ model converters per schema — `<Model>ToProto` / `<Model>FromProto` plus enum value mappers (see [converters](#proto--model-converters)). Off by default. |
 | `telemetry` | **gorm only.** Fold first-party [telemetry](https://github.com/the-protobuf-project/telemetry) instrumentation into the generated output — instrumented stores (with `stores`), a `telemetry` adapter/plugin package, a `filterx` observer (with `filters`), and `Registry.Instrument` (see [Telemetry](#gorm-stores-and-tracing)). **Off by default**; takes effect with `go_module`, and adds the `github.com/the-protobuf-project/telemetry/telemetry-go` dependency. Tune it further via `store.yaml` `telemetry:` and `telemetry.v1`'s `(telemetry.v1.telemetry)`/`(telemetry.v1.telemetry_field)` annotations. |
 | `strict` | Per-rule severity for schema problems. `""` (default) warns on everything; `true` makes every rule a hard error; a spec like `ref:error,collision:warn,index:error,lint:warn` sets severity per rule. Rules: **ref** (unresolved/dropped references), **collision** (global name qualification), **index** (index names an unknown column), **lint** (validate-on-generate advisories). |
-| `config` | Path to a [`store.yaml`](#configuration--ormyaml) layout config. |
+| `config` | Path to a [`store.yaml`](#configuration--storeyaml) layout config. |
 | `license_header` | Copyright/licence lines to place above the banner of every generated file — `\n`-separated, e.g. `license_header=Copyright 2026 Me.\nSPDX-License-Identifier: Apache-2.0`. Write them **without** comment markers: each target applies its own (`//` for Go, Prisma and TypeScript, `--` for SQL), so one value covers the whole output tree. Unset (the default) stamps nothing, because generated code belongs to whoever ran the generator, not to this plugin. |
 | `gorm_module` / `graphql_module` | **repository** (and `gorm_module` for **opensearch**): import paths of the generated gorm output and GraphQL client. |
 | `graphql_root_field_prefix` | **repository**: the DDN subgraph's `graphqlRootFieldPrefix` (the graphql target's `root_field_prefix`), carried by the root fields the DDN reference plugin's config names. Default none. |
@@ -1998,6 +2327,22 @@ structured value types (`google.type.Money`, `PostalAddress`, …) relationalize
 into a child table instead (see [Relationalized nesting](#defaults-applied-automatically)).
 Nullable columns become pointer (`*T`) / optional (`T?`) types.
 
+## Adding a language
+
+A language is a renderer over the shared model, not a port of another
+language's output. Parsing, `store.yaml`, defaults, naming and validation are
+language-independent; a target keeps each language's templates in their own
+folder (`plugin/factory/target/<target>/` with a `<lang>` subfolder, as the
+repository target's `go` and `rust` show) and is selected with `lang=`.
+
+A new language is done when:
+
+- it renders from the same IR, so its tables, columns, SQL types and keys are
+  the `sql` target's, and it can share a database with the other languages;
+- it has golden tests and a compiled example under `examples/` that CI builds and
+  tests, as `examples/library-rust` does for Rust;
+- it has a [Setup](#setup) section and a section of its own in this README.
+
 ## Examples
 
 All generated output lives under [`examples/generated/`](examples/generated),
@@ -2019,17 +2364,17 @@ examples/generated/
 
 Regenerate all of it with `just examples`, and run it with `just test-examples`
 (the Go search and references tests skip without `STORE_TEST_POSTGRES_DSN` and
-`STORE_TEST_OPENSEARCH_URL`). Generated Go paths never hold an underscore: a
-database `bookstore_db` generates into `bookstoredb/`.
+`STORE_TEST_OPENSEARCH_URL`), and the Rust library example with `just test-library`.
 
 ## Building from source
 
 ```bash
 git clone https://github.com/the-protobuf-project/store
 cd store
-go build ./plugin/cmd/protoc-gen-store   # the plugin binary
-go test ./...                              # golden + unit tests
+go build ./plugin/cmd/protoc-gen-store   # the plugin binary (it is written in Go)
+go test ./...                              # golden + unit tests, every language
 buf lint                                   # proto linting
+just test-examples                         # the generated examples, Go and Rust
 ```
 
 ## Releases & versioning
