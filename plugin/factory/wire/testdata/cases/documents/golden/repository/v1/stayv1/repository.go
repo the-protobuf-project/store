@@ -20,8 +20,8 @@ import (
 	"example.com/test/gen"
 	"example.com/test/gen/repox"
 	"example.com/test/genql"
-	"example.com/test/gormdb/filterx"
 	"example.com/test/gormdb/v1/stayv1"
+	"github.com/the-protobuf-project/runtime-go/database/filterx"
 	"gorm.io/gorm"
 )
 

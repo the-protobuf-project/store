@@ -17,7 +17,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/the-protobuf-project/store/examples/generated/go/gorm/references/filterx"
+	"github.com/the-protobuf-project/runtime-go/database/filterx"
 	"github.com/the-protobuf-project/store/examples/generated/go/protobuf/references/catalogv1"
 	"github.com/the-protobuf-project/store/examples/generated/go/repository/references/catalog/catalog"
 	"github.com/the-protobuf-project/store/examples/generated/go/repository/references/repox"

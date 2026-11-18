@@ -50,7 +50,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
 
-	"example.com/test/gormdb/filterx"
+	"github.com/the-protobuf-project/runtime-go/database/filterx"
 	"github.com/the-protobuf-project/runtime-go/network/graphql"
 )
 

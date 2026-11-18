@@ -623,7 +623,6 @@ generated/go/gorm/bookstore/bookstoredb/bookstorev1/models.go        # package =
 generated/go/gorm/bookstore/bookstoredb/bookstorev1/author_store.go  # typed CRUD store (stores opt)
 generated/go/gorm/bookstore/bookstoredb/bookstorev1/filters.go       # AIP-160/132 filter & sort specs (filters opt)
 generated/go/gorm/bookstore/bookstoredb/bookstorev1/protobuf.go      # proto ↔ model converters (converters opt)
-generated/gorm/filterx/                             # shared filter/order/list engines: SQL + Hasura (filters opt)
 generated/go/gorm/bookstore/bookstoredb/migrate.go              # factory Registry + EnsureSchemas + Instrument (needs go_module)
 generated/go/gorm/bookstore/bookstoredb/README.md               # ER diagram + model reference
 gen/rust/repository/Cargo.toml, lib.rs           # Rust: one crate (lang=rust)
@@ -757,8 +756,9 @@ as **specs (data) + engines (code)**:
   tags, reference), the free-text `Search` columns, and the `order_by`
   allowlist. Tune what each field exposes with
   [`(store.v1.query)`](#storev1query--field-level).
-- `filterx/` — one shared, chainable SDK package holding the engines the specs
-  drive. `filterx.Gorm[M]` renders parsed conditions to SQL on a `*gorm.DB`;
+- runtime-go's [`database/filterx`](https://github.com/the-protobuf-project/runtime-go/tree/main/database/filterx),
+  imported, not generated — the shared, chainable SDK holding the engines the
+  specs drive. `filterx.Gorm[M]` renders parsed conditions to SQL on a `*gorm.DB`;
   `filterx.Hasura[M]` renders the **same filter strings** to Hasura DDN
   GraphQL `BoolExp` predicates — so a gRPC/REST list endpoint and a
   Hasura-backed GraphQL API accept identical filters by construction.
@@ -880,11 +880,15 @@ that case.
 Every engine is tunable through its chainable options: `Override` installs a
 custom handler for one filter field (the escape hatch for derived predicates
 the schema can't express), and `Observe` plugs an `Observer` in for query spans
-and rejected-input debug events. The `telemetry` opt additionally emits a
-ready-made [telemetry](https://github.com/the-protobuf-project/telemetry)
-observer adapter (`filterx.TelemetryObserver`). The Hasura engine adds a
-dependency on `github.com/the-protobuf-project/runtime-go` (its `graphql`
-package).
+and rejected-input debug events. The engines start out reporting through the
+process's default signals (runtime-go's `telemetry.Default`, which
+`observability.Adopt` sets), so every list query is a span without wiring
+anything; `Observe` replaces that. The `telemetry` opt additionally emits a
+ready-made [telemetry](https://github.com/the-protobuf-project/telemetry) SDK
+observer, `telemetry.FilterxObserver(o)`, in the generated telemetry package.
+(Before store v1.9.0 the engines were generated into every project as
+`<go_module>/filterx`, and the observer was `filterx.TelemetryObserver`;
+regenerating removes both.)
 
 ### Proto ↔ model converters
 
@@ -2159,9 +2163,9 @@ Passed via `opt:` in `buf.gen.yaml`.
 | `target` | What to emit: `prisma` \| `gorm` \| `sql` \| `repository` \| `opensearch` \| `influxdb` \| `graphql`. Required. (`graphql` reads its endpoint from `store.yaml`'s [`graphql`](#top-level-keys) block — see [GraphQL client SDK](#graphql-client-sdk).) |
 | `go_module` | **gorm only.** Go import path of the output directory (e.g. `github.com/me/gen`). Enables the `migrate.go` factory registry, whose package imports each per-schema models package. Omit it and the per-schema model packages still generate, just without the aggregator. |
 | `stores` | **gorm only.** Also emit a typed CRUD store per resource — one `<model>_store.go` file each (see [GORM stores](#gorm-stores-and-tracing)). Off by default; turning it on adds `gorm.io/gorm` and `github.com/the-protobuf-project/runtime-go/database` (its `storex` runtime) dependencies to each models package. |
-| `filters` | **gorm only.** Emit AIP-160 filter / AIP-132 order_by specs per schema (`filters.go`) plus the shared `filterx` engine package serving both **SQL (GORM)** and **Hasura DDN GraphQL** (see [filters and list engines](#aip-160-filters-and-list-engines-sql--hasura)). Off by default; requires `go_module`. The Hasura engine adds a `github.com/the-protobuf-project/runtime-go` dependency. With `telemetry`, also emits a [telemetry](https://github.com/the-protobuf-project/telemetry) `Observer` adapter (`filterx.TelemetryObserver`) for the list engines' spans and debug events. |
+| `filters` | **gorm only.** Emit AIP-160 filter / AIP-132 order_by specs per schema (`filters.go`) for runtime-go's `database/filterx` engines, serving both **SQL (GORM)** and **Hasura DDN GraphQL** (see [filters and list engines](#aip-160-filters-and-list-engines-sql--hasura)). Off by default; adds the `github.com/the-protobuf-project/runtime-go/database` dependency. With `telemetry`, also emits a [telemetry](https://github.com/the-protobuf-project/telemetry) SDK `Observer` (`telemetry.FilterxObserver`) for the list engines' spans and debug events. |
 | `converters` | **gorm only.** Emit `protobuf.go` proto ↔ model converters per schema — `<Model>ToProto` / `<Model>FromProto` plus enum value mappers (see [converters](#proto--model-converters)). Off by default. |
-| `telemetry` | **gorm only.** Fold first-party [telemetry](https://github.com/the-protobuf-project/telemetry) instrumentation into the generated output — instrumented stores (with `stores`), a `telemetry` adapter/plugin package, a `filterx` observer (with `filters`), and `Registry.Instrument` (see [Telemetry](#gorm-stores-and-tracing)). **Off by default**; takes effect with `go_module`, and adds the `github.com/the-protobuf-project/telemetry/telemetry-go` dependency. Tune it further via `store.yaml` `telemetry:` and `telemetry.v1`'s `(telemetry.v1.telemetry)`/`(telemetry.v1.telemetry_field)` annotations. |
+| `telemetry` | **gorm only.** Fold first-party [telemetry](https://github.com/the-protobuf-project/telemetry) instrumentation into the generated output — instrumented stores (with `stores`), a `telemetry` adapter/plugin package, a `FilterxObserver` (with `filters`), and `Registry.Instrument` (see [Telemetry](#gorm-stores-and-tracing)). **Off by default**; takes effect with `go_module`, and adds the `github.com/the-protobuf-project/telemetry/telemetry-go` dependency. Tune it further via `store.yaml` `telemetry:` and `telemetry.v1`'s `(telemetry.v1.telemetry)`/`(telemetry.v1.telemetry_field)` annotations. |
 | `strict` | Per-rule severity for schema problems. `""` (default) warns on everything; `true` makes every rule a hard error; a spec like `ref:error,collision:warn,index:error,lint:warn` sets severity per rule. Rules: **ref** (unresolved/dropped references), **collision** (global name qualification), **index** (index names an unknown column), **lint** (validate-on-generate advisories). |
 | `config` | Path to a [`store.yaml`](#configuration--storeyaml) layout config. |
 | `license_header` | Copyright/licence lines to place above the banner of every generated file — `\n`-separated, e.g. `license_header=Copyright 2026 Me.\nSPDX-License-Identifier: Apache-2.0`. Write them **without** comment markers: each target applies its own (`//` for Go, Prisma and TypeScript, `--` for SQL), so one value covers the whole output tree. Unset (the default) stamps nothing, because generated code belongs to whoever ran the generator, not to this plugin. |
@@ -2180,8 +2184,8 @@ Passed via `opt:` in `buf.gen.yaml`.
 > silently doing nothing. Replace them with `telemetry` and `store.yaml`
 > `telemetry:`. `Registry.Instrument` now takes a
 > `*telemetry.Handle` (`Instrument(db, o)`, not
-> `Instrument(db, opts ...tracing.Option)`), and `filterx.PulseObserver` is now
-> `filterx.TelemetryObserver`.
+> `Instrument(db, opts ...tracing.Option)`), and `filterx.PulseObserver` became
+> `filterx.TelemetryObserver`, now `telemetry.FilterxObserver`.
 
 ## Defaults applied automatically
 

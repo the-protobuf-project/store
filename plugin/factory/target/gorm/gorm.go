@@ -57,17 +57,12 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 			return err
 		}
 	}
-	filterxEmitted := false   // likewise the shared filter engine packages
+	observerEmitted := false  // the filterx observer, once, in the telemetry package
 	telemetryEmitted := false // likewise the SDK adapter package
 	var pbIdx *pbIndex        // built lazily: only the converters emitter needs it
 	for _, db := range dbs {
 		if types.Provider(db.Provider) != types.Postgres {
 			return fmt.Errorf("gorm: database %q uses provider %q — the gorm target only supports postgres", db.Name, db.Provider)
-		}
-		if dbFilters(db) && dbGoModule(db) == "" {
-			return fmt.Errorf("gorm: database %q has the filters opt set but no go_module opt; "+
-				"the generated specs import the shared %q engine package by its import path, "+
-				"so set go_module to the import path of the gorm output directory", db.Name, filterxPkg)
 		}
 		if dbTelemetry(db) && dbGoModule(db) == "" {
 			return fmt.Errorf("gorm: database %q has the telemetry opt set but no go_module opt; "+
@@ -97,36 +92,24 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 					}
 				}
 			}
-			// Opt-in: AIP-160 filter / AIP-132 order_by specs per schema, plus the
-			// shared filterx package once for the whole tree (the backend-neutral
-			// core with the chainable Gorm and Hasura engines, and — with the
-			// telemetry opt — an telemetry Observer adapter).
+			// Opt-in: AIP-160 filter / AIP-132 order_by specs per schema, data for
+			// runtime-go's filterx engines (and, with the telemetry opt, the SDK's
+			// Observer for them in the telemetry package).
 			if dbFilters(db) && len(s.Tables) > 0 {
 				if view := filtersView(db, s, pkg, fx); view != nil {
 					ff := p.NewGeneratedFile(fmt.Sprintf("%s/%s/filters.go", gopkg.Dir(db.Name), pkg), "")
 					if err := renderGo(ff, "filters.go.tpl", view); err != nil {
 						return fmt.Errorf("gorm: %s/%s/filters.go: %w", db.Name, pkg, err)
 					}
-					if !filterxEmitted {
-						fv := filterxView(db)
-						for path, tpl := range map[string]string{
-							filterxPkg + "/filterx.go":    "filterx.go.tpl",
-							filterxPkg + "/gorm.go":       "filterx_gorm.go.tpl",
-							filterxPkg + "/hasura.go":     "filterx_hasura.go.tpl",
-							filterxPkg + "/opensearch.go": "filterx_opensearch.go.tpl",
-						} {
-							xf := p.NewGeneratedFile(path, "")
-							if err := renderGo(xf, tpl, fv); err != nil {
-								return fmt.Errorf("gorm: %s: %w", path, err)
-							}
+					if dbTelemetry(db) && !observerEmitted {
+						// The SDK's Observer for runtime-go's filterx engines,
+						// beside the adapter: the only package importing the SDK.
+						path := telemetry.Package + "/filterx.go"
+						pf := p.NewGeneratedFile(path, "")
+						if err := telemetry.WriteFilterxObserver(pf, filterxObserverView(db)); err != nil {
+							return fmt.Errorf("gorm: %s: %w", path, err)
 						}
-						if dbTelemetry(db) {
-							pf := p.NewGeneratedFile(filterxPkg+"/telemetry.go", "")
-							if err := telemetry.WriteFilterxObserver(pf, fv); err != nil {
-								return fmt.Errorf("gorm: %s/telemetry.go: %w", filterxPkg, err)
-							}
-						}
-						filterxEmitted = true
+						observerEmitted = true
 					}
 				}
 			}

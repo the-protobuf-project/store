@@ -20,8 +20,8 @@ import (
 	refdemov1 "example.com/test/gen"
 	"example.com/test/gen/repox"
 	"example.com/test/genql"
-	"example.com/test/gormdb/filterx"
 	"example.com/test/gormdb/lending/lending"
+	"github.com/the-protobuf-project/runtime-go/database/filterx"
 	"gorm.io/gorm"
 	"time"
 )

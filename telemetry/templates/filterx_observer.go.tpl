@@ -1,22 +1,24 @@
 {{.Header}}
 
-package filterx
+package {{.Package}}
 
 import (
 	"context"
 
 	"{{.TelemetrySDKImport}}"
+
+	"{{.FilterxImport}}"
 )
 
-// TelemetryObserver adapts an *telemetry.Telemetry handle to
-// the Observer interface the list engines report through: one span per query
-// and a debug log per rejected filter/order input. Wire it when building an
-// engine:
+// FilterxObserver adapts the SDK handle to the Observer runtime-go's filterx
+// list engines report through: one span per query and a debug log per
+// rejected filter/order input. The engines already report through the
+// process's default signals; wire this to report through o instead:
 //
-//	filterx.Gorm[Model](spec).Observe(filterx.TelemetryObserver(o))
-func TelemetryObserver(o *telemetry.Telemetry) Observer {
+//	filterx.Gorm[Model](spec).Observe(telemetry.FilterxObserver(o))
+func FilterxObserver(o *Handle) filterx.Observer {
 	if o == nil {
-		return NopObserver{}
+		return filterx.NopObserver{}
 	}
 	return telemetryObserver{o: o}
 }

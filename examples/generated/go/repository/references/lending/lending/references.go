@@ -22,7 +22,7 @@ package lending
 
 import (
 	"context"
-	"github.com/the-protobuf-project/store/examples/generated/go/gorm/references/filterx"
+	"github.com/the-protobuf-project/runtime-go/database/filterx"
 	"github.com/the-protobuf-project/store/examples/generated/go/repository/references/repox"
 )
 
