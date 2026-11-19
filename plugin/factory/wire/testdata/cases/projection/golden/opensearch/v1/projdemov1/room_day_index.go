@@ -16,8 +16,8 @@
 package projdemov1
 
 import (
-	"example.com/test/gen/osx"
 	"example.com/test/repo/v1/projdemov1"
+	"github.com/the-protobuf-project/runtime-go/database/osx"
 )
 
 // RoomDayIndex is the RoomDay projection ("projdemo_v1"."room_days") copied into OpenSearch

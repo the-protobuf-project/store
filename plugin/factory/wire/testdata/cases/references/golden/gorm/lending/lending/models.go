@@ -26,9 +26,9 @@ type Loan struct {
 	Name string `gorm:"column:name;not null;uniqueIndex" json:"name" validate:"required"`
 	// The book lent. Same server, other database: a foreign key. Foreign key to catalog.books(name) in database catalog (cross-database, constraint only, no relation).
 	Book string `gorm:"column:book;not null;index:idx_loans_book" json:"book" validate:"required"`
-	// The borrower's card, owned by another service: no foreign key reaches it, so writes resolve it with its AIP Get and its deletes ask us. TODO: unresolved reference to Card (not in this generation set); kept as a plain indexed column.
+	// The borrower's card, owned by another service: no foreign key reaches it, so writes resolve it with its AIP Get and its deletes ask us. Unresolved reference to Card (not in this generation set); kept as a plain indexed column.
 	Borrower string `gorm:"column:borrower;not null;index:idx_loans_borrower" json:"borrower" validate:"required"`
-	// Who to tell when a card is deleted; NOTIFY policy. TODO: unresolved reference to Card (not in this generation set); kept as a plain indexed column.
+	// Who to tell when a card is deleted; NOTIFY policy. Unresolved reference to Card (not in this generation set); kept as a plain indexed column.
 	Guarantor *string `gorm:"column:guarantor;index:idx_loans_guarantor" json:"guarantor,omitempty"`
 	// Server-owned state, written with UpdateWithOutputOnly.
 	State *string `gorm:"column:state" json:"state,omitempty"`

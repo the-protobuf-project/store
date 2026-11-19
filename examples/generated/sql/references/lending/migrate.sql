@@ -8,7 +8,7 @@
 --
 -- Single-file migration: every schema in one transaction. Idempotent — safe to re-apply.
 -- annotations: entity.v1 dev, store.v1 dev
--- engine:      protokit v1.4.0
+-- engine:      protokit v1.4.1
 --
 -- store — https://github.com/the-protobuf-project/store
 
@@ -28,9 +28,9 @@ CREATE TABLE IF NOT EXISTS "lending"."loans" (
     "name"  VARCHAR(255)  NOT NULL  UNIQUE,
     -- The book lent. Same server, other database: a foreign key. Foreign key to catalog.books(name) in database catalog (cross-database, constraint only, no relation).
     "book"  VARCHAR(255)  NOT NULL,
-    -- The borrower's card, owned by another service: no foreign key reaches it, so writes resolve it with its AIP Get and its deletes ask us. TODO: unresolved reference to Card (not in this generation set); kept as a plain indexed column.
+    -- The borrower's card, owned by another service: no foreign key reaches it, so writes resolve it with its AIP Get and its deletes ask us. Unresolved reference to Card (not in this generation set); kept as a plain indexed column.
     "borrower"  VARCHAR(255)  NOT NULL,
-    -- Who to tell when a card is deleted; NOTIFY policy. TODO: unresolved reference to Card (not in this generation set); kept as a plain indexed column.
+    -- Who to tell when a card is deleted; NOTIFY policy. Unresolved reference to Card (not in this generation set); kept as a plain indexed column.
     "guarantor"  VARCHAR(255),
     -- Server-owned state, written with UpdateWithOutputOnly.
     "state"  VARCHAR(255),
@@ -67,8 +67,8 @@ COMMENT ON TABLE "lending"."loans" IS 'A loan of a book to a borrower.';
 COMMENT ON COLUMN "lending"."loans"."id" IS 'Unique identifier for the record.';
 COMMENT ON COLUMN "lending"."loans"."name" IS 'The loan''s resource name.';
 COMMENT ON COLUMN "lending"."loans"."book" IS 'The book lent. Same server, other database: a foreign key. Foreign key to catalog.books(name) in database catalog (cross-database, constraint only, no relation).';
-COMMENT ON COLUMN "lending"."loans"."borrower" IS 'The borrower''s card, owned by another service: no foreign key reaches it, so writes resolve it with its AIP Get and its deletes ask us. TODO: unresolved reference to Card (not in this generation set); kept as a plain indexed column.';
-COMMENT ON COLUMN "lending"."loans"."guarantor" IS 'Who to tell when a card is deleted; NOTIFY policy. TODO: unresolved reference to Card (not in this generation set); kept as a plain indexed column.';
+COMMENT ON COLUMN "lending"."loans"."borrower" IS 'The borrower''s card, owned by another service: no foreign key reaches it, so writes resolve it with its AIP Get and its deletes ask us. Unresolved reference to Card (not in this generation set); kept as a plain indexed column.';
+COMMENT ON COLUMN "lending"."loans"."guarantor" IS 'Who to tell when a card is deleted; NOTIFY policy. Unresolved reference to Card (not in this generation set); kept as a plain indexed column.';
 COMMENT ON COLUMN "lending"."loans"."state" IS 'Server-owned state, written with UpdateWithOutputOnly.';
 COMMENT ON COLUMN "lending"."loans"."etag" IS 'Optimistic-concurrency token.';
 COMMENT ON COLUMN "lending"."loans"."delete_time" IS 'When the loan was soft-deleted.';

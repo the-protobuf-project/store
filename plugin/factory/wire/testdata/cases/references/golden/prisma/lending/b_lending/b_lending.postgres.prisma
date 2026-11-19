@@ -23,10 +23,10 @@ model Loan {
   /// The book lent. Same server, other database: a foreign key. Foreign key to catalog.books(name) in database catalog (cross-database, constraint only, no relation).
   book String @map("book")
 
-  /// The borrower's card, owned by another service: no foreign key reaches it, so writes resolve it with its AIP Get and its deletes ask us. TODO: unresolved reference to Card (not in this generation set); kept as a plain indexed column.
+  /// The borrower's card, owned by another service: no foreign key reaches it, so writes resolve it with its AIP Get and its deletes ask us. Unresolved reference to Card (not in this generation set); kept as a plain indexed column.
   borrower String @map("borrower")
 
-  /// Who to tell when a card is deleted; NOTIFY policy. TODO: unresolved reference to Card (not in this generation set); kept as a plain indexed column.
+  /// Who to tell when a card is deleted; NOTIFY policy. Unresolved reference to Card (not in this generation set); kept as a plain indexed column.
   guarantor String? @map("guarantor")
 
   /// Server-owned state, written with UpdateWithOutputOnly.
