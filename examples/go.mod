@@ -9,7 +9,7 @@ replace github.com/the-protobuf-project/store => ../
 require (
 	github.com/lib/pq v1.12.3
 	github.com/oh-tarnished/opensearch-go-sdk v0.1.1
-	github.com/the-protobuf-project/runtime-go/database v0.0.0-20261119080033-a8f090d59b0d
+	github.com/the-protobuf-project/runtime-go/database v0.0.0-20261119142527-c425ceffa120
 	github.com/the-protobuf-project/runtime-go/network v0.0.0-20261118052056-98385b147b4d
 	github.com/the-protobuf-project/store v0.0.0-00010101000000-000000000000
 	github.com/the-protobuf-project/telemetry/telemetry-go v1.3.3
