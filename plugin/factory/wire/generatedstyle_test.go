@@ -1,7 +1,6 @@
 package wire_test
 
 import (
-	"bufio"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -48,15 +47,12 @@ func generated(path string) bool {
 
 func checkStyle(t *testing.T, path string) {
 	t.Helper()
-	f, err := os.Open(path)
+	b, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
-	for n := 1; sc.Scan(); n++ {
-		line := sc.Text()
+	for i, line := range strings.Split(string(b), "\n") {
+		n := i + 1
 		if commentLine.MatchString(line) && separator.MatchString(line) {
 			t.Errorf("%s:%d: separator comment in generated output: %s", path, n, strings.TrimSpace(line))
 		}
