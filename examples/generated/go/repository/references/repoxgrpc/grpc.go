@@ -8,7 +8,7 @@
 //
 // gRPC binding of the reference contract, over runtime-go's database/repox.
 // annotations: entity.v1 dev, store.v1 dev
-// engine:      protokit v1.4.0
+// engine:      protokit v1.4.1
 //
 // store — https://github.com/the-protobuf-project/store
 

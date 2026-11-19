@@ -8,7 +8,7 @@
 --
 -- Validates the NOT VALID foreign keys migrate.sql adds across databases. Idempotent.
 -- annotations: entity.v1 dev, store.v1 dev
--- engine:      protokit v1.4.0
+-- engine:      protokit v1.4.1
 --
 -- store — https://github.com/the-protobuf-project/store
 

@@ -1685,14 +1685,14 @@ OpenSearch).
   strategy: all
   opt:
     - target=opensearch
-    - go_module=example.com/app/gen/opensearch
-    - gorm_module=example.com/app/gen/gorm            # filterx
     - repository_module=example.com/app/gen/repository # the repositories + projections
 ```
 
-It emits `osx/osx.go` (runtime, on
-[`github.com/oh-tarnished/opensearch-go-sdk`](https://github.com/oh-tarnished/opensearch-go-sdk))
-and `<db>/<schema>/<model>_index.go` per projection: `<Model>Index` with a
+It emits `<db>/<schema>/<model>_index.go` per projection, over runtime-go's
+[`database/osx`](https://github.com/the-protobuf-project/runtime-go/tree/main/database/osx)
+(on [`github.com/oh-tarnished/opensearch-go-sdk`](https://github.com/oh-tarnished/opensearch-go-sdk)).
+Before store v1.9.1 that runtime was generated as `osx/osx.go`; regenerating
+removes it. Per projection: `<Model>Index` with a
 generated mapping — `keyword` (text, enums, tags), `long`/`double`/
 `unsigned_long`/`boolean`, `date` (dates keep `YYYY-MM-DD`), `date_range` for
 the range column, `flat_object` for JSON plus typed properties under

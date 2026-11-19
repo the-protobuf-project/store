@@ -11,7 +11,7 @@
 //
 // The telemetry SDK as the Observer of runtime-go's filterx list engines.
 // annotations: entity.v1 dev, store.v1 dev
-// engine:      protokit v1.4.0
+// engine:      protokit v1.4.1
 // runtime:     github.com/the-protobuf-project/telemetry/telemetry-go
 //
 // store — https://github.com/the-protobuf-project/store

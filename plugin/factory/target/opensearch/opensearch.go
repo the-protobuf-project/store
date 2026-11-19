@@ -44,8 +44,9 @@ var templateFS embed.FS
 
 var tmpl = templates.MustParse(templateFS, "templates/*.tpl")
 
-// osxPkg is the shared runtime package name and directory.
-const osxPkg = "osx"
+// osxImport is the runtime the generated indices build on, runtime-go's
+// database/osx.
+const osxImport = "github.com/the-protobuf-project/runtime-go/database/osx"
 
 // SDKModule is the OpenSearch client the generated code imports.
 const SDKModule = "github.com/oh-tarnished/opensearch-go-sdk"
@@ -82,7 +83,6 @@ type indexView struct {
 // per projection.
 func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 	fx := facets.New(ir)
-	emitted := false
 	for _, db := range ir.Databases {
 		var views []indexView
 		for _, s := range db.Schemas {
@@ -91,9 +91,9 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 				if proj == nil {
 					continue
 				}
-				if db.Opt("go_module") == "" || db.Opt("gorm_module") == "" || db.Opt("repository_module") == "" {
-					return fmt.Errorf("opensearch: database %q needs the go_module, gorm_module and repository_module opts "+
-						"(import paths of this output dir, the generated gorm output and the generated repository output)", db.Name)
+				if db.Opt("repository_module") == "" {
+					return fmt.Errorf("opensearch: database %q needs the repository_module opt "+
+						"(the import path of the generated repository output)", db.Name)
 				}
 				v, err := viewOf(db, s, t, proj, fx)
 				if err != nil {
@@ -104,25 +104,6 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 		}
 		if len(views) == 0 {
 			continue
-		}
-		if !emitted {
-			f := p.NewGeneratedFile(osxPkg+"/"+osxPkg+".go", "")
-			if err := renderGo(f, "osx.go.tpl", map[string]any{
-				"Header": provenance.Render("//", header.Info{
-					PluginVersion: db.PluginVersion,
-					ProtocVersion: db.ProtocVersion,
-					Database:      db.Name,
-					SchemaLabel:   "package",
-					Schema:        osxPkg,
-					Notes:         []string{"Shared runtime for the generated OpenSearch indices."},
-				}),
-				"FilterxImport": "github.com/the-protobuf-project/runtime-go/database/filterx",
-				"RepoxImport":   "github.com/the-protobuf-project/runtime-go/database/repox",
-				"SDKImport":     SDKModule + "/opensearch",
-			}); err != nil {
-				return fmt.Errorf("opensearch: osx: %w", err)
-			}
-			emitted = true
 		}
 		for _, v := range views {
 			name := fmt.Sprintf("%s/%s/%s_index.go", gopkg.Dir(db.Name), v.Package, naming.SnakeCase(v.Model))
@@ -145,7 +126,7 @@ func viewOf(db *schema.Database, s *schema.Schema, t *schema.Table, proj *facets
 	if err != nil {
 		return indexView{}, fmt.Errorf("opensearch: projection %s: %w", t.ProtoMessage, err)
 	}
-	imports := []string{`"` + db.Opt("go_module") + "/" + osxPkg + `"`, `"` + repoPath + `"`}
+	imports := []string{`"` + osxImport + `"`, `"` + repoPath + `"`}
 	sort.Strings(imports)
 	return indexView{
 		Header: provenance.Render("//", header.Info{
