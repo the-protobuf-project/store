@@ -175,7 +175,7 @@ brew install the-protobuf-project/tap/protoc-gen-store
 go install github.com/the-protobuf-project/store/plugin/cmd/protoc-gen-store@latest
 ```
 
-Check it: `protoc-gen-store --version`. In CI, pin a release (`@v1.8.0`, or that
+Check it: `protoc-gen-store --version`. In CI, pin a release (`@v1.9.0`, or that
 release's binary): the version is written into every generated file's banner, so
 a pinned version keeps regenerated output byte-identical.
 
@@ -288,7 +288,7 @@ plugins:
 buf generate
 # The Go messages import the annotations' Go package from the store module:
 # require it at the release you generate with, so it resolves to that module.
-go get gorm.io/gorm gorm.io/driver/postgres github.com/the-protobuf-project/store@v1.8.0
+go get gorm.io/gorm gorm.io/driver/postgres github.com/the-protobuf-project/store@v1.9.0
 go mod tidy
 ```
 
@@ -493,7 +493,7 @@ For versioned migration files instead, see
 | `protoc-gen-store: program not found or is not executable` | The binary isn't on `PATH`. Run `protoc-gen-store --version`; with `go install`, add `$(go env GOPATH)/bin` to `PATH`. |
 | `entity/v1/annotations.proto: file does not exist` | The annotations module is missing. Add `buf.build/the-protobuf-project/store` to `deps` and run `buf dep update` (step 2). |
 | `unable to determine Go import path` | protoc needs a Go path for every file, whatever you generate. Set `option go_package`, or add an `M<file>=<path>` option. |
-| Go: `ambiguous import: found package github.com/the-protobuf-project/store/plugin/entity/pb/entitypbv1 in multiple modules` | An old, separate `store/plugin/entity` module was picked up. Require the store module itself: `go get github.com/the-protobuf-project/store@v1.8.0`, then `go mod tidy`. |
+| Go: `ambiguous import: found package github.com/the-protobuf-project/store/plugin/entity/pb/entitypbv1 in multiple modules` | An old, separate `store/plugin/entity` module was picked up. Require the store module itself: `go get github.com/the-protobuf-project/store@v1.9.0`, then `go mod tidy`. |
 | A message generates nothing | Only messages with `google.api.resource` become tables (or `store.v1.projection`, or a `time_series` for `influxdb`). |
 | Two files' tables land in different runs | Use `strategy: all` so one run sees every file of a database. |
 | Rust: `repositories()` fails with `the descriptor pool has no message …` | The descriptor pool lacks the message. Rebuild `descriptor.binpb` after changing protos, and include every package the repositories name. |
