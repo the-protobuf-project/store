@@ -34,6 +34,9 @@ type Service struct {
 	Subscription SubscriptionHandler
 }
 
+// Tx opens one mutation request; see MutationHandler.Tx.
+func (s *Service) Tx() *runtime.Tx { return s.Mutation.Tx() }
+
 // QueryHandler groups every domain's query handlers.
 type QueryHandler struct {
 	gql    *runtime.GraphQLClient

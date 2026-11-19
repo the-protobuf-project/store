@@ -37,8 +37,13 @@ var templateFS embed.FS
 
 var tmpl = templates.MustParse(templateFS, "templates/*.tpl")
 
-// repoxPkg is the shared runtime package name and directory.
-const repoxPkg = "repox"
+// repoxImport is the shared repository runtime, runtime-go's database/repox.
+const repoxImport = "github.com/the-protobuf-project/runtime-go/database/repox"
+
+// repoxgrpcPkg is the generated package holding the gRPC side of the
+// reference contract: it is built on store's own storepbv1 stubs, which
+// runtime-go cannot import, so it stays generated beside the repositories.
+const repoxgrpcPkg = "repoxgrpc"
 
 // Generator implements schema.Target for the repository layer. Lang selects
 // the language: "" or "go" composes the gorm output (Generate), "rust" binds
@@ -71,16 +76,15 @@ func dbGoModule(db *schema.Database) string      { return db.Opt("go_module") }
 func dbGormModule(db *schema.Database) string    { return db.Opt("gorm_module") }
 func dbGraphQLModule(db *schema.Database) string { return db.Opt("graphql_module") }
 
-// Generate writes the shared repox runtime once, then one package per schema
-// holding the repository interfaces and their adapters.
+// Generate writes one package per schema holding the repository interfaces
+// and their adapters, over runtime-go's database/repox.
 func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 	if g.Lang == "rust" {
 		return g.generateRust(p, &protokit.IR{Databases: dbs})
 	}
-	repoxEmitted := false
 	pb := newPbIndex(p)
 	rev := referrerIndex(dbs)
-	// The gRPC binding of the reference contract (repox/grpc.go) is emitted
+	// The gRPC binding of the reference contract (repoxgrpc/grpc.go) is emitted
 	// only when something uses it: an external reference, or a
 	// reference_services: entry. It brings google.golang.org/grpc and
 	// store.v1's stubs into the generated code.
@@ -106,24 +110,7 @@ func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 		if len(resources) == 0 {
 			continue
 		}
-		if !repoxEmitted {
-			f := p.NewGeneratedFile(repoxPkg+"/"+repoxPkg+".go", "")
-			if err := renderGo(f, "repox.go.tpl", repoxView(db)); err != nil {
-				return fmt.Errorf("repository: %s: %w", repoxPkg, err)
-			}
-			rf := p.NewGeneratedFile(repoxPkg+"/references.go", "")
-			if err := renderGo(rf, "references.go.tpl", repoxView(db)); err != nil {
-				return fmt.Errorf("repository: %s/references.go: %w", repoxPkg, err)
-			}
-			pf := p.NewGeneratedFile(repoxPkg+"/projection.go", "")
-			if err := renderGo(pf, "projection_runtime.go.tpl", repoxView(db)); err != nil {
-				return fmt.Errorf("repository: %s/projection.go: %w", repoxPkg, err)
-			}
-			qf := p.NewGeneratedFile(repoxPkg+"/query.go", "")
-			if err := renderGo(qf, "query.go.tpl", repoxView(db)); err != nil {
-				return fmt.Errorf("repository: %s/query.go: %w", repoxPkg, err)
-			}
-			repoxEmitted = true
+		if grpcDB == nil {
 			grpcDB = db
 		}
 		eps, err := referenceServices(db)
@@ -177,7 +164,7 @@ func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 				}{"schema_references.go.tpl", map[string]any{
 					"Header":    fileHeader(db, s, "Reference integrity across databases and services: ReferenceService sources and reconcilers."),
 					"Package":   pkg,
-					"Imports":   renderImports(map[string]string{"context": "", dbGoModule(db) + "/" + repoxPkg: "", "github.com/the-protobuf-project/runtime-go/database/filterx": ""}),
+					"Imports":   renderImports(map[string]string{"context": "", repoxImport: "", "github.com/the-protobuf-project/runtime-go/database/filterx": ""}),
 					"Resources": view.Resources,
 				}}
 			}
@@ -242,34 +229,27 @@ func (g *Generator) Generate(p *protogen.Plugin, dbs []*schema.Database) error {
 		}
 	}
 	if grpcDB != nil && (needGRPC || len(endpoints) > 0) {
-		view := repoxView(grpcDB)
+		view := repoxgrpcView(grpcDB)
 		view["Endpoints"] = endpoints
-		f := p.NewGeneratedFile(repoxPkg+"/grpc.go", "")
+		f := p.NewGeneratedFile(repoxgrpcPkg+"/grpc.go", "")
 		if err := renderGo(f, "grpc.go.tpl", view); err != nil {
-			return fmt.Errorf("repository: %s/grpc.go: %w", repoxPkg, err)
+			return fmt.Errorf("repository: %s/grpc.go: %w", repoxgrpcPkg, err)
 		}
 	}
 	return nil
 }
 
-// repoxView prepares the shared runtime view. The GraphQL client handle is
-// only present when a client module is configured.
-func repoxView(db *schema.Database) map[string]any {
+// repoxgrpcView prepares the view of the reference contract's gRPC binding.
+func repoxgrpcView(db *schema.Database) map[string]any {
 	return map[string]any{
 		"Header": provenance.Render("//", header.Info{
 			PluginVersion: db.PluginVersion,
 			ProtocVersion: db.ProtocVersion,
 			Database:      db.Name,
 			SchemaLabel:   "package",
-			Schema:        repoxPkg,
-			Notes:         []string{"Shared runtime for the generated proto-facing repositories."},
+			Schema:        repoxgrpcPkg,
+			Notes:         []string{"gRPC binding of the reference contract, over runtime-go's database/repox."},
 		}),
-		"FilterxImport":        "github.com/the-protobuf-project/runtime-go/database/filterx",
-		"StorexImport":         "github.com/the-protobuf-project/runtime-go/database/storex",
-		"GraphQLDSLImport":     graphqlDSLModule,
-		"GraphQLRuntimeImport": graphqlRuntimeModule,
-		"GraphQLModule":        dbGraphQLModule(db),
-		"GraphQLPkg":           clientPkgName(dbGraphQLModule(db)),
 	}
 }
 

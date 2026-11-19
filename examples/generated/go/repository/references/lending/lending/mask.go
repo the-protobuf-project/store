@@ -16,8 +16,8 @@
 package lending
 
 import (
+	"github.com/the-protobuf-project/runtime-go/database/repox"
 	"github.com/the-protobuf-project/store/examples/generated/go/protobuf/references/lendingv1"
-	"github.com/the-protobuf-project/store/examples/generated/go/repository/references/repox"
 )
 
 // applyLoanMask merges the masked fields of in onto merged. An empty

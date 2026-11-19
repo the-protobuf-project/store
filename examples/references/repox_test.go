@@ -18,7 +18,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/the-protobuf-project/store/examples/generated/go/repository/references/repox"
+	"github.com/the-protobuf-project/runtime-go/database/repox"
+	"github.com/the-protobuf-project/store/examples/generated/go/repository/references/repoxgrpc"
 	"github.com/the-protobuf-project/store/plugin/pb/storepbv1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -299,7 +300,7 @@ func TestGRPCBinding(t *testing.T) {
 			HandlerType: (*any)(nil),
 			Methods:     []grpc.MethodDesc{{MethodName: "GetCard", Handler: cardServer{cards{"cards/1": true}}.get}},
 		}, struct{}{})
-		storepbv1.RegisterReferenceServiceServer(s, repox.NewReferenceServer(
+		storepbv1.RegisterReferenceServiceServer(s, repoxgrpc.NewReferenceServer(
 			listSource("borrower", repox.OnDeleteRestrict, "loans/b1", "loans/b2", "loans/b3"),
 		))
 	})
@@ -317,7 +318,7 @@ func TestGRPCBinding(t *testing.T) {
 	}
 
 	// ListReferrers, through the client-side checker (paged by 1000).
-	got, err := repox.ReferenceServiceChecker(storepbv1.NewReferenceServiceClient(conn)).Referrers(ctx, cardType, "cards/1")
+	got, err := repoxgrpc.ReferenceServiceChecker(storepbv1.NewReferenceServiceClient(conn)).Referrers(ctx, cardType, "cards/1")
 	if err != nil || len(got) != 3 || got[0].OnDelete != repox.OnDeleteRestrict || got[2].Name != "loans/b3" {
 		t.Fatalf("checker: %v %v", got, err)
 	}
@@ -342,7 +343,7 @@ func TestGRPCBinding(t *testing.T) {
 	t.Setenv("CARDS_GRPC", "bufnet")
 	refs := repox.NewReferences()
 	dials := 0
-	err = repox.WireEndpoints(refs, []repox.ReferenceEndpoint{
+	err = repoxgrpc.WireEndpoints(refs, []repoxgrpc.ReferenceEndpoint{
 		{Type: cardType, Get: "vcard.v1.Cards/GetCard", Target: "${CARDS_GRPC}", Referrers: []string{cardType}},
 		{Type: "unset.example.com/X", Get: "x.v1.X/GetX", Target: "${UNSET_TARGET_FOR_TEST}"},
 	}, func(string) (grpc.ClientConnInterface, error) { dials++; return conn, nil })
@@ -355,7 +356,7 @@ func TestGRPCBinding(t *testing.T) {
 	if _, err := refs.CheckDelete(ctx, cardType, "cards/1"); !errors.Is(err, repox.ErrReferenced) {
 		t.Fatalf("wired checker: %v", err)
 	}
-	if len(repox.ReferenceEndpoints) != 1 || repox.ReferenceEndpoints[0].Get != "vcard.v1.Cards/GetCard" {
-		t.Fatalf("generated endpoints: %+v", repox.ReferenceEndpoints)
+	if len(repoxgrpc.ReferenceEndpoints) != 1 || repoxgrpc.ReferenceEndpoints[0].Get != "vcard.v1.Cards/GetCard" {
+		t.Fatalf("generated endpoints: %+v", repoxgrpc.ReferenceEndpoints)
 	}
 }

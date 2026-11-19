@@ -55,7 +55,7 @@ type Config struct {
 	// (so this side's deletes can ask it for referrers). What happens on delete
 	// is not configured here: it is (store.v1.reference).on_delete on the
 	// referring field. The repository target renders these into
-	// repox.ReferenceEndpoints; the DDN plugin config carries them too.
+	// repoxgrpc.ReferenceEndpoints; the DDN plugin config carries them too.
 	ReferenceServices []ReferenceService `yaml:"reference_services"`
 }
 

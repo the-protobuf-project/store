@@ -23,11 +23,11 @@ package lending
 import (
 	"context"
 	"github.com/the-protobuf-project/runtime-go/database/filterx"
-	"github.com/the-protobuf-project/store/examples/generated/go/repository/references/repox"
+	"github.com/the-protobuf-project/runtime-go/database/repox"
 )
 
 // ReferrerSources are this schema's external reference fields, read through
-// repos, for repox.NewReferenceServer (store.v1.ReferenceService) or
+// repos, for repoxgrpc.NewReferenceServer (store.v1.ReferenceService) or
 // repox.LocalReferrers. Each lists referrers deleted or not, with the
 // field's (store.v1.reference).on_delete.
 func ReferrerSources(repos Repositories) []repox.ReferrerSource {

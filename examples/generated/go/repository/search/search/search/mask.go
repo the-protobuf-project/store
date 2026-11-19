@@ -16,8 +16,8 @@
 package search
 
 import (
+	"github.com/the-protobuf-project/runtime-go/database/repox"
 	"github.com/the-protobuf-project/store/examples/generated/go/protobuf/search/searchdemov1"
-	"github.com/the-protobuf-project/store/examples/generated/go/repository/search/repox"
 )
 
 // applyBookingMask merges the masked fields of in onto merged. An empty

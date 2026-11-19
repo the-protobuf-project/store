@@ -18,9 +18,9 @@ package projdemov1
 import (
 	"context"
 	projdemov1 "example.com/test/gen"
-	"example.com/test/gen/repox"
 	"example.com/test/genql/projdemov1ql/roomdaysql"
 	projdemov1gorm "example.com/test/gormdb/v1/projdemov1"
+	"github.com/the-protobuf-project/runtime-go/database/repox"
 	"github.com/the-protobuf-project/runtime-go/network/graphql"
 )
 

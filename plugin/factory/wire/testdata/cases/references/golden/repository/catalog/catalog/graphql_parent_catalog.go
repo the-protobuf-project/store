@@ -17,9 +17,9 @@ package catalog
 
 import (
 	"context"
-	"example.com/test/gen/repox"
 	"example.com/test/genql"
 	"example.com/test/genql/catalogql/booksql"
+	"github.com/the-protobuf-project/runtime-go/database/repox"
 )
 
 // catalogBooksKey returns the key of the Catalog.Books row named name,

@@ -17,7 +17,7 @@ package deepv1
 
 import (
 	deepv1 "example.com/test/gen"
-	"example.com/test/gen/repox"
+	"github.com/the-protobuf-project/runtime-go/database/repox"
 )
 
 // applyAgendaMask merges the masked fields of in onto merged. An empty

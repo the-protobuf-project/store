@@ -16,9 +16,9 @@ import (
 
 	"github.com/oh-tarnished/opensearch-go-sdk/opensearch"
 
+	"github.com/the-protobuf-project/runtime-go/database/repox"
 	"github.com/the-protobuf-project/store/examples/generated/go/opensearch/search/osx"
 	"github.com/the-protobuf-project/store/examples/generated/go/protobuf/search/searchdemov1"
-	"github.com/the-protobuf-project/store/examples/generated/go/repository/search/repox"
 	"github.com/the-protobuf-project/store/examples/generated/go/repository/search/search/search"
 )
 

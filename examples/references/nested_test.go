@@ -18,9 +18,9 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/the-protobuf-project/runtime-go/database/repox"
 	"github.com/the-protobuf-project/store/examples/generated/go/protobuf/references/catalogv1"
 	"github.com/the-protobuf-project/store/examples/generated/go/repository/references/catalog/catalog"
-	"github.com/the-protobuf-project/store/examples/generated/go/repository/references/repox"
 )
 
 // twoShelves creates two shelves, each with a book "dune" and a page "p1" in

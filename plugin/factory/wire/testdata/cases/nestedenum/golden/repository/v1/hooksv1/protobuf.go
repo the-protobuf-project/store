@@ -17,10 +17,10 @@ package hooksv1
 
 import (
 	hooksv1 "example.com/test/gen"
-	"example.com/test/gen/repox"
 	"example.com/test/genql/hooksv1ql/deliveriesql"
 	"example.com/test/genql/hooksv1ql/webhooksql"
 	hooksv1gorm "example.com/test/gormdb/v1/hooksv1"
+	"github.com/the-protobuf-project/runtime-go/database/repox"
 	"github.com/the-protobuf-project/runtime-go/network/graphql"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"time"

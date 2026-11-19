@@ -16,7 +16,7 @@
 package resourcev1
 
 import (
-	"example.com/test/gen/repox"
+	"github.com/the-protobuf-project/runtime-go/database/repox"
 )
 
 // FormatEventName builds "events/{event}" from bare ids.

@@ -16,9 +16,9 @@
 package search
 
 import (
+	"github.com/the-protobuf-project/runtime-go/database/repox"
 	"github.com/the-protobuf-project/store/examples/generated/go/gorm/search/search/search"
 	"github.com/the-protobuf-project/store/examples/generated/go/protobuf/search/searchdemov1"
-	"github.com/the-protobuf-project/store/examples/generated/go/repository/search/repox"
 )
 
 // RoomDayRows are what a RoomDayWriter returns: the RoomDay rows to

@@ -18,10 +18,10 @@ package dtzv1
 import (
 	"context"
 	dtzv1 "example.com/test/gen"
-	"example.com/test/gen/repox"
 	"example.com/test/genql"
 	dtzv1gorm "example.com/test/gormdb/v1/dtzv1"
 	"github.com/the-protobuf-project/runtime-go/database/filterx"
+	"github.com/the-protobuf-project/runtime-go/database/repox"
 	"gorm.io/gorm"
 )
 

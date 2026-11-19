@@ -16,11 +16,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/the-protobuf-project/runtime-go/database/repox"
 	"github.com/the-protobuf-project/store/examples/generated/go/protobuf/references/catalogv1"
 	"github.com/the-protobuf-project/store/examples/generated/go/protobuf/references/lendingv1"
 	"github.com/the-protobuf-project/store/examples/generated/go/repository/references/catalog/catalog"
 	"github.com/the-protobuf-project/store/examples/generated/go/repository/references/lending/lending"
-	"github.com/the-protobuf-project/store/examples/generated/go/repository/references/repox"
 )
 
 const bookType = "catalog.example.com/Book"

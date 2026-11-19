@@ -64,6 +64,10 @@ func (g *generator) writeRoot() error {
 	b.WriteString("// Service is a typed GraphQL client. Access operations via\n")
 	b.WriteString("// s.Query.<Domain>.<Resource>, s.Mutation..., and s.Subscription....\n")
 	b.WriteString("type Service struct {\n\tQuery QueryHandler\n\tMutation MutationHandler\n\tSubscription SubscriptionHandler\n}\n\n")
+	// Tx makes *Service a runtime-go repox.GraphQL, the handle a repository
+	// Conn carries, without repox naming this generated type.
+	b.WriteString("// Tx opens one mutation request; see MutationHandler.Tx.\n")
+	b.WriteString("func (s *Service) Tx() *runtime.Tx { return s.Mutation.Tx() }\n\n")
 
 	for _, spec := range kindSpecs() {
 		fmt.Fprintf(&b, "// %s groups every domain's %s handlers.\ntype %s struct {\n", spec.iface, spec.verb, spec.iface)
