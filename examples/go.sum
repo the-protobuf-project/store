@@ -151,8 +151,8 @@ github.com/stretchr/testify v1.3.0/go.mod h1:M5WIy9Dh21IEIfnGCwXGc5bZfKNJtfHm1UV
 github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
 github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWDWE=
 github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
-github.com/the-protobuf-project/runtime-go/database v0.0.0-20261119080033-a8f090d59b0d h1:Of0V6uy30NasSpsqg4JzpGvq6mbWhz2D9FjGn8jHtMs=
-github.com/the-protobuf-project/runtime-go/database v0.0.0-20261119080033-a8f090d59b0d/go.mod h1:Ui+KjKspKgRHwDgJ0O/bgz8g42oME4D7Cj5bJG+xlVU=
+github.com/the-protobuf-project/runtime-go/database v0.0.0-20261119142527-c425ceffa120 h1:HgLUxSEWZbmulpGj8YEPg9C/UH7QLS6oQo9drhIcbDQ=
+github.com/the-protobuf-project/runtime-go/database v0.0.0-20261119142527-c425ceffa120/go.mod h1:Ui+KjKspKgRHwDgJ0O/bgz8g42oME4D7Cj5bJG+xlVU=
 github.com/the-protobuf-project/runtime-go/events v0.0.0-20261119074942-eb99079319a2 h1:fRT21iU6+6fhjbwDP40iZeNoRasJ5EuAPUdYzhVBQ64=
 github.com/the-protobuf-project/runtime-go/events v0.0.0-20261119074942-eb99079319a2/go.mod h1:xJqDCjRvsUteUCnieGQncQrly4pEygSHy+jwU2W8QT0=
 github.com/the-protobuf-project/runtime-go/grpc v0.0.0-20261119074942-eb99079319a2 h1:ewM4va1zLzsQbAdGCkxlBr+MrvNh0j0zhd5g6JdnIVQ=

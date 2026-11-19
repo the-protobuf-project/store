@@ -59,6 +59,55 @@ jobs:
         working-directory: store
         run: go test -race ./...
 
+  # The examples module: the committed generated code compiled and vetted, and
+  # its tests run against a real Postgres and OpenSearch. The search and
+  # references tests skip without STORE_TEST_POSTGRES_DSN and
+  # STORE_TEST_OPENSEARCH_URL, which is how an OpenSearch-only failure went
+  # unnoticed before this job.
+  examples:
+    name: Examples (Go, Postgres + OpenSearch)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+      opensearch:
+        image: opensearchproject/opensearch:2
+        env:
+          discovery.type: single-node
+          DISABLE_SECURITY_PLUGIN: 'true'
+          DISABLE_INSTALL_DEMO_CONFIG: 'true'
+          OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+        ports: ['9200:9200']
+        options: >-
+          --health-cmd "curl -sf http://localhost:9200"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 40
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: examples/go.mod
+          cache-dependency-path: examples/go.sum
+      - name: Vet and test against Postgres and OpenSearch
+        working-directory: examples
+        env:
+          GOWORK: 'off'
+          STORE_TEST_POSTGRES_DSN: host=localhost port=5432 user=postgres dbname=postgres sslmode=disable
+          STORE_TEST_OPENSEARCH_URL: http://localhost:9200
+        run: |
+          go vet ./...
+          go test -count=1 ./...
+
   # The Rust repositories lang=rust target=repository generates, compiled and
   # run against the runtime-rs commit the example pins: descriptors checked
   # against the sql target's DDL, and round trips through RecordsRepository on
