@@ -16,7 +16,7 @@
 package stayv1
 
 import (
-	"example.com/test/gen/repox"
+	"github.com/the-protobuf-project/runtime-go/database/repox"
 )
 
 // FormatBookingName builds "bookings/{booking}" from bare ids.

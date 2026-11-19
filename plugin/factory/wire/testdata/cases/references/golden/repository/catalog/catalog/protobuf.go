@@ -17,11 +17,11 @@ package catalog
 
 import (
 	refdemov1 "example.com/test/gen"
-	"example.com/test/gen/repox"
 	"example.com/test/genql/catalogql/booksql"
 	"example.com/test/genql/catalogql/genresql"
 	"example.com/test/genql/catalogql/pagesql"
 	"example.com/test/genql/catalogql/shelvesql"
+	"github.com/the-protobuf-project/runtime-go/database/repox"
 	"github.com/the-protobuf-project/runtime-go/network/graphql"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"time"

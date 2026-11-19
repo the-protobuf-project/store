@@ -18,10 +18,10 @@ package lending
 import (
 	"context"
 	refdemov1 "example.com/test/gen"
-	"example.com/test/gen/repox"
 	"example.com/test/genql"
 	"example.com/test/gormdb/lending/lending"
 	"github.com/the-protobuf-project/runtime-go/database/filterx"
+	"github.com/the-protobuf-project/runtime-go/database/repox"
 	"gorm.io/gorm"
 	"time"
 )

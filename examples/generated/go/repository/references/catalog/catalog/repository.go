@@ -18,9 +18,9 @@ package catalog
 import (
 	"context"
 	"github.com/the-protobuf-project/runtime-go/database/filterx"
+	"github.com/the-protobuf-project/runtime-go/database/repox"
 	"github.com/the-protobuf-project/store/examples/generated/go/gorm/references/catalog/catalog"
 	"github.com/the-protobuf-project/store/examples/generated/go/protobuf/references/catalogv1"
-	"github.com/the-protobuf-project/store/examples/generated/go/repository/references/repox"
 	"gorm.io/gorm"
 	"time"
 )

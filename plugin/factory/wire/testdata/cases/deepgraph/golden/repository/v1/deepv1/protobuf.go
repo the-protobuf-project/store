@@ -17,7 +17,6 @@ package deepv1
 
 import (
 	deepv1 "example.com/test/gen"
-	"example.com/test/gen/repox"
 	"example.com/test/genql/deepv1ql/agendasql"
 	"example.com/test/genql/deepv1ql/daysql"
 	"example.com/test/genql/deepv1ql/meetingsql"
@@ -26,6 +25,7 @@ import (
 	"example.com/test/genql/deepv1ql/rulesql"
 	"example.com/test/genql/deepv1ql/slotsql"
 	"example.com/test/genql/deepv1ql/zonesql"
+	"github.com/the-protobuf-project/runtime-go/database/repox"
 	"github.com/the-protobuf-project/runtime-go/network/graphql"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"

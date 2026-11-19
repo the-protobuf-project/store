@@ -16,7 +16,7 @@
 package orgv1
 
 import (
-	"example.com/test/gen/repox"
+	"github.com/the-protobuf-project/runtime-go/database/repox"
 )
 
 // FormatMemberName builds "organisations/{organisation}/members/{member}" from bare ids.

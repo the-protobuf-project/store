@@ -16,7 +16,7 @@
 package dtzv1
 
 import (
-	"example.com/test/gen/repox"
+	"github.com/the-protobuf-project/runtime-go/database/repox"
 )
 
 // FormatSessionName builds "sessions/{session}" from bare ids.

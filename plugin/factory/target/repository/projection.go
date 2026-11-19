@@ -115,7 +115,7 @@ func projectionViews(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg str
 			continue
 		}
 		msg := pb.msgs[protoreflect.FullName(t.ProtoMessage)]
-		imports := map[string]string{dbGoModule(db) + "/" + repoxPkg: ""}
+		imports := map[string]string{repoxImport: ""}
 		pbPath := string(msg.GoIdent.GoImportPath)
 		pbName := pb.names.Of(pbPath)
 		imports[pbPath] = pbName

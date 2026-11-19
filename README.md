@@ -921,8 +921,16 @@ psql "$BOOKSTORE_DB_DATABASE_URL" -f generated/sql/bookstore_db/migrate.sql
 ### Repositories (`target=repository`)
 
 The repository target generates a proto-facing CRUD surface per resource, with a
-GORM and a GraphQL adapter behind one interface. Besides `Create`, `Get`, `List`,
-`Update` and `Delete`, it generates:
+GORM and a GraphQL adapter behind one interface. The runtime those repositories
+build on is runtime-go's
+[`database/repox`](https://github.com/the-protobuf-project/runtime-go/tree/main/database/repox):
+the `Conn`, the `Unit` a `Batch` queues into, the error vocabulary, reference
+integrity and projections. A fix to it reaches you with runtime-go, not with a
+regeneration. (Before store v1.9.0 it was generated into every project as
+`<go_module>/repox`; regenerating removes it. The gRPC side of reference
+integrity, built on store's own stubs, is still generated, as
+`<go_module>/repoxgrpc`.) Besides `Create`, `Get`, `List`, `Update` and
+`Delete`, it generates:
 
 - **Soft delete (AIP-164).** For a resource with an `OUTPUT_ONLY`
   `google.protobuf.Timestamp delete_time`:
@@ -1558,7 +1566,7 @@ trigram GIN on `search: true` text, and the declared B-tree/GIN/GiST/expression
 indexes (a declared B-tree `fields` index ends in `id`; see [page
 indexes](#page-indexes-and-the-range-test) below). The repository target emits `projection_<name>.go` (a
 `repox.Projection[*T]` value, e.g. `RoomDays`, and `<Model>Writer`/`<Model>Rows`
-aliases) and the runtime `repox/projection.go`.
+aliases) and runtime-go `repox`'s projection runtime.
 
 **Keeping it current.** The application computes rows; the generated code owns
 the transaction, the upsert by key and the deletes:
@@ -1679,7 +1687,7 @@ OpenSearch).
     - target=opensearch
     - go_module=example.com/app/gen/opensearch
     - gorm_module=example.com/app/gen/gorm            # filterx
-    - repository_module=example.com/app/gen/repository # repox + projections
+    - repository_module=example.com/app/gen/repository # the repositories + projections
 ```
 
 It emits `osx/osx.go` (runtime, on
@@ -1821,14 +1829,14 @@ cannot skip one mutation in it.
 ```go
 refs := repox.NewReferences().
 	Resolver("vcard.example.com/Card", repox.GRPCGetResolver(cardsConn, "vcard.v1.Cards/GetCard")).
-	Referrers("catalog.example.com/Book", repox.ReferenceServiceChecker(storepbv1.NewReferenceServiceClient(lendingConn))).
+	Referrers("catalog.example.com/Book", repoxgrpc.ReferenceServiceChecker(storepbv1.NewReferenceServiceClient(lendingConn))).
 	Publisher("//catalog", webhooks). // NOTIFY: org.the-protobuf-project.store.v1.reference.deleted
 	OnKept(func(ctx context.Context, name, why string) { /* metric */ })
-// or from store.yaml's reference_services: repox.WireEndpoints(refs, repox.ReferenceEndpoints, dial)
+// or from store.yaml's reference_services: repoxgrpc.WireEndpoints(refs, repoxgrpc.ReferenceEndpoints, dial)
 repos := lending.New(repox.Conn{Gorm: db, References: refs})
 
 // The referring side serves who refers to what:
-storepbv1.RegisterReferenceServiceServer(grpcServer, repox.NewReferenceServer(lending.ReferrerSources(repos)...))
+storepbv1.RegisterReferenceServiceServer(grpcServer, repoxgrpc.NewReferenceServer(lending.ReferrerSources(repos)...))
 ```
 
 The three reference errors (`ErrForeignKey`, `ErrReferenceNotFound`,
@@ -2083,7 +2091,7 @@ datasources:
 | `telemetry` | map | **gorm only.** Tune the first-party telemetry instrumentation (see the [`telemetry` plugin opt](#plugin-options)). `enabled` (bool) overrides the opt's master switch. `metrics` (bool, default `true`) — set `false` to drop the per-operation ops counter/duration histogram tree-wide; narrow further per table with [`(telemetry.v1.telemetry).metrics`](#telemetryv1telemetry--message-level). `logs` (bool, default `true`) — set `false` to drop the telemetry adapter's trace-correlated error logging. |
 | `graphql` | map | Configures the [GraphQL source](#graphql-client-sdk): `endpoint` **xor** `schema` (a cached GraphQL SDL `.graphql` file), `admin_secret` (`env:VAR` or literal), `headers` (`Key: Value` list), `dialect` (default `hasura`), `max_depth`, `scalars` (`Name=GoType` list), `root_field_prefix` / `type_name_prefix` (one [DDN subgraph's prefixes](#one-subgraph-of-a-shared-ddn-engine); default none). Read by the `target=graphql` plugin entry. |
 | `references` | list | Descriptor images (binary `FileDescriptorSet`s, e.g. `buf build buf.build/the-protobuf-project/rfc:<commit> -o rfc.binpb`) read **only** to discover the target of a `resource_reference` this run does not generate, so a reference into another module of the same server becomes a real foreign key. Nothing in them is generated. Paths are relative to where buf runs. The `references=a.binpb,b.binpb` plugin opt adds to it. |
-| `reference_services` | list | Deployment facts about resource types in other databases/services (see [Reference integrity](#reference-integrity)): `type` (AIP type), `get` (its AIP Get, `pkg.Service/GetThing`), `target` (gRPC dial target; `${ENV}` read at startup), `referrers` (this run's resource types that service refers to — it serves `store.v1.ReferenceService` for them), `database` (documentation). Rendered into `repox.ReferenceEndpoints` and the DDN plugin's config. |
+| `reference_services` | list | Deployment facts about resource types in other databases/services (see [Reference integrity](#reference-integrity)): `type` (AIP type), `get` (its AIP Get, `pkg.Service/GetThing`), `target` (gRPC dial target; `${ENV}` read at startup), `referrers` (this run's resource types that service refers to — it serves `store.v1.ReferenceService` for them), `database` (documentation). Rendered into `repoxgrpc.ReferenceEndpoints` and the DDN plugin's config. |
 | `generate` | list | Per-target settings, keyed by `target`: `go_module`, `package`, `runtime_module`, `dump_schema` for the `graphql` target; the gorm knobs are set as plugin opts instead. buf owns each entry's output dir (`out:`), so it isn't set here. |
 
 Config is **validated** on load: unknown keys are rejected (strict decode), and

@@ -18,9 +18,9 @@ package resourcev1
 import (
 	"context"
 	resourcev1 "example.com/test/gen"
-	"example.com/test/gen/repox"
 	resourcev1gorm "example.com/test/gormdb/v1/resourcev1"
 	"github.com/the-protobuf-project/runtime-go/database/filterx"
+	"github.com/the-protobuf-project/runtime-go/database/repox"
 	"gorm.io/gorm"
 )
 

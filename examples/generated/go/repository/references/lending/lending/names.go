@@ -16,7 +16,7 @@
 package lending
 
 import (
-	"github.com/the-protobuf-project/store/examples/generated/go/repository/references/repox"
+	"github.com/the-protobuf-project/runtime-go/database/repox"
 )
 
 // FormatLoanName builds "loans/{loan}" from bare ids.

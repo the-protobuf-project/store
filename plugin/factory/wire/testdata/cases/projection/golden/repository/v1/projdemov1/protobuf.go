@@ -18,9 +18,9 @@ package projdemov1
 import (
 	"encoding/json"
 	projdemov1 "example.com/test/gen"
-	"example.com/test/gen/repox"
 	"example.com/test/genql/projdemov1ql/bookingsql"
 	"example.com/test/genql/projdemov1ql/roomsql"
+	"github.com/the-protobuf-project/runtime-go/database/repox"
 	"github.com/the-protobuf-project/runtime-go/network/graphql"
 	"google.golang.org/genproto/googleapis/type/interval"
 	"google.golang.org/protobuf/types/known/structpb"

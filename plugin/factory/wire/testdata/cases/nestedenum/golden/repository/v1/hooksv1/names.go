@@ -16,7 +16,7 @@
 package hooksv1
 
 import (
-	"example.com/test/gen/repox"
+	"github.com/the-protobuf-project/runtime-go/database/repox"
 )
 
 // FormatDeliveryName builds "webhooks/{webhook}/deliveries/{delivery}" from bare ids.

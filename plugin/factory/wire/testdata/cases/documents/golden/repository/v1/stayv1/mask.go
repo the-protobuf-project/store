@@ -17,7 +17,7 @@ package stayv1
 
 import (
 	"example.com/test/gen"
-	"example.com/test/gen/repox"
+	"github.com/the-protobuf-project/runtime-go/database/repox"
 )
 
 // applyBookingMask merges the masked fields of in onto merged. An empty

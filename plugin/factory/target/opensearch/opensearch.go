@@ -117,7 +117,7 @@ func (g *Generator) GenerateIR(p *protogen.Plugin, ir *protokit.IR) error {
 					Notes:         []string{"Shared runtime for the generated OpenSearch indices."},
 				}),
 				"FilterxImport": "github.com/the-protobuf-project/runtime-go/database/filterx",
-				"RepoxImport":   db.Opt("repository_module") + "/repox",
+				"RepoxImport":   "github.com/the-protobuf-project/runtime-go/database/repox",
 				"SDKImport":     SDKModule + "/opensearch",
 			}); err != nil {
 				return fmt.Errorf("opensearch: osx: %w", err)

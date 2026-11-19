@@ -18,9 +18,9 @@ package stayv1
 import (
 	"encoding/json"
 	"example.com/test/gen"
-	"example.com/test/gen/repox"
 	"example.com/test/genql/stayv1ql/bookingsql"
 	"example.com/test/genql/stayv1ql/notesql"
+	"github.com/the-protobuf-project/runtime-go/database/repox"
 	"github.com/the-protobuf-project/runtime-go/network/graphql"
 	"google.golang.org/genproto/googleapis/type/decimal"
 	"google.golang.org/protobuf/encoding/protojson"

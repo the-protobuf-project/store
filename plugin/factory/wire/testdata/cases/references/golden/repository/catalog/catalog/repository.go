@@ -18,10 +18,10 @@ package catalog
 import (
 	"context"
 	refdemov1 "example.com/test/gen"
-	"example.com/test/gen/repox"
 	"example.com/test/genql"
 	"example.com/test/gormdb/catalog/catalog"
 	"github.com/the-protobuf-project/runtime-go/database/filterx"
+	"github.com/the-protobuf-project/runtime-go/database/repox"
 	"gorm.io/gorm"
 	"time"
 )

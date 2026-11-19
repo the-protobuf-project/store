@@ -43,7 +43,7 @@ func graphqlFileView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg str
 		"strings":                          "",
 		"google.golang.org/protobuf/proto": "",
 		graphqlDSLModule:                   "graphql",
-		dbGoModule(db) + "/" + repoxPkg:    "",
+		repoxImport:                        "",
 		"github.com/the-protobuf-project/runtime-go/database/filterx": "",
 		client: clientPkgName(client),
 	}
@@ -106,9 +106,9 @@ func graphqlParentViews(db *schema.Database, s *schema.Schema, pkg string, rs []
 	for dom, lks := range bySchema {
 		sort.Slice(lks, func(i, j int) bool { return lks[i].Func < lks[j].Func })
 		imports := map[string]string{
-			"context":                       "",
-			dbGoModule(db) + "/" + repoxPkg: "",
-			client:                          clientPkgName(client),
+			"context":   "",
+			repoxImport: "",
+			client:      clientPkgName(client),
 		}
 		for _, lk := range lks {
 			imports[client+"/"+lk.DomPkg+"/"+lk.ResPkg] = lk.ResPkg
@@ -169,7 +169,7 @@ func graphqlConvertView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg 
 	client := dbGraphQLModule(db)
 	domainPkg := identLower(s.Name) + "ql"
 	imports := map[string]string{
-		dbGoModule(db) + "/" + repoxPkg: "",
+		repoxImport: "",
 	}
 	for _, r := range rs {
 		imports[client+"/"+domainPkg+"/"+r.ResPkg] = r.ResPkg
@@ -257,7 +257,3 @@ func graphqlConvertView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg 
 		"Needs":     needs,
 	}
 }
-
-// graphqlRuntimeModule holds runtime.Tx, the mutation request a repox.Unit
-// commits.
-const graphqlRuntimeModule = "github.com/the-protobuf-project/runtime-go/network/runtime"

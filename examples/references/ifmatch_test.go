@@ -12,8 +12,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/the-protobuf-project/runtime-go/database/repox"
 	"github.com/the-protobuf-project/store/examples/generated/go/protobuf/references/catalogv1"
-	"github.com/the-protobuf-project/store/examples/generated/go/repository/references/repox"
 )
 
 func TestIfMatchDelete(t *testing.T) {

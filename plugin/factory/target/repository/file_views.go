@@ -34,7 +34,7 @@ func namesView(db *schema.Database, s *schema.Schema, pkg string, rs []gormResou
 	return map[string]any{
 		"Header":      fileHeader(db, s, "AIP resource-name codecs for this schema's repositories."),
 		"Package":     pkg,
-		"RepoxImport": dbGoModule(db) + "/" + repoxPkg,
+		"RepoxImport": repoxImport,
 		"Resources":   rs,
 	}
 }
@@ -42,7 +42,7 @@ func namesView(db *schema.Database, s *schema.Schema, pkg string, rs []gormResou
 // maskView prepares mask.go: the per-resource field-mask merge functions.
 func maskView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg string, rs []gormResourceView) map[string]any {
 	imports := map[string]string{
-		dbGoModule(db) + "/" + repoxPkg: "",
+		repoxImport: "",
 	}
 	addPBImports(pb, s, imports)
 	return map[string]any{
@@ -60,7 +60,7 @@ func gormFileView(pb *pbIndex, db *schema.Database, s *schema.Schema, pkg string
 		"gorm.io/gorm":                     "",
 		"gorm.io/gorm/clause":              "", // updateTx's row lock
 		"google.golang.org/protobuf/proto": "",
-		dbGoModule(db) + "/" + repoxPkg:    "",
+		repoxImport:                        "",
 		"github.com/the-protobuf-project/runtime-go/database/filterx": "",
 	}
 	for _, r := range rs {

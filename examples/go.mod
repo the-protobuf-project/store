@@ -9,7 +9,7 @@ replace github.com/the-protobuf-project/store => ../
 require (
 	github.com/lib/pq v1.12.3
 	github.com/oh-tarnished/opensearch-go-sdk v0.1.1
-	github.com/the-protobuf-project/runtime-go/database v0.0.0-20261118145608-230eeaf68eea
+	github.com/the-protobuf-project/runtime-go/database v0.0.0-20261119045748-6f3114a7f8c3
 	github.com/the-protobuf-project/runtime-go/network v0.0.0-20261118052056-98385b147b4d
 	github.com/the-protobuf-project/store v0.0.0-00010101000000-000000000000
 	github.com/the-protobuf-project/telemetry/telemetry-go v0.0.0-20261023093202-d14384d7957b
@@ -96,5 +96,5 @@ require (
 	golang.org/x/sync v0.25.0 // indirect
 	golang.org/x/sys v0.50.0 // indirect
 	golang.org/x/text v0.44.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20261026165753-2ffab32bce7e // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20261110000943-09e21b237f2c // indirect
 )

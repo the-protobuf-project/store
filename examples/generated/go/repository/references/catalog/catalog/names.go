@@ -16,7 +16,7 @@
 package catalog
 
 import (
-	"github.com/the-protobuf-project/store/examples/generated/go/repository/references/repox"
+	"github.com/the-protobuf-project/runtime-go/database/repox"
 )
 
 // FormatBookName builds "shelves/{shelf}/books/{book}" from bare ids.

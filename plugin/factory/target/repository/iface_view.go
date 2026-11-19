@@ -64,7 +64,6 @@ type schemaPkgView struct {
 	Header    string
 	Package   string
 	Imports   []string // fully rendered import lines
-	RepoxPkg  string
 	Resources []resourceView
 
 	// GraphQL adapter wiring, set when the graphql_module opt is configured.
@@ -89,9 +88,9 @@ func schemaView(pb *pbIndex, db *schema.Database, s *schema.Schema, resources ma
 	}
 	pkg := naming.GoPackage(s.Name)
 	imports := map[string]string{ // path -> alias ("" = none)
-		"context":                       "",
-		"gorm.io/gorm":                  "",
-		dbGoModule(db) + "/" + repoxPkg: "",
+		"context":      "",
+		"gorm.io/gorm": "",
+		repoxImport:    "",
 		"github.com/the-protobuf-project/runtime-go/database/filterx": "",
 	}
 	if m := dbGraphQLModule(db); m != "" {
@@ -141,7 +140,6 @@ func schemaView(pb *pbIndex, db *schema.Database, s *schema.Schema, resources ma
 		}),
 		Package:     pkg,
 		Imports:     renderImports(imports),
-		RepoxPkg:    repoxPkg,
 		Resources:   views,
 		HasBatch:    len(views) > 0,
 		HasExpiring: slices.ContainsFunc(views, func(v resourceView) bool { return v.Expiring }),

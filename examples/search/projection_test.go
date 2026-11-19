@@ -17,8 +17,8 @@ import (
 	"testing"
 
 	"github.com/the-protobuf-project/runtime-go/database/filterx"
+	"github.com/the-protobuf-project/runtime-go/database/repox"
 	"github.com/the-protobuf-project/store/examples/generated/go/protobuf/search/searchdemov1"
-	"github.com/the-protobuf-project/store/examples/generated/go/repository/search/repox"
 	"github.com/the-protobuf-project/store/examples/generated/go/repository/search/search/search"
 )
 

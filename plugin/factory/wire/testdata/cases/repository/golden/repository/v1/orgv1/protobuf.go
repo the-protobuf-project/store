@@ -18,7 +18,6 @@ package orgv1
 import (
 	"encoding/json"
 	orgv1 "example.com/test/gen"
-	"example.com/test/gen/repox"
 	"example.com/test/genql/orgv1ql/datestretchesql"
 	"example.com/test/genql/orgv1ql/locationsql"
 	"example.com/test/genql/orgv1ql/membersql"
@@ -26,6 +25,7 @@ import (
 	"example.com/test/genql/orgv1ql/timewindowsql"
 	"example.com/test/genql/orgv1ql/usersql"
 	orgv1gorm "example.com/test/gormdb/v1/orgv1"
+	"github.com/the-protobuf-project/runtime-go/database/repox"
 	"github.com/the-protobuf-project/runtime-go/network/graphql"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"

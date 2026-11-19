@@ -18,10 +18,10 @@ package hooksv1
 import (
 	"context"
 	hooksv1 "example.com/test/gen"
-	"example.com/test/gen/repox"
 	"example.com/test/genql"
 	hooksv1gorm "example.com/test/gormdb/v1/hooksv1"
 	"github.com/the-protobuf-project/runtime-go/database/filterx"
+	"github.com/the-protobuf-project/runtime-go/database/repox"
 	"gorm.io/gorm"
 )
 
