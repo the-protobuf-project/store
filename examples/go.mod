@@ -12,7 +12,7 @@ require (
 	github.com/the-protobuf-project/runtime-go/database v0.0.0-20261119142527-c425ceffa120
 	github.com/the-protobuf-project/runtime-go/network v0.0.0-20261118052056-98385b147b4d
 	github.com/the-protobuf-project/store v0.0.0-00010101000000-000000000000
-	github.com/the-protobuf-project/telemetry/telemetry-go v1.3.3
+	github.com/the-protobuf-project/telemetry/telemetry-go v1.4.0
 	google.golang.org/genproto v0.0.0-20261019180522-ce908d29299b
 	google.golang.org/genproto/googleapis/api v0.0.0-20261110000943-09e21b237f2c
 	google.golang.org/grpc v1.85.0
@@ -36,6 +36,7 @@ require (
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/coder/websocket v1.8.15 // indirect
+	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/foxglove/mcap/go/mcap v1.10.0 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/go-logfmt/logfmt v0.6.1 // indirect
@@ -87,6 +88,8 @@ require (
 	github.com/the-protobuf-project/runtime-go/ulid v0.0.0-20261118052056-98385b147b4d // indirect
 	github.com/xo/terminfo v1.3.1 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
+	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.72.0 // indirect
+	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.72.0 // indirect
 	go.opentelemetry.io/otel v1.47.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc v0.23.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp v0.23.0 // indirect
