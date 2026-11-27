@@ -42,8 +42,8 @@ github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWD
 github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
 github.com/the-protobuf-project/protokit v1.4.2 h1:LFpn2nYHR1n5sEJ0pDxo8ts0XQq2r5EGq4oNHbhDNk8=
 github.com/the-protobuf-project/protokit v1.4.2/go.mod h1:sHgcO7Z4/Lb0YLhr2jBqEdWKmc9+tbIwHNOdt37IfYM=
-github.com/the-protobuf-project/telemetry/telemetry-go v1.3.3 h1:aaetKAuK6O6V9cu5u2QEw37i6SGsmc1m9omR3v06nuw=
-github.com/the-protobuf-project/telemetry/telemetry-go v1.3.3/go.mod h1:qKqi3dO/uhky1kg0wCeMqEDARakvXX3+6a+GmIRZVZg=
+github.com/the-protobuf-project/telemetry/telemetry-go v1.4.0 h1:Gqz9wggf9xZpDNt6ALrROgHa1XoUvDMHf3k4ymv/7Hc=
+github.com/the-protobuf-project/telemetry/telemetry-go v1.4.0/go.mod h1:dkwE6KuziUKaKPl5MJIbujWxmC/GNTX8yeNPnBYbA7U=
 github.com/vektah/gqlparser/v2 v2.5.64 h1:N32yM6hQ6Kd5RdjCCEJsUrbCebVoA9yLLMOIa88Mkk0=
 github.com/vektah/gqlparser/v2 v2.5.64/go.mod h1:nILRSUbsWDTuf8hSmAgFxuYh0SaMZdkvl6JSEbkJX8g=
 go.yaml.in/yaml/v3 v3.0.6 h1:zcDfvjXEqTQmpjniUBLc91xYJMB2c4QOFxEF/LCEckM=

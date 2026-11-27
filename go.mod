@@ -30,7 +30,7 @@ require (
 require (
 	github.com/agnivade/levenshtein v1.2.2 // indirect
 	github.com/bufbuild/protocompile v0.14.1 // indirect
-	github.com/the-protobuf-project/telemetry/telemetry-go v1.3.3
+	github.com/the-protobuf-project/telemetry/telemetry-go v1.4.0
 	github.com/vektah/gqlparser/v2 v2.5.64
 	golang.org/x/sync v0.25.0 // indirect
 )
